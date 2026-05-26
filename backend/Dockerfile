@@ -7,14 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# pip + uv для быстрой установки зависимостей
-RUN pip install --no-cache-dir uv
-
 WORKDIR /app
 
 # Сначала зависимости (для кэша Docker)
 COPY pyproject.toml ./
-RUN uv pip install --system --no-cache .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir .
 
 # Потом код
 COPY . .
