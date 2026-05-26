@@ -1,0 +1,156 @@
+version: "3.9"
+
+# ============================================
+# OZON PRO — полная инфраструктура одной командой
+# ============================================
+# Запуск:
+#   docker-compose up -d        # запустить
+#   docker-compose logs -f      # смотреть логи
+#   docker-compose down         # остановить
+# ============================================
+
+services:
+
+  # --- PostgreSQL + TimescaleDB ---
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: ozon_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ozonuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-ozonpro}
+      TIMESCALEDB_TELEMETRY: "off"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/db_init:/docker-entrypoint-initdb.d
+    ports:
+      - "127.0.0.1:5432:5432"  # доступ только с этого сервера
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ozonuser}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ozon_net
+
+  # --- Redis (кэш + очереди Celery) ---
+  redis:
+    image: redis:7-alpine
+    container_name: ozon_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ozon_net
+
+  # --- Backend (FastAPI) ---
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ozon_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./backend:/app
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
+    networks:
+      - ozon_net
+
+  # --- Celery Worker (фоновые задачи) ---
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ozon_worker
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - db
+      - redis
+      - backend
+    volumes:
+      - ./backend:/app
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+    networks:
+      - ozon_net
+
+  # --- Celery Beat (расписание задач) ---
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ozon_beat
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - db
+      - redis
+      - backend
+    volumes:
+      - ./backend:/app
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    networks:
+      - ozon_net
+
+  # --- Frontend (React) ---
+  # Раскомментировать когда добавим frontend код
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: ozon_frontend
+  #   restart: unless-stopped
+  #   ports:
+  #     - "127.0.0.1:5173:5173"
+  #   networks:
+  #     - ozon_net
+
+  # --- Nginx (reverse proxy + SSL) ---
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: ozon_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/sites:/etc/nginx/conf.d:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro  # SSL сертификаты
+    depends_on:
+      - backend
+    networks:
+      - ozon_net
+
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  ozon_net:
+    driver: bridge
