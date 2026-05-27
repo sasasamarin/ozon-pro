@@ -110,7 +110,7 @@ services:
       - backend
     volumes:
       - ./backend:/app
-    command: celery -A app.workers.celery_app beat --loglevel=info
+    command: celery -A app.workers.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
     networks:
       - ozon_net
 
