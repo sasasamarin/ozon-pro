@@ -3,7 +3,7 @@ import {
   LayoutDashboard,
   BarChart3,
   Target,
-  Funnel,
+  Filter,
   FlagTriangleRight,
   Grid3x3,
   AlertTriangle,
@@ -108,7 +108,7 @@ export const NAV_GROUPS: NavGroup[] = [
       {
         path: '/analytics/funnel',
         label: 'Обычная воронка',
-        icon: Funnel,
+        icon: Filter,
         placeholder: {
           description: 'Воронка от показа карточки до выкупа. Где теряются клиенты.',
           plannedFeatures: [
