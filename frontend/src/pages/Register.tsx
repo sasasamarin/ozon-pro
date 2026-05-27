@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Logo } from '@/components/ui/Logo'
 import { register, login } from '@/lib/auth'
+import { getErrorMessage } from '@/lib/errors'
 
 export function Register() {
   const navigate = useNavigate()
@@ -22,8 +23,8 @@ export function Register() {
       await register({ email, password, full_name: fullName, company_name: companyName })
       await login({ email, password })
       navigate('/dashboard')
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Не удалось зарегистрироваться')
+    } catch (err) {
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }

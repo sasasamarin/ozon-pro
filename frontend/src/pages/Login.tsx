@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Logo } from '@/components/ui/Logo'
 import { login } from '@/lib/auth'
+import { getErrorMessage } from '@/lib/errors'
 
 export function Login() {
   const navigate = useNavigate()
@@ -19,8 +20,8 @@ export function Login() {
     try {
       await login({ email, password })
       navigate('/dashboard')
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Не удалось войти. Проверь email и пароль.')
+    } catch (err) {
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }

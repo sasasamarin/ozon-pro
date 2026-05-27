@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
+import { getErrorMessage } from '@/lib/errors'
 
 export function CabinetNew() {
   const navigate = useNavigate()
@@ -25,8 +26,8 @@ export function CabinetNew() {
         ozon_api_key: apiKey,
       })
       navigate('/cabinets')
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Не удалось добавить кабинет')
+    } catch (err) {
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
