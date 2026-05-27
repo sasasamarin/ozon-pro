@@ -9,7 +9,7 @@ export const api = axios.create({
 
 // Подставляем JWT токен из localStorage в каждый запрос
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('ozon_pro_token')
+  const token = localStorage.getItem('flowoi_token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -21,8 +21,8 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('ozon_pro_token')
-      localStorage.removeItem('ozon_pro_user')
+      localStorage.removeItem('flowoi_token')
+      localStorage.removeItem('flowoi_user')
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'
       }

@@ -20,9 +20,9 @@ export interface RegisterPayload {
 
 export async function login(payload: LoginPayload) {
   const { data } = await api.post('/auth/login', payload)
-  localStorage.setItem('ozon_pro_token', data.access_token)
+  localStorage.setItem('flowoi_token', data.access_token)
   if (data.user) {
-    localStorage.setItem('ozon_pro_user', JSON.stringify(data.user))
+    localStorage.setItem('flowoi_user', JSON.stringify(data.user))
   }
   return data
 }
@@ -33,13 +33,13 @@ export async function register(payload: RegisterPayload) {
 }
 
 export function logout() {
-  localStorage.removeItem('ozon_pro_token')
-  localStorage.removeItem('ozon_pro_user')
+  localStorage.removeItem('flowoi_token')
+  localStorage.removeItem('flowoi_user')
   window.location.href = '/login'
 }
 
 export function getCurrentUser(): User | null {
-  const raw = localStorage.getItem('ozon_pro_user')
+  const raw = localStorage.getItem('flowoi_user')
   if (!raw) return null
   try {
     return JSON.parse(raw)
@@ -49,5 +49,5 @@ export function getCurrentUser(): User | null {
 }
 
 export function isAuthenticated(): boolean {
-  return !!localStorage.getItem('ozon_pro_token')
+  return !!localStorage.getItem('flowoi_token')
 }
