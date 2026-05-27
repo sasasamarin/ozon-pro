@@ -7,8 +7,12 @@ import { CabinetNew } from '@/pages/CabinetNew'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
+import { PagePlaceholder } from '@/components/PagePlaceholder'
+import { getAllPlaceholderItems } from '@/lib/menu'
 
 export default function App() {
+  const placeholderItems = getAllPlaceholderItems()
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -25,6 +29,21 @@ export default function App() {
         <Route path="/cabinets" element={<Cabinets />} />
         <Route path="/cabinets/new" element={<CabinetNew />} />
         <Route path="/settings" element={<Settings />} />
+
+        {placeholderItems.map((item) => (
+          <Route
+            key={item.path}
+            path={item.path}
+            element={
+              <PagePlaceholder
+                icon={item.icon}
+                title={item.label}
+                description={item.placeholder!.description}
+                plannedFeatures={item.placeholder!.plannedFeatures}
+              />
+            }
+          />
+        ))}
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
