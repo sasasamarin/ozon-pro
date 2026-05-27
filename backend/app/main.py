@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 # Создаём FastAPI приложение
 app = FastAPI(
-    title="Ozon Pro API",
+    title="Flowoi API",
     description="Финансовый мозг для селлеров маркетплейсов",
     version="0.1.0",
     docs_url="/api/docs" if not settings.is_production else None,
@@ -85,7 +85,7 @@ app.include_router(api_router, prefix="/api/v1")
 async def root() -> dict[str, str]:
     """Корневой endpoint."""
     return {
-        "name": "Ozon Pro API",
+        "name": "Flowoi API",
         "version": "0.1.0",
         "status": "running",
     }

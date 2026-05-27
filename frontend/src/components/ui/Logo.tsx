@@ -16,7 +16,7 @@ export function Logo({ className, showText = true }: LogoProps) {
         </svg>
       </div>
       {showText && (
-        <span className="font-semibold text-fg tracking-tight">Ozon Pro</span>
+        <span className="font-semibold text-fg tracking-tight">Flowoi</span>
       )}
     </div>
   )

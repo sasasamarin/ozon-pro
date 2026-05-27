@@ -81,7 +81,7 @@ export function Login() {
         </div>
 
         <footer className="flex items-center justify-between text-xs text-fg-subtle">
-          <span>© 2026 Ozon Pro · Финансовый мозг для селлеров</span>
+          <span>© 2026 Flowoi · Финансовый мозг для селлеров Ozon</span>
           <a href="#" className="hover:text-fg-muted transition-colors">Поддержка</a>
         </footer>
       </div>

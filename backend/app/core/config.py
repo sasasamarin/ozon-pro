@@ -65,8 +65,8 @@ class Settings(BaseSettings):
     SMTP_PORT: int = 465
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
-    EMAIL_FROM: str = "noreply@ozonpro.ru"
-    EMAIL_FROM_NAME: str = "Ozon Pro"
+    EMAIL_FROM: str = "noreply@flowoi.ru"
+    EMAIL_FROM_NAME: str = "Flowoi"
 
     # --- TELEGRAM ---
     TELEGRAM_BOT_TOKEN: str = ""
