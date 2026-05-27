@@ -1,13 +1,11 @@
 #!/bin/bash
-# Миграция Ozon Pro на Selectel Managed TimescaleDB
-# Запускается на VPS Marla
-set -e
+# Миграция Ozon Pro на Selectel Managed TimescaleDB (через публичный IP)
 
 echo "🚀 MIGRATION TO MANAGED TIMESCALEDB"
 echo "===================================="
 
 APP_DIR=/home/ozonpro/app
-DB_HOST="master.67b977ef-f1a3-47b0-b144-dea698f7bf0e.c.dbaas.selcloud.ru"
+DB_HOST="45.157.160.36"
 DB_PORT="5432"
 DB_NAME="ozonpro"
 DB_USER="ozonuser"
@@ -15,68 +13,58 @@ DB_PASS="hczwE5yQ23fk"
 
 cd "$APP_DIR"
 
-# 1. Скачать SSL сертификат
+# 1. Скачать SSL сертификат Selectel CA
 echo "→ Downloading Selectel CA cert..."
-sudo -u ozonpro mkdir -p /home/ozonpro/.postgresql
-sudo -u ozonpro wget -q https://storage.dbaas.selcloud.ru/CA.pem -O /home/ozonpro/.postgresql/root.crt
-sudo -u ozonpro chmod 0600 /home/ozonpro/.postgresql/root.crt
-echo "✓ SSL cert downloaded"
+sudo -u ozonpro mkdir -p /home/ozonpro/app/certs
+sudo -u ozonpro wget -q https://storage.dbaas.selcloud.ru/CA.pem -O /home/ozonpro/app/certs/selectel-ca.pem
+sudo -u ozonpro chmod 0600 /home/ozonpro/app/certs/selectel-ca.pem
+echo "✓ SSL cert downloaded ($(wc -c < /home/ozonpro/app/certs/selectel-ca.pem) bytes)"
 
-# 2. Проверить подключение
-echo "→ Testing connection..."
-PG_CONNECTION_OK=$(sudo -u ozonpro docker run --rm \
-  --network app_ozon_net \
-  -e PGPASSWORD="$DB_PASS" \
-  -e PGSSLMODE=require \
-  postgres:16-alpine \
-  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" 2>&1 || echo "FAILED")
-
-if echo "$PG_CONNECTION_OK" | grep -q "FAILED"; then
-  echo "⚠️  Direct connection failed via SSL. Trying without SSL..."
-  PG_CONNECTION_OK=$(sudo -u ozonpro docker run --rm \
-    --network app_ozon_net \
-    -e PGPASSWORD="$DB_PASS" \
-    postgres:16-alpine \
-    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1;" 2>&1)
-  echo "$PG_CONNECTION_OK"
-fi
-echo "Connection test result:"
-echo "$PG_CONNECTION_OK" | head -5
+# 2. Тест подключения через psql БЕЗ SSL
 echo ""
-
-# 3. Проверить TimescaleDB extension
-echo "→ Checking TimescaleDB extension..."
-TS_CHECK=$(sudo -u ozonpro docker run --rm \
-  --network app_ozon_net \
-  -e PGPASSWORD="$DB_PASS" \
-  postgres:16-alpine \
-  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-  -c "SELECT extname, extversion FROM pg_extension WHERE extname LIKE '%timescale%';" 2>&1)
-echo "$TS_CHECK"
-echo ""
-
-# 4. Если TimescaleDB не установлен — пытаемся создать
-if ! echo "$TS_CHECK" | grep -qi "timescaledb"; then
-  echo "→ TimescaleDB not installed, trying CREATE EXTENSION..."
-  sudo -u ozonpro docker run --rm \
-    --network app_ozon_net \
-    -e PGPASSWORD="$DB_PASS" \
-    postgres:16-alpine \
-    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-    -c "CREATE EXTENSION IF NOT EXISTS timescaledb;" 2>&1 | head -10
-  echo ""
-fi
-
-# 5. Список всех расширений
-echo "→ All installed extensions:"
+echo "→ Test 1: Connection WITHOUT SSL..."
 sudo -u ozonpro docker run --rm \
-  --network app_ozon_net \
   -e PGPASSWORD="$DB_PASS" \
   postgres:16-alpine \
-  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-  -c "\dx" 2>&1 | head -30
-echo ""
+  psql "host=$DB_HOST port=$DB_PORT user=$DB_USER dbname=$DB_NAME sslmode=disable" \
+  -c "SELECT version();" 2>&1 | head -5
 
+# 3. Тест подключения с SSL (verify-ca)
+echo ""
+echo "→ Test 2: Connection WITH SSL (require)..."
+sudo -u ozonpro docker run --rm \
+  -e PGPASSWORD="$DB_PASS" \
+  postgres:16-alpine \
+  psql "host=$DB_HOST port=$DB_PORT user=$DB_USER dbname=$DB_NAME sslmode=require" \
+  -c "SELECT version();" 2>&1 | head -5
+
+# 4. Список расширений
+echo ""
+echo "→ Listing extensions in ozonpro DB..."
+sudo -u ozonpro docker run --rm \
+  -e PGPASSWORD="$DB_PASS" \
+  postgres:16-alpine \
+  psql "host=$DB_HOST port=$DB_PORT user=$DB_USER dbname=$DB_NAME sslmode=require" \
+  -c "\dx" 2>&1 | head -25
+
+# 5. Попытка создать TimescaleDB extension
+echo ""
+echo "→ Trying CREATE EXTENSION timescaledb..."
+sudo -u ozonpro docker run --rm \
+  -e PGPASSWORD="$DB_PASS" \
+  postgres:16-alpine \
+  psql "host=$DB_HOST port=$DB_PORT user=$DB_USER dbname=$DB_NAME sslmode=require" \
+  -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;" 2>&1 | head -10
+
+echo ""
+echo "→ Final extensions list:"
+sudo -u ozonpro docker run --rm \
+  -e PGPASSWORD="$DB_PASS" \
+  postgres:16-alpine \
+  psql "host=$DB_HOST port=$DB_PORT user=$DB_USER dbname=$DB_NAME sslmode=require" \
+  -c "SELECT extname, extversion FROM pg_extension;" 2>&1 | head -15
+
+echo ""
 echo "===================================="
-echo "DONE - check output above"
+echo "DIAGNOSTICS DONE"
 echo "===================================="
