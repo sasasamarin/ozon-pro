@@ -19,13 +19,7 @@ export interface RegisterPayload {
 }
 
 export async function login(payload: LoginPayload) {
-  // FastAPI OAuth2PasswordRequestForm ожидает form-data с username
-  const formData = new URLSearchParams()
-  formData.append('username', payload.email)
-  formData.append('password', payload.password)
-  const { data } = await api.post('/auth/login', formData, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-  })
+  const { data } = await api.post('/auth/login', payload)
   localStorage.setItem('ozon_pro_token', data.access_token)
   if (data.user) {
     localStorage.setItem('ozon_pro_user', JSON.stringify(data.user))
