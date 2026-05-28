@@ -494,6 +494,157 @@ class OzonSellerClient:
             },
         )
 
+    # ============================================
+    # ВОЗВРАТЫ / ОТМЕНЫ / РЕАЛИЗАЦИЯ / СКЛАДЫ
+    # ============================================
+
+    async def get_returns(
+        self,
+        *,
+        last_id: int = 0,
+        limit: int = 500,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        statuses: list[str] | None = None,
+    ) -> dict:
+        """Возвраты (FBO + FBS объединены).
+
+        Endpoint: POST /v3/returns/list
+        """
+        filter_: dict[str, Any] = {}
+        if date_from and date_to:
+            filter_["logistic_return_date"] = {
+                "time_from": date_from,
+                "time_to": date_to,
+            }
+        if statuses:
+            filter_["status"] = statuses
+        payload = {
+            "filter": filter_,
+            "last_id": last_id,
+            "limit": limit,
+        }
+        return await self._request("POST", "/v3/returns/list", json=payload)
+
+    async def get_realization(self, *, month: int, year: int) -> dict:
+        """Отчёт о реализации Ozon за месяц.
+
+        Endpoint: POST /v2/finance/realization
+        Требует premium_plus или premium_pro.
+        """
+        return await self._request(
+            "POST",
+            "/v2/finance/realization",
+            json={"month": str(month), "year": str(year), "language": "RU"},
+        )
+
+    async def get_stock_on_warehouses(
+        self,
+        *,
+        limit: int = 1000,
+        offset: int = 0,
+        warehouse_type: str = "ALL",
+    ) -> dict:
+        """Остатки по складам Ozon (FBO).
+
+        Endpoint: POST /v2/analytics/stock_on_warehouses
+        warehouse_type: ALL / FULFILLMENT / CROSSDOCK
+        """
+        return await self._request(
+            "POST",
+            "/v2/analytics/stock_on_warehouses",
+            json={"limit": limit, "offset": offset, "warehouse_type": warehouse_type},
+        )
+
+    # ============================================
+    # ОТЗЫВЫ / ВОПРОСЫ / ЧАТЫ — premium_pro only
+    # ============================================
+
+    async def get_reviews(
+        self,
+        *,
+        last_id: str = "",
+        limit: int = 100,
+        status: str = "ALL",
+        sort_dir: str = "DESC",
+    ) -> dict:
+        """Список отзывов. Требует premium_pro.
+
+        Endpoint: POST /v1/review/list
+        """
+        return await self._request(
+            "POST",
+            "/v1/review/list",
+            json={
+                "last_id": last_id,
+                "limit": limit,
+                "sort_dir": sort_dir,
+                "status": status,
+            },
+        )
+
+    async def get_questions(
+        self,
+        *,
+        last_id: str = "",
+        limit: int = 100,
+    ) -> dict:
+        """Список вопросов о товарах. Требует premium_pro.
+
+        Endpoint: POST /v1/question/list
+        """
+        return await self._request(
+            "POST",
+            "/v1/question/list",
+            json={"last_id": last_id, "limit": limit},
+        )
+
+    async def get_chats(
+        self,
+        *,
+        from_id: str = "",
+        limit: int = 100,
+        filter_: dict | None = None,
+    ) -> dict:
+        """Список чатов с покупателями.
+
+        Endpoint: POST /v3/chat/list
+        """
+        payload: dict[str, Any] = {
+            "limit": limit,
+            "filter": filter_ or {},
+        }
+        if from_id:
+            payload["cursor"] = from_id
+        return await self._request("POST", "/v3/chat/list", json=payload)
+
+    async def get_chat_history(
+        self,
+        *,
+        chat_id: str,
+        from_message_id: str = "",
+        limit: int = 100,
+    ) -> dict:
+        """История сообщений в чате.
+
+        Endpoint: POST /v3/chat/history
+        """
+        payload: dict[str, Any] = {"chat_id": chat_id, "limit": limit, "direction": "Forward"}
+        if from_message_id:
+            payload["from_message_id"] = from_message_id
+        return await self._request("POST", "/v3/chat/history", json=payload)
+
+    # ============================================
+    # БАЛАНС
+    # ============================================
+
+    async def get_payouts_total(self) -> dict:
+        """Сумма выплат за всё время + следующая ожидаемая выплата.
+
+        Endpoint: GET /v1/finance/payouts/total (или POST в зависимости от версии)
+        """
+        return await self._request("GET", "/v1/finance/payouts/total")
+
     async def test_credentials(self) -> bool:
         """
         Проверка что API ключи валидные.

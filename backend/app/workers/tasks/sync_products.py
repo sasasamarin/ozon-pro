@@ -40,12 +40,134 @@ from app.workers.tasks._helpers import (
 
 
 _ENRICH_BATCH = 100  # Размер чанка для /v3/product/info/list (limit Ozon = 1000, но 100 безопаснее по таймаутам)
+_WAREHOUSE_PAGE_SIZE = 1000
+_MAX_PAGES_WAREHOUSE = 100
 
 
 def _clear_sync_error(account: OzonAccount) -> None:
     """Очищает last_sync_error и переводит статус в ACTIVE после успешного синка."""
     account.last_sync_error = None
     account.status = OzonAccountStatus.ACTIVE.value
+
+
+# ============================================================
+# TASK 4: sync_all_warehouse_stocks (per-warehouse breakdown)
+# ============================================================
+
+
+@celery_app.task(name="app.workers.tasks.sync_products.sync_all_warehouse_stocks")
+def sync_all_warehouse_stocks(account_id: str | None = None) -> dict:
+    """Per-warehouse остатки FBO через /v2/analytics/stock_on_warehouses.
+
+    Дополняет sync_all_stocks (которая даёт только FBO/FBS aggregate) —
+    добавляет warehouse_id + warehouse_name + cluster в hypertable `stocks`.
+    """
+    return run_celery_async(_sync_all_warehouse_stocks_async, account_id)
+
+
+async def _sync_all_warehouse_stocks_async(
+    SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: str | None = None,
+) -> dict:
+    async with SessionLocal() as db:
+        if account_id:
+            acc = (
+                await db.execute(
+                    select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None))
+                )
+            ).scalar_one_or_none()
+            accounts = [acc] if acc else []
+        else:
+            accounts = await get_active_accounts(db)
+
+    log.info("sync_warehouse_stocks_started", count=len(accounts))
+    results = await asyncio.gather(
+        *[_sync_warehouse_stocks_for_account(SessionLocal, a.id) for a in accounts],
+        return_exceptions=True,
+    )
+    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
+    return {"total": len(accounts), "success": success, "failed": len(results) - success}
+
+
+async def _sync_warehouse_stocks_for_account(
+    SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: uuid.UUID,
+) -> dict:
+    async with SessionLocal() as db:
+        account = (
+            await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
+        ).scalar_one_or_none()
+        if not account:
+            return {"status": "failed", "error": "account_not_found"}
+
+        try:
+            async with track_sync_log(db, account.id, "sync_warehouse_stocks") as stats:
+                sku_to_id = await load_sku_map(db, account.id)
+                snapshot_at = datetime.now(UTC)
+
+                client_id = decrypt_secret(account.client_id_encrypted)
+                api_key = decrypt_secret(account.api_key_encrypted)
+
+                rows: list[dict] = []
+                async with OzonSellerClient(client_id, api_key) as client:
+                    offset = 0
+                    page = 0
+                    while True:
+                        page += 1
+                        if page > _MAX_PAGES_WAREHOUSE:
+                            log.error("pagination_runaway", method="warehouse_stocks", account=str(account_id))
+                            break
+                        response = await client.get_stock_on_warehouses(
+                            limit=_WAREHOUSE_PAGE_SIZE, offset=offset, warehouse_type="ALL"
+                        )
+                        result = response.get("result") or {}
+                        items = result.get("rows") or []
+                        log.info("warehouse_stocks_page", account=str(account_id), page=page, items=len(items))
+                        if not items:
+                            break
+
+                        for it in items:
+                            sku = it.get("sku") or it.get("product_id")
+                            product_id = sku_to_id.get(int(sku)) if sku else None
+                            if not product_id:
+                                continue
+                            rows.append({
+                                "time": snapshot_at,
+                                "product_id": product_id,
+                                "warehouse_type": "FBO",  # /v2/analytics/stock_on_warehouses возвращает только FBO-склады
+                                "warehouse_name": it.get("warehouse_name"),
+                                "warehouse_id": int(it["warehouse_id"]) if it.get("warehouse_id") else None,
+                                "free_to_sell": int(it.get("free_to_sell_amount", 0) or 0),
+                                "reserved": int(it.get("reserved_amount", 0) or 0),
+                                "in_transit": int(it.get("promised_amount", 0) or 0),
+                                "cluster": it.get("cluster") or it.get("cluster_name"),
+                            })
+                            stats.processed += 1
+
+                        if len(items) < _WAREHOUSE_PAGE_SIZE:
+                            break
+                        offset += len(items)
+
+                if rows:
+                    stmt = pg_insert(Stock).values(rows)
+                    stmt = stmt.on_conflict_do_nothing(
+                        index_elements=["time", "product_id", "warehouse_type"]
+                    )
+                    await db.execute(stmt)
+                    stats.created += len(rows)
+
+                account.last_sync_at = snapshot_at
+                _clear_sync_error(account)
+            await db.commit()
+            return {"status": "success", "rows": stats.created}
+        except OzonAPIError as e:
+            account.status = OzonAccountStatus.ERROR.value
+            account.last_sync_error = str(e)[:500]
+            await db.commit()
+            return {"status": "failed", "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            await db.rollback()
+            return {"status": "failed", "error": str(e)}
 
 
 # ============================================================
