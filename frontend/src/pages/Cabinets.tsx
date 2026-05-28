@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { api } from '@/lib/api'
 import { formatRelativeTime, cn } from '@/lib/utils'
 import { PREMIUM_TIER_OPTIONS, type PremiumTier } from '@/components/PremiumTierSelect'
+import { getErrorMessage } from '@/lib/errors'
 import type { OzonAccountSummary } from '@/stores/cabinet'
 
 const TIER_BY_VALUE = Object.fromEntries(
@@ -121,7 +122,7 @@ export function Cabinets() {
                   {cab.last_sync_error && (
                     <div className="mt-2 inline-flex items-start gap-1.5 text-[11px] text-error">
                       <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
-                      <span className="line-clamp-2">{cab.last_sync_error}</span>
+                      <span className="line-clamp-2">{getErrorMessage(cab.last_sync_error)}</span>
                     </div>
                   )}
                 </Card>
