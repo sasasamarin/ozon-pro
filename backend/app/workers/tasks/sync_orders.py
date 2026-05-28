@@ -1,10 +1,255 @@
-"""Синхронизация заказов."""
+"""
+Синхронизация заказов FBO + FBS.
+
+Каждый тик: тянем `days_window` последних дней (по умолчанию 3 — incremental),
+делаем upsert по posting_number, переписываем order_items набело.
+Первый ручной запуск — `days_window=7`, дальше расширяем до 30.
+"""
+from __future__ import annotations
+
+import asyncio
+import uuid
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.logging import log
+from app.core.security import decrypt_secret
+from app.db.session import AsyncSessionLocal
+from app.models import Order, OrderItem, OrderType, OzonAccount
+from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
+from app.workers.tasks._helpers import (
+    get_active_accounts,
+    load_sku_map,
+    track_sync_log,
+)
+
+
+_FBO_PAGE_SIZE = 1000
+_FBS_PAGE_SIZE = 1000
 
 
 @celery_app.task(name="app.workers.tasks.sync_orders.sync_all_orders")
-def sync_all_orders() -> dict:
-    """TODO: синхронизация заказов FBO и FBS."""
-    log.info("sync_orders_called")
-    return {"status": "todo"}
+def sync_all_orders(days_window: int = 3) -> dict:
+    """Синхронизация заказов FBO + FBS по всем активным магазинам."""
+    return asyncio.run(_sync_all_orders_async(days_window))
+
+
+async def _sync_all_orders_async(days_window: int) -> dict:
+    async with AsyncSessionLocal() as db:
+        accounts = await get_active_accounts(db)
+
+    log.info("sync_orders_started", accounts_count=len(accounts), days=days_window)
+    results = await asyncio.gather(
+        *[_sync_orders_for_account(acc.id, days_window) for acc in accounts],
+        return_exceptions=True,
+    )
+    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
+    return {"total": len(accounts), "success": success, "failed": len(results) - success}
+
+
+async def _sync_orders_for_account(account_id: uuid.UUID, days_window: int) -> dict:
+    async with AsyncSessionLocal() as db:
+        account = (
+            await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
+        ).scalar_one_or_none()
+        if not account:
+            return {"status": "failed", "error": "account_not_found"}
+
+        date_to = datetime.now(UTC)
+        date_from = date_to - timedelta(days=days_window)
+        # Ozon хочет ISO 8601 с миллисекундами и Z
+        df = date_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        dt = date_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        try:
+            async with track_sync_log(db, account.id, "sync_orders") as stats:
+                sku_to_id = await load_sku_map(db, account.id)
+                client_id = decrypt_secret(account.client_id_encrypted)
+                api_key = decrypt_secret(account.api_key_encrypted)
+
+                async with OzonSellerClient(client_id, api_key) as client:
+                    # FBO
+                    await _ingest_postings(
+                        db,
+                        account_id=account.id,
+                        order_type=OrderType.FBO.value,
+                        fetch=lambda offset: client.get_fbo_orders(
+                            date_from=df, date_to=dt, limit=_FBO_PAGE_SIZE, offset=offset
+                        ),
+                        sku_to_id=sku_to_id,
+                        stats=stats,
+                    )
+                    # FBS
+                    await _ingest_postings(
+                        db,
+                        account_id=account.id,
+                        order_type=OrderType.FBS.value,
+                        fetch=lambda offset: client.get_fbs_orders(
+                            date_from=df, date_to=dt, limit=_FBS_PAGE_SIZE, offset=offset
+                        ),
+                        sku_to_id=sku_to_id,
+                        stats=stats,
+                    )
+
+                account.last_sync_at = datetime.now(UTC)
+            await db.commit()
+            return {"status": "success", "rows": stats.processed}
+        except OzonAPIError as e:
+            account.last_sync_error = str(e)[:500]
+            await db.commit()
+            return {"status": "failed", "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            await db.rollback()
+            return {"status": "failed", "error": str(e)}
+
+
+async def _ingest_postings(
+    db: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    order_type: str,
+    fetch,
+    sku_to_id: dict[int, uuid.UUID],
+    stats,
+) -> None:
+    """Постранично тянет список отправлений и upsert'ит каждое."""
+    offset = 0
+    while True:
+        response = await fetch(offset)
+        result = response.get("result") or []
+        if not result:
+            break
+
+        for posting in result:
+            await _upsert_posting(
+                db,
+                account_id=account_id,
+                order_type=order_type,
+                posting=posting,
+                sku_to_id=sku_to_id,
+            )
+            stats.processed += 1
+
+        # has_next в одних эндпоинтах FBO/FBS возвращается в верхнем уровне ответа
+        has_next = response.get("has_next", len(result) >= _FBO_PAGE_SIZE)
+        if not has_next:
+            break
+        offset += len(result)
+
+
+async def _upsert_posting(
+    db: AsyncSession,
+    *,
+    account_id: uuid.UUID,
+    order_type: str,
+    posting: dict,
+    sku_to_id: dict[int, uuid.UUID],
+) -> None:
+    posting_number = posting.get("posting_number")
+    if not posting_number:
+        return
+
+    existing = await db.execute(
+        select(Order).where(
+            Order.ozon_account_id == account_id,
+            Order.posting_number == posting_number,
+        )
+    )
+    order = existing.scalar_one_or_none()
+
+    analytics = posting.get("analytics_data") or {}
+    financial = posting.get("financial_data") or {}
+
+    payload = {
+        "ozon_account_id": account_id,
+        "order_id": posting.get("order_id"),
+        "order_number": posting.get("order_number"),
+        "posting_number": posting_number,
+        "order_type": order_type,
+        "status": posting.get("status", "unknown"),
+        "substatus": posting.get("substatus"),
+        "total_amount": _sum_amount(financial.get("products") or posting.get("products")),
+        "commission_amount": _safe_float(
+            financial.get("commission", {}).get("amount") if isinstance(financial.get("commission"), dict)
+            else financial.get("commission_amount")
+        ),
+        "delivery_price": _safe_float(
+            financial.get("posting_services", {}).get("marketplace_service_item_deliv_to_customer")
+            if isinstance(financial.get("posting_services"), dict)
+            else None
+        ),
+        "cluster_from": analytics.get("warehouse_name") or posting.get("warehouse_name"),
+        "cluster_to": analytics.get("cluster") or analytics.get("delivery_type"),
+        "delivery_method_name": analytics.get("delivery_method_name"),
+        "region": analytics.get("region"),
+        "city": analytics.get("city"),
+        "order_created_at": _parse_dt(posting.get("created_at") or posting.get("in_process_at")),
+        "shipment_date": _parse_dt(posting.get("shipment_date")),
+        "in_process_at": _parse_dt(posting.get("in_process_at")),
+        "delivering_date": _parse_dt(posting.get("delivering_date")),
+        "delivered_at": _parse_dt(posting.get("delivered_at")),
+        "raw_data": posting,
+    }
+
+    if order:
+        for k, v in payload.items():
+            setattr(order, k, v)
+        await db.flush()
+        # Replace items
+        await db.execute(delete(OrderItem).where(OrderItem.order_id == order.id))
+    else:
+        order = Order(**payload)
+        db.add(order)
+        await db.flush()
+
+    # Items
+    for item in posting.get("products") or []:
+        ozon_sku = item.get("sku") or item.get("product_id")
+        db.add(
+            OrderItem(
+                order_id=order.id,
+                product_id=sku_to_id.get(ozon_sku),
+                ozon_sku=ozon_sku or 0,
+                offer_id=item.get("offer_id"),
+                name=item.get("name"),
+                quantity=int(item.get("quantity", 1)),
+                price=_safe_float(item.get("price")) or 0,
+                total_price=_safe_float(item.get("total_price"))
+                or (_safe_float(item.get("price")) or 0) * int(item.get("quantity", 1)),
+                commission=_safe_float(item.get("commission_amount")) or 0,
+            )
+        )
+
+
+def _parse_dt(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        # Ozon отдаёт ISO с Z
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _safe_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sum_amount(items) -> float:
+    """Сумма по items.price * quantity, если в ответе нет общего поля."""
+    if not items:
+        return 0.0
+    total = 0.0
+    for it in items:
+        price = _safe_float(it.get("price")) or 0
+        qty = int(it.get("quantity", 1))
+        total += price * qty
+    return total

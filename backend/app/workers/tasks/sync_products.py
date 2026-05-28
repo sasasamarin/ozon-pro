@@ -1,15 +1,19 @@
 """
-Синхронизация товаров с Озона.
+Синхронизация товаров, остатков и цен с Ozon Seller API.
 
-Каждый магазин обрабатывается параллельно.
-Логируем каждый шаг в sync_logs.
+- sync_all_products — список товаров (upsert в products)
+- sync_all_stocks   — снимки остатков (insert в stocks hypertable)
+- sync_all_prices   — снимки цен (insert в price_history hypertable) +
+                       обновляет текущие цены в products
 """
+from __future__ import annotations
+
 import asyncio
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import log
@@ -21,11 +25,19 @@ from app.models import (
     PriceHistory,
     Product,
     Stock,
-    SyncLog,
-    SyncStatus,
 )
 from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
+from app.workers.tasks._helpers import (
+    get_active_accounts,
+    load_sku_map,
+    track_sync_log,
+)
+
+
+# ============================================================
+# TASK 1: sync_all_products
+# ============================================================
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.sync_products.sync_all_products")
@@ -35,9 +47,7 @@ def sync_all_products(self) -> dict:
 
 
 async def _sync_all_products_async() -> dict:
-    """Async реализация."""
     async with AsyncSessionLocal() as db:
-        # Найти все активные магазины
         result = await db.execute(
             select(OzonAccount).where(
                 OzonAccount.is_active.is_(True),
@@ -47,199 +57,323 @@ async def _sync_all_products_async() -> dict:
         )
         accounts = result.scalars().all()
 
-        log.info("sync_products_started", accounts_count=len(accounts))
+    log.info("sync_products_started", accounts_count=len(accounts))
+    results = await asyncio.gather(
+        *[_sync_products_for_account(account.id) for account in accounts],
+        return_exceptions=True,
+    )
 
-        # Запускаем параллельно для всех магазинов
-        results = await asyncio.gather(
-            *[_sync_products_for_account(account.id) for account in accounts],
-            return_exceptions=True,
-        )
-
-        success_count = sum(1 for r in results if isinstance(r, dict))
-        failed_count = sum(1 for r in results if isinstance(r, Exception))
-
-        log.info(
-            "sync_products_finished",
-            success=success_count,
-            failed=failed_count,
-        )
-
-        return {
-            "total": len(accounts),
-            "success": success_count,
-            "failed": failed_count,
-        }
+    success_count = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
+    failed_count = len(results) - success_count
+    log.info(
+        "sync_products_finished",
+        success=success_count,
+        failed=failed_count,
+    )
+    return {"total": len(accounts), "success": success_count, "failed": failed_count}
 
 
 async def _sync_products_for_account(account_id: uuid.UUID) -> dict:
-    """Синхронизировать товары одного магазина."""
     async with AsyncSessionLocal() as db:
-        # Получаем магазин
-        result = await db.execute(
-            select(OzonAccount).where(OzonAccount.id == account_id)
-        )
+        result = await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
         account = result.scalar_one_or_none()
-
         if not account:
-            log.error("account_not_found", account_id=str(account_id))
-            return {"error": "account_not_found"}
-
-        # Создаём запись в sync_logs
-        sync_log = SyncLog(
-            ozon_account_id=account.id,
-            method="sync_products",
-            status=SyncStatus.STARTED.value,
-            started_at=datetime.now(UTC),
-        )
-        db.add(sync_log)
-        await db.flush()
-
-        started_at = datetime.now(UTC)
-        records_processed = 0
-        records_created = 0
-        records_updated = 0
-        error_message: str | None = None
+            return {"status": "failed", "error": "account_not_found"}
 
         try:
-            # Расшифровываем API ключи
-            client_id = decrypt_secret(account.client_id_encrypted)
-            api_key = decrypt_secret(account.api_key_encrypted)
+            async with track_sync_log(db, account.id, "sync_products") as stats:
+                client_id = decrypt_secret(account.client_id_encrypted)
+                api_key = decrypt_secret(account.api_key_encrypted)
+                async with OzonSellerClient(client_id, api_key) as client:
+                    last_id = ""
+                    while True:
+                        response = await client.get_products(limit=100, last_id=last_id)
+                        items = response.get("result", {}).get("items", [])
+                        if not items:
+                            break
 
-            # Подключаемся к Озону
-            async with OzonSellerClient(client_id, api_key) as client:
-                # Тянем список товаров постранично
-                last_id = ""
-                while True:
-                    response = await client.get_products(
-                        limit=100, last_id=last_id
-                    )
-                    items = response.get("result", {}).get("items", [])
+                        for item in items:
+                            ozon_sku = item.get("product_id")
+                            if not ozon_sku:
+                                continue
 
-                    if not items:
-                        break
-
-                    # Сохраняем каждый товар
-                    for item in items:
-                        ozon_sku = item.get("product_id")
-                        if not ozon_sku:
-                            continue
-
-                        # Ищем существующий
-                        existing = await db.execute(
-                            select(Product).where(
-                                Product.ozon_account_id == account.id,
-                                Product.ozon_sku == ozon_sku,
+                            existing = await db.execute(
+                                select(Product).where(
+                                    Product.ozon_account_id == account.id,
+                                    Product.ozon_sku == ozon_sku,
+                                )
                             )
-                        )
-                        product = existing.scalar_one_or_none()
+                            product = existing.scalar_one_or_none()
 
-                        offer_id = item.get("offer_id", "")
-                        name = item.get("name", "") or f"SKU {ozon_sku}"
-                        is_archived = item.get("is_discounted", False)
+                            offer_id = item.get("offer_id", "")
+                            name = item.get("name", "") or f"SKU {ozon_sku}"
+                            is_archived = item.get("is_discounted", False)
 
-                        if product:
-                            # Обновляем
-                            product.offer_id = offer_id
-                            product.name = name
-                            product.is_archived = is_archived
-                            product.raw_data = item
-                            records_updated += 1
-                        else:
-                            # Создаём
-                            product = Product(
-                                ozon_account_id=account.id,
-                                ozon_sku=ozon_sku,
-                                offer_id=offer_id,
-                                name=name,
-                                is_archived=is_archived,
-                                raw_data=item,
-                            )
-                            db.add(product)
-                            records_created += 1
+                            if product:
+                                product.offer_id = offer_id
+                                product.name = name
+                                product.is_archived = is_archived
+                                product.raw_data = item
+                                stats.updated += 1
+                            else:
+                                product = Product(
+                                    ozon_account_id=account.id,
+                                    ozon_sku=ozon_sku,
+                                    offer_id=offer_id,
+                                    name=name,
+                                    is_archived=is_archived,
+                                    raw_data=item,
+                                )
+                                db.add(product)
+                                stats.created += 1
+                            stats.processed += 1
 
-                        records_processed += 1
+                        last_id = response.get("result", {}).get("last_id", "")
+                        if not last_id:
+                            break
 
-                    last_id = response.get("result", {}).get("last_id", "")
-                    if not last_id:
-                        break
-
-            await db.flush()
-
-            # Обновляем статус магазина
-            account.last_sync_at = datetime.now(UTC)
-            account.last_sync_error = None
-            account.status = OzonAccountStatus.ACTIVE.value
-
-            # Финализируем sync_log
-            sync_log.status = SyncStatus.SUCCESS.value
-            sync_log.finished_at = datetime.now(UTC)
-            sync_log.duration_ms = int(
-                (sync_log.finished_at - started_at).total_seconds() * 1000
-            )
-            sync_log.records_processed = records_processed
-            sync_log.records_created = records_created
-            sync_log.records_updated = records_updated
-
+                account.last_sync_at = datetime.now(UTC)
+                account.last_sync_error = None
+                account.status = OzonAccountStatus.ACTIVE.value
             await db.commit()
-
-            log.info(
-                "products_synced",
-                account_id=str(account.id),
-                processed=records_processed,
-                created=records_created,
-                updated=records_updated,
-            )
-
-            return {
-                "status": "success",
-                "processed": records_processed,
-                "created": records_created,
-                "updated": records_updated,
-            }
-
+            return {"status": "success", "created": stats.created, "updated": stats.updated}
         except OzonAPIError as e:
-            error_message = str(e)
-            log.error(
-                "ozon_api_error_in_sync",
-                account_id=str(account.id),
-                error=error_message,
-            )
             account.status = OzonAccountStatus.ERROR.value
-            account.last_sync_error = error_message[:500]
-
-        except Exception as e:
-            error_message = str(e)
-            log.error(
-                "sync_failed",
-                account_id=str(account.id),
-                error=error_message,
-                exc_info=True,
-            )
-
-        # Финализируем при ошибке
-        sync_log.status = SyncStatus.FAILED.value
-        sync_log.finished_at = datetime.now(UTC)
-        sync_log.duration_ms = int(
-            (sync_log.finished_at - started_at).total_seconds() * 1000
-        )
-        sync_log.records_processed = records_processed
-        sync_log.error_message = error_message
-        await db.commit()
-
-        return {"status": "failed", "error": error_message}
+            account.last_sync_error = str(e)[:500]
+            await db.commit()
+            return {"status": "failed", "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            await db.rollback()
+            return {"status": "failed", "error": str(e)}
 
 
-# Заглушки для других задач (доделаем позже)
+# ============================================================
+# TASK 2: sync_all_stocks
+# ============================================================
+
 
 @celery_app.task(name="app.workers.tasks.sync_products.sync_all_stocks")
 def sync_all_stocks() -> dict:
-    """TODO: реализовать синхронизацию остатков (snapshot в TimescaleDB)."""
-    log.info("sync_stocks_called")
-    return {"status": "todo"}
+    """Снимки остатков по всем активным магазинам."""
+    return asyncio.run(_sync_all_stocks_async())
+
+
+async def _sync_all_stocks_async() -> dict:
+    async with AsyncSessionLocal() as db:
+        accounts = await get_active_accounts(db)
+
+    log.info("sync_stocks_started", accounts_count=len(accounts))
+    results = await asyncio.gather(
+        *[_sync_stocks_for_account(acc.id) for acc in accounts],
+        return_exceptions=True,
+    )
+    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
+    return {"total": len(accounts), "success": success, "failed": len(results) - success}
+
+
+async def _sync_stocks_for_account(account_id: uuid.UUID) -> dict:
+    async with AsyncSessionLocal() as db:
+        account = (
+            await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
+        ).scalar_one_or_none()
+        if not account:
+            return {"status": "failed", "error": "account_not_found"}
+
+        try:
+            async with track_sync_log(db, account.id, "sync_stocks") as stats:
+                sku_to_id = await load_sku_map(db, account.id)
+                snapshot_at = datetime.now(UTC)
+
+                client_id = decrypt_secret(account.client_id_encrypted)
+                api_key = decrypt_secret(account.api_key_encrypted)
+
+                rows: list[dict] = []
+
+                async with OzonSellerClient(client_id, api_key) as client:
+                    cursor = ""
+                    while True:
+                        response = await client.get_stocks(limit=100, cursor=cursor)
+                        items = response.get("items") or response.get("result", {}).get("items", [])
+                        if not items:
+                            break
+
+                        for item in items:
+                            ozon_sku = item.get("product_id") or item.get("sku")
+                            product_id = sku_to_id.get(ozon_sku)
+                            if not product_id:
+                                # Товар ещё не синхронизирован — пропускаем
+                                continue
+
+                            # Каждая позиция приходит со списком stocks по складам
+                            for st in item.get("stocks", []):
+                                rows.append(_stock_row(
+                                    snapshot_at=snapshot_at,
+                                    product_id=product_id,
+                                    raw=st,
+                                ))
+                                stats.processed += 1
+
+                        cursor = response.get("cursor", "")
+                        if not cursor:
+                            break
+
+                if rows:
+                    stmt = pg_insert(Stock).values(rows)
+                    stmt = stmt.on_conflict_do_nothing(
+                        index_elements=["time", "product_id", "warehouse_type"]
+                    )
+                    await db.execute(stmt)
+                    stats.created += len(rows)
+
+                account.last_sync_at = snapshot_at
+            await db.commit()
+            return {"status": "success", "rows": stats.created}
+        except OzonAPIError as e:
+            account.last_sync_error = str(e)[:500]
+            await db.commit()
+            return {"status": "failed", "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            await db.rollback()
+            return {"status": "failed", "error": str(e)}
+
+
+def _stock_row(
+    *, snapshot_at: datetime, product_id: uuid.UUID, raw: dict
+) -> dict:
+    """Превращает один stocks-элемент Ozon API в строку для bulk-insert."""
+    warehouse_type = (raw.get("type") or "FBO").upper()
+    return {
+        "time": snapshot_at,
+        "product_id": product_id,
+        "warehouse_type": warehouse_type,
+        "warehouse_name": raw.get("warehouse_name") or raw.get("cluster"),
+        "warehouse_id": raw.get("warehouse_id"),
+        "free_to_sell": int(raw.get("present", raw.get("free_to_sell_amount", 0)) or 0),
+        "reserved": int(raw.get("reserved", 0) or 0),
+        "in_transit": int(raw.get("in_transit_qty", raw.get("in_transit", 0)) or 0),
+        "cluster": raw.get("cluster") or raw.get("cluster_name"),
+    }
+
+
+# ============================================================
+# TASK 3: sync_all_prices
+# ============================================================
 
 
 @celery_app.task(name="app.workers.tasks.sync_products.sync_all_prices")
 def sync_all_prices() -> dict:
-    """TODO: реализовать синхронизацию цен (snapshot в TimescaleDB)."""
-    log.info("sync_prices_called")
-    return {"status": "todo"}
+    """Снимки цен + обновление текущих цен в products."""
+    return asyncio.run(_sync_all_prices_async())
+
+
+async def _sync_all_prices_async() -> dict:
+    async with AsyncSessionLocal() as db:
+        accounts = await get_active_accounts(db)
+
+    log.info("sync_prices_started", accounts_count=len(accounts))
+    results = await asyncio.gather(
+        *[_sync_prices_for_account(acc.id) for acc in accounts],
+        return_exceptions=True,
+    )
+    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
+    return {"total": len(accounts), "success": success, "failed": len(results) - success}
+
+
+async def _sync_prices_for_account(account_id: uuid.UUID) -> dict:
+    async with AsyncSessionLocal() as db:
+        account = (
+            await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
+        ).scalar_one_or_none()
+        if not account:
+            return {"status": "failed", "error": "account_not_found"}
+
+        try:
+            async with track_sync_log(db, account.id, "sync_prices") as stats:
+                sku_to_id = await load_sku_map(db, account.id)
+                snapshot_at = datetime.now(UTC)
+
+                client_id = decrypt_secret(account.client_id_encrypted)
+                api_key = decrypt_secret(account.api_key_encrypted)
+
+                rows: list[dict] = []
+
+                async with OzonSellerClient(client_id, api_key) as client:
+                    cursor = ""
+                    while True:
+                        response = await client.get_product_prices(limit=100, cursor=cursor)
+                        items = response.get("items") or response.get("result", {}).get("items", [])
+                        if not items:
+                            break
+
+                        for item in items:
+                            ozon_sku = item.get("product_id") or item.get("sku")
+                            product_id = sku_to_id.get(ozon_sku)
+                            if not product_id:
+                                continue
+
+                            price_node = item.get("price", {})
+                            price = _to_decimal(price_node.get("price"))
+                            old_price = _to_decimal(price_node.get("old_price"))
+                            marketing_price = _to_decimal(price_node.get("marketing_price"))
+                            min_price = _to_decimal(price_node.get("min_price"))
+                            price_index = (item.get("price_indexes") or {}).get(
+                                "color_index"
+                            ) or item.get("price_index")
+
+                            # Snapshot row для price_history
+                            if price is not None:
+                                rows.append({
+                                    "time": snapshot_at,
+                                    "product_id": product_id,
+                                    "price": price,
+                                    "marketing_price": marketing_price,
+                                    "old_price": old_price,
+                                    "price_index": price_index,
+                                })
+
+                            # Обновим текущие цены на самом Product
+                            existing = await db.execute(
+                                select(Product).where(Product.id == product_id)
+                            )
+                            product = existing.scalar_one_or_none()
+                            if product:
+                                product.current_price = price
+                                product.old_price = old_price
+                                product.marketing_price = marketing_price
+                                product.min_price = min_price
+                                product.price_index = price_index
+                                stats.updated += 1
+                            stats.processed += 1
+
+                        cursor = response.get("cursor", "")
+                        if not cursor:
+                            break
+
+                if rows:
+                    stmt = pg_insert(PriceHistory).values(rows)
+                    stmt = stmt.on_conflict_do_nothing(
+                        index_elements=["time", "product_id"]
+                    )
+                    await db.execute(stmt)
+                    stats.created += len(rows)
+
+                account.last_sync_at = snapshot_at
+            await db.commit()
+            return {"status": "success", "rows": stats.created}
+        except OzonAPIError as e:
+            account.last_sync_error = str(e)[:500]
+            await db.commit()
+            return {"status": "failed", "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            await db.rollback()
+            return {"status": "failed", "error": str(e)}
+
+
+def _to_decimal(value) -> float | None:
+    """Безопасно парсит строковое/числовое поле денег из Ozon API."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

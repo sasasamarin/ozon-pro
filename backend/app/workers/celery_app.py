@@ -28,6 +28,7 @@ celery_app = Celery(
         "app.workers.tasks.sync_orders",
         "app.workers.tasks.sync_finance",
         "app.workers.tasks.sync_analytics",
+        "app.workers.tasks.sync_ads",
         "app.workers.tasks.maintenance",
     ],
 )
@@ -80,6 +81,14 @@ celery_app.conf.beat_schedule = {
     "sync-analytics-daily": {
         "task": "app.workers.tasks.sync_analytics.sync_all_analytics",
         "schedule": crontab(hour=4, minute=0),  # каждый день в 4:00
+    },
+    "sync-ad-campaigns-hourly": {
+        "task": "app.workers.tasks.sync_ads.sync_all_ad_campaigns",
+        "schedule": crontab(minute=45),  # каждый час в :45, не пересекается с другими
+    },
+    "sync-ad-statistics-daily": {
+        "task": "app.workers.tasks.sync_ads.sync_all_ad_statistics",
+        "schedule": crontab(hour=5, minute=0),  # каждый день в 5:00 — после analytics
     },
 
     # === ОБСЛУЖИВАНИЕ ===
