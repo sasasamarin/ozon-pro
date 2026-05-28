@@ -86,11 +86,41 @@ celery_app.conf.beat_schedule = {
     },
     "sync-ad-campaigns-hourly": {
         "task": "app.workers.tasks.sync_ads.sync_all_ad_campaigns",
-        "schedule": crontab(minute=45),  # каждый час в :45, не пересекается с другими
+        "schedule": crontab(minute=45),
     },
     "sync-ad-statistics-daily": {
         "task": "app.workers.tasks.sync_ads.sync_all_ad_statistics",
-        "schedule": crontab(hour=5, minute=0),  # каждый день в 5:00 — после analytics
+        "schedule": crontab(hour=5, minute=0),
+    },
+
+    # === НОВЫЕ ТАСКИ (Phase 2 → A) ===
+    "sync-warehouse-stocks-daily": {
+        "task": "app.workers.tasks.sync_products.sync_all_warehouse_stocks",
+        "schedule": crontab(hour=2, minute=30),  # ночью — снимок складов
+    },
+    "sync-returns-hourly": {
+        "task": "app.workers.tasks.sync_marketplace.sync_all_returns",
+        "schedule": crontab(minute=20),  # incremental — последние 30 дней
+    },
+    "sync-cancellations-hourly": {
+        "task": "app.workers.tasks.sync_marketplace.sync_all_cancellations",
+        "schedule": crontab(minute=25),
+    },
+    "sync-realization-daily": {
+        "task": "app.workers.tasks.sync_marketplace.sync_all_realization",
+        "schedule": crontab(hour=6, minute=0),  # после ad-statistics
+    },
+    "sync-reviews-4x-day": {
+        "task": "app.workers.tasks.sync_communications.sync_all_reviews",
+        "schedule": crontab(hour="*/6", minute=10),  # 00:10, 06:10, 12:10, 18:10
+    },
+    "sync-questions-4x-day": {
+        "task": "app.workers.tasks.sync_communications.sync_all_questions",
+        "schedule": crontab(hour="*/6", minute=15),
+    },
+    "sync-chats-every-30min": {
+        "task": "app.workers.tasks.sync_communications.sync_all_chats",
+        "schedule": crontab(minute="*/30"),
     },
 
     # === ОБСЛУЖИВАНИЕ ===
