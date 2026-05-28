@@ -1,229 +1,333 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
-  Store,
   TrendingUp,
+  ShoppingBag,
+  Wallet,
   Package,
   ArrowUpRight,
-  Plus,
-  Sparkles,
   ArrowDownRight,
+  Sparkles,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
-import { Button } from '@/components/ui/Button'
+import { CostWarningBanner } from '@/components/ui/CostWarningBanner'
 import { Sparkline } from '@/components/ui/Sparkline'
-import { HelpHint } from '@/components/ui/HelpHint'
 import { api } from '@/lib/api'
-import { formatCurrency, formatNumber, formatRelativeTime, cn } from '@/lib/utils'
-import { useCurrentUser } from '@/lib/auth'
+import { formatCurrency, formatNumber, cn } from '@/lib/utils'
+import { useCabinetStore } from '@/stores/cabinet'
 
-interface DashboardData {
-  cabinets_count: number
-  total_revenue: number
-  total_stock: number
-  recent_activity: Array<{ id: string; cabinet_name: string; event: string; created_at: string }>
+interface KPI {
+  revenue: number
+  revenue_change_pct: number | null
+  ozon_expenses: number
+  ozon_expenses_pct_of_revenue: number | null
+  gross_profit: number
+  gross_profit_change_pct: number | null
+  orders_count: number
+  orders_change_pct: number | null
+  avg_order_value: number
 }
 
-// Placeholder series until backend exposes time-series.
-const TREND_UP = [34, 38, 36, 42, 45, 41, 50, 54, 51, 58, 62, 60, 68, 72, 75]
-const TREND_FLAT = [42, 44, 41, 43, 45, 44, 46, 45, 47, 46, 48, 47, 49, 48, 50]
-const TREND_REVENUE = [48, 52, 50, 58, 62, 60, 68, 65, 72, 78, 76, 84, 88, 92, 96]
+interface ExpenseRow {
+  category: string
+  amount: number
+  pct_of_expenses: number
+}
+
+interface DailyPoint {
+  date: string
+  revenue: number
+  expenses: number
+  profit: number
+}
+
+interface TopProduct {
+  product_id: string
+  name: string
+  offer_id: string
+  revenue: number
+  units: number
+  share_pct: number
+}
+
+interface DashboardData {
+  period_from: string
+  period_to: string
+  cabinet_ids: string[]
+  has_missing_costs: boolean
+  missing_costs_count: number
+  kpi: KPI
+  expense_breakdown: ExpenseRow[]
+  daily_series: DailyPoint[]
+  top_products: TopProduct[]
+}
 
 export function Dashboard() {
-  const { data: user } = useCurrentUser()
+  const { selectedCabinetIds } = useCabinetStore()
+
   const { data, isLoading } = useQuery<DashboardData>({
-    queryKey: ['dashboard'],
+    queryKey: ['dashboard', selectedCabinetIds, 30],
     queryFn: async () => {
-      const res = await api.get('/dashboard/')
+      const params = new URLSearchParams({ days: '30' })
+      selectedCabinetIds.forEach((id) => params.append('cabinet_ids', id))
+      const res = await api.get(`/dashboard/?${params.toString()}`)
       return res.data
     },
   })
 
-  const stats = [
-    {
-      label: 'Кабинеты',
-      value: data?.cabinets_count ?? 0,
-      icon: Store,
-      iconBg: 'from-indigo-50 to-white',
-      iconColor: 'text-indigo-500',
-      trend: TREND_FLAT,
-      trendColor: 'text-fg-muted',
-      delta: null as { value: string; direction: 'up' | 'down' } | null,
-      formatter: (v: number) => formatNumber(v),
-    },
-    {
-      label: 'Оборот за 30 дней',
-      value: data?.total_revenue ?? 0,
-      icon: TrendingUp,
-      iconBg: 'from-rose-50 to-white',
-      iconColor: 'text-rose-500',
-      trend: TREND_REVENUE,
-      trendColor: 'text-success',
-      delta: { value: '+18.4%', direction: 'up' as const },
-      formatter: (v: number) => formatCurrency(v),
-    },
-    {
-      label: 'Остатки (шт)',
-      value: data?.total_stock ?? 0,
-      icon: Package,
-      iconBg: 'from-amber-50 to-white',
-      iconColor: 'text-amber-600',
-      trend: TREND_UP,
-      trendColor: 'text-success',
-      delta: { value: '+4.2%', direction: 'up' as const },
-      formatter: (v: number) => formatNumber(v),
-    },
-  ]
-
-  const hasCabinets = (data?.cabinets_count ?? 0) > 0
-  const companyName = user?.full_name?.split(' ')[0] || user?.email?.split('@')[0] || 'там'
+  const kpi = data?.kpi
+  const revSeries = (data?.daily_series || []).map((d) => d.revenue)
+  const profitSeries = (data?.daily_series || []).map((d) => d.profit)
+  const expensesSeries = (data?.daily_series || []).map((d) => d.expenses)
 
   return (
     <div className="relative">
-      {/* Ambient background */}
       <div
         aria-hidden
         className="absolute -top-20 -right-20 w-[520px] h-[520px] rounded-full bg-aurora-soft blur-3xl pointer-events-none -z-0"
       />
 
-      <div className="relative flex flex-col gap-8">
+      <div className="relative flex flex-col gap-6">
         {/* Header */}
-        <div className="flex items-end justify-between gap-4 flex-wrap">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-bg-subtle/60 backdrop-blur-sm px-2.5 py-1 text-xs font-medium text-fg-muted">
-              <Sparkles className="w-3 h-3" />
-              Сводка · 30 дней
-            </div>
-            <div className="flex items-center gap-2 mt-3">
-              <h1 className="text-3xl font-semibold text-fg tracking-tight">
-                Привет, {companyName}
-              </h1>
-              <HelpHint text="Главная сводка: текущие метрики по выбранным кабинетам (см. переключатель в шапке). Карточки показывают кабинеты, оборот за 30 дней, остатки. Sparklines и delta-проценты — placeholder, реальные time-series подключим, когда бэк начнёт отдавать суточные снимки." />
-            </div>
-            <p className="text-sm text-fg-muted mt-1.5">
-              Управление кабинетами Ozon и аналитика продаж
-            </p>
+        <div>
+          <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-bg-subtle/60 backdrop-blur-sm px-2.5 py-1 text-xs font-medium text-fg-muted">
+            <Sparkles className="w-3 h-3" />
+            Сводка · 30 дней
           </div>
-          {hasCabinets && (
-            <Link to="/cabinets/new">
-              <Button variant="secondary">
-                <Plus className="w-4 h-4" />
-                Кабинет
-              </Button>
-            </Link>
-          )}
+          <h1 className="text-3xl font-semibold text-fg tracking-tight mt-3">Дашборд</h1>
+          <p className="text-sm text-fg-muted mt-1.5">
+            Выручка, расходы Ozon и прибыль по выбранным кабинетам.
+          </p>
         </div>
 
-        {/* Stat cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {stats.map(({ label, value, icon: Icon, iconBg, iconColor, trend, trendColor, delta, formatter }) => (
-            <Card
-              key={label}
-              className="p-5 relative overflow-hidden hover:shadow-elev hover:border-border transition-all duration-200"
-            >
-              <div className="flex items-center justify-between mb-4">
-                <div
-                  className={cn(
-                    'w-9 h-9 rounded-lg bg-gradient-to-br border border-white shadow-sm flex items-center justify-center',
-                    iconBg
-                  )}
-                >
-                  <Icon className={cn('w-4 h-4', iconColor)} />
-                </div>
-                {delta && (
-                  <span
-                    className={cn(
-                      'inline-flex items-center gap-0.5 text-[11px] font-semibold px-2 py-0.5 rounded-full tabular-nums',
-                      delta.direction === 'up'
-                        ? 'text-success bg-green-50'
-                        : 'text-error bg-red-50'
-                    )}
-                  >
-                    {delta.direction === 'up' ? (
-                      <ArrowUpRight className="w-3 h-3" />
-                    ) : (
-                      <ArrowDownRight className="w-3 h-3" />
-                    )}
-                    {delta.value}
-                  </span>
-                )}
-              </div>
-              <p className="text-xs font-medium text-fg-muted uppercase tracking-wider">{label}</p>
-              <p className="text-[28px] leading-tight font-semibold text-fg mt-1 tabular-nums">
-                {isLoading ? (
-                  <span className="inline-block w-24 h-7 bg-bg-subtle rounded animate-pulse" />
-                ) : (
-                  formatter(value)
-                )}
-              </p>
-              <div className={cn('mt-3 -mx-1', trendColor)}>
-                <Sparkline points={trend} />
-              </div>
-            </Card>
-          ))}
+        {/* Cost warning */}
+        {data?.has_missing_costs && (
+          <CostWarningBanner count={data.missing_costs_count} context="profit" />
+        )}
+
+        {/* KPI cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <KpiCard
+            label="Выручка"
+            value={kpi?.revenue ?? 0}
+            change={kpi?.revenue_change_pct ?? null}
+            icon={TrendingUp}
+            iconColor="text-emerald-600"
+            iconBg="from-emerald-50 to-white"
+            sparkPoints={revSeries}
+            sparkColor="text-emerald-500"
+            formatter={formatCurrency}
+            isLoading={isLoading}
+          />
+          <KpiCard
+            label="Расходы Ozon"
+            value={kpi?.ozon_expenses ?? 0}
+            change={null}
+            subtitle={
+              kpi?.ozon_expenses_pct_of_revenue != null
+                ? `${kpi.ozon_expenses_pct_of_revenue}% от выручки`
+                : null
+            }
+            icon={Wallet}
+            iconColor="text-rose-600"
+            iconBg="from-rose-50 to-white"
+            sparkPoints={expensesSeries}
+            sparkColor="text-rose-500"
+            formatter={formatCurrency}
+            isLoading={isLoading}
+          />
+          <KpiCard
+            label="Валовая прибыль"
+            value={kpi?.gross_profit ?? 0}
+            change={kpi?.gross_profit_change_pct ?? null}
+            subtitle="выручка − себестоимость − Ozon"
+            icon={Package}
+            iconColor="text-indigo-600"
+            iconBg="from-indigo-50 to-white"
+            sparkPoints={profitSeries}
+            sparkColor="text-indigo-500"
+            formatter={formatCurrency}
+            isLoading={isLoading}
+          />
+          <KpiCard
+            label="Заказы"
+            value={kpi?.orders_count ?? 0}
+            change={kpi?.orders_change_pct ?? null}
+            subtitle={kpi ? `средний чек ${formatCurrency(kpi.avg_order_value)}` : null}
+            icon={ShoppingBag}
+            iconColor="text-amber-700"
+            iconBg="from-amber-50 to-white"
+            sparkPoints={revSeries}
+            sparkColor="text-amber-600"
+            formatter={formatNumber}
+            isLoading={isLoading}
+          />
         </div>
 
-        {/* Empty state OR recent activity */}
-        {!hasCabinets ? (
-          <Card className="relative overflow-hidden p-12 flex flex-col items-center text-center">
-            <div
-              aria-hidden
-              className="absolute inset-0 bg-aurora opacity-40 pointer-events-none"
-            />
-            <div className="absolute inset-0 bg-grid-faint opacity-40 pointer-events-none" />
-            <div className="relative w-14 h-14 rounded-2xl bg-white border border-border-subtle shadow-glass flex items-center justify-center mb-5">
-              <Store className="w-6 h-6 text-fg-muted" />
-            </div>
-            <h3 className="relative text-lg font-semibold text-fg">Пока нет кабинетов</h3>
-            <p className="relative text-sm text-fg-muted mt-1.5 max-w-md">
-              Подключи свой первый кабинет Ozon, чтобы получить аналитику по продажам, остаткам и финансам.
+        {/* Daily chart + top products */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <Card className="lg:col-span-2 p-6">
+            <h2 className="text-base font-semibold text-fg">Динамика по дням</h2>
+            <p className="text-xs text-fg-muted mt-0.5">
+              Выручка (зелёный) · Расходы (красный) · Прибыль (фиолетовый)
             </p>
-            <Link to="/cabinets/new" className="relative mt-6">
-              <Button>
-                <Plus className="w-4 h-4" />
-                Добавить кабинет Ozon
-              </Button>
-            </Link>
-          </Card>
-        ) : (
-          <Card className="overflow-hidden">
-            <div className="px-6 py-4 border-b border-border-subtle flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-semibold text-fg">Последние действия</h2>
-                <p className="text-xs text-fg-muted mt-0.5">События по всем кабинетам</p>
-              </div>
-              <Link
-                to="/cabinets"
-                className="text-sm text-fg-muted hover:text-fg flex items-center gap-1 transition-colors"
-              >
-                Все кабинеты <ArrowUpRight className="w-3.5 h-3.5" />
-              </Link>
+            <div className="mt-5 flex flex-col gap-2">
+              <ChartRow label="Выручка" series={revSeries} color="text-emerald-500" />
+              <ChartRow label="Расходы" series={expensesSeries} color="text-rose-500" />
+              <ChartRow label="Прибыль" series={profitSeries} color="text-indigo-500" />
             </div>
-            <ul className="divide-y divide-border-subtle">
-              {(data?.recent_activity || []).map((item) => (
-                <li
-                  key={item.id}
-                  className="px-6 py-3.5 flex items-center justify-between hover:bg-bg-subtle/50 transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
-                    <span className="text-sm font-medium text-fg truncate">{item.cabinet_name}</span>
-                    <span className="text-sm text-fg-muted truncate">{item.event}</span>
-                  </div>
-                  <span className="text-xs text-fg-subtle font-mono shrink-0 ml-3">
-                    {formatRelativeTime(item.created_at)}
-                  </span>
-                </li>
-              ))}
-              {(data?.recent_activity || []).length === 0 && (
-                <li className="px-6 py-8 text-center text-sm text-fg-muted">
-                  Активности ещё нет
-                </li>
-              )}
-            </ul>
+            <div className="mt-4 flex justify-between text-xs text-fg-subtle font-mono">
+              <span>{data?.period_from}</span>
+              <span>{data?.period_to}</span>
+            </div>
           </Card>
+
+          <Card className="p-6">
+            <h2 className="text-base font-semibold text-fg">Топ товаров</h2>
+            <p className="text-xs text-fg-muted mt-0.5">по выручке за 30 дней</p>
+            <div className="mt-4 flex flex-col gap-3">
+              {(data?.top_products || []).map((p, idx) => (
+                <Link
+                  to={`/products`}
+                  key={p.product_id}
+                  className="flex items-center gap-3 -mx-2 px-2 py-1.5 rounded-md hover:bg-bg-subtle transition-colors"
+                >
+                  <span className="w-5 text-xs font-mono text-fg-subtle tabular-nums">
+                    {idx + 1}.
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-fg truncate">{p.name}</p>
+                    <p className="text-xs text-fg-muted">
+                      {formatNumber(p.units)} шт · {p.share_pct}%
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold text-fg tabular-nums shrink-0">
+                    {formatCurrency(p.revenue)}
+                  </span>
+                </Link>
+              ))}
+              {!isLoading && (data?.top_products || []).length === 0 && (
+                <p className="text-sm text-fg-muted text-center py-6">Нет данных за период</p>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* Expense breakdown */}
+        <Card className="p-6">
+          <h2 className="text-base font-semibold text-fg">Структура расходов Ozon</h2>
+          <p className="text-xs text-fg-muted mt-0.5">из транзакций за 30 дней</p>
+          <div className="mt-4 flex flex-col gap-2">
+            {(data?.expense_breakdown || []).map((row) => (
+              <div key={row.category} className="flex items-center gap-3">
+                <span className="w-44 text-sm text-fg-muted shrink-0">{row.category}</span>
+                <div className="flex-1 h-2 bg-bg-subtle rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-rose-400 rounded-full"
+                    style={{ width: `${Math.min(100, row.pct_of_expenses)}%` }}
+                  />
+                </div>
+                <span className="text-sm font-semibold text-fg tabular-nums w-28 text-right shrink-0">
+                  {formatCurrency(row.amount)}
+                </span>
+                <span className="text-xs text-fg-muted tabular-nums w-12 text-right shrink-0">
+                  {row.pct_of_expenses}%
+                </span>
+              </div>
+            ))}
+            {!isLoading && (data?.expense_breakdown || []).length === 0 && (
+              <p className="text-sm text-fg-muted text-center py-6">Нет расходов за период</p>
+            )}
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+interface KpiCardProps {
+  label: string
+  value: number
+  change: number | null
+  subtitle?: string | null
+  icon: React.ComponentType<{ className?: string }>
+  iconColor: string
+  iconBg: string
+  sparkPoints: number[]
+  sparkColor: string
+  formatter: (v: number) => string
+  isLoading: boolean
+}
+
+function KpiCard({
+  label,
+  value,
+  change,
+  subtitle,
+  icon: Icon,
+  iconColor,
+  iconBg,
+  sparkPoints,
+  sparkColor,
+  formatter,
+  isLoading,
+}: KpiCardProps) {
+  return (
+    <Card className="p-5 hover:shadow-elev hover:border-border transition-all duration-200">
+      <div className="flex items-center justify-between mb-4">
+        <div
+          className={cn(
+            'w-9 h-9 rounded-lg bg-gradient-to-br border border-white shadow-sm flex items-center justify-center',
+            iconBg
+          )}
+        >
+          <Icon className={cn('w-4 h-4', iconColor)} />
+        </div>
+        {change != null && (
+          <span
+            className={cn(
+              'inline-flex items-center gap-0.5 text-[11px] font-semibold px-2 py-0.5 rounded-full tabular-nums',
+              change >= 0 ? 'text-success bg-green-50' : 'text-error bg-red-50'
+            )}
+          >
+            {change >= 0 ? (
+              <ArrowUpRight className="w-3 h-3" />
+            ) : (
+              <ArrowDownRight className="w-3 h-3" />
+            )}
+            {change >= 0 ? '+' : ''}
+            {change}%
+          </span>
         )}
       </div>
+      <p className="text-xs font-medium text-fg-muted uppercase tracking-wider">{label}</p>
+      <p className="text-[26px] leading-tight font-semibold text-fg mt-1 tabular-nums">
+        {isLoading ? (
+          <span className="inline-block w-24 h-7 bg-bg-subtle rounded animate-pulse" />
+        ) : (
+          formatter(value)
+        )}
+      </p>
+      {subtitle && <p className="text-xs text-fg-muted mt-1">{subtitle}</p>}
+      {sparkPoints.length > 0 && (
+        <div className={cn('mt-3 -mx-1', sparkColor)}>
+          <Sparkline points={sparkPoints} />
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function ChartRow({ label, series, color }: { label: string; series: number[]; color: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-20 text-xs text-fg-muted shrink-0">{label}</span>
+      <div className={cn('flex-1 -my-1', color)}>
+        <Sparkline points={series.length > 0 ? series : [0]} />
+      </div>
+      <span className="text-sm font-semibold text-fg tabular-nums w-28 text-right shrink-0">
+        {formatCurrency(series.reduce((s, v) => s + v, 0))}
+      </span>
     </div>
   )
 }
