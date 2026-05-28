@@ -54,6 +54,8 @@ export interface NavItem {
   badge?: NavBadge
   /** If present, this route renders <PagePlaceholder>. Routes without it are wired to real pages. */
   placeholder?: PlaceholderContent
+  /** If present, the sidebar renders this as an external <a target="_blank"> instead of an in-app route. */
+  externalUrl?: string
 }
 
 export interface NavGroup {
@@ -725,16 +727,7 @@ export const FOOTER_NAV: NavItem[] = [
     path: '/support',
     label: 'Поддержка',
     icon: HelpCircle,
-    placeholder: {
-      description: 'Документация, FAQ, чат с командой Flowoi.',
-      plannedFeatures: [
-        'База знаний и видео-туториалы',
-        'Чат с поддержкой',
-        'Статус системы и инцидентов',
-        'Запросы фич и баг-репорты',
-        'Roadmap продукта',
-      ],
-    },
+    externalUrl: 'https://t.me/codexa_support',
   },
 ]
 

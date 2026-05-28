@@ -1,5 +1,5 @@
 import { NavLink, Link } from 'react-router-dom'
-import { Zap, Lock, X } from 'lucide-react'
+import { Zap, Lock, X, ExternalLink } from 'lucide-react'
 import { Logo } from './ui/Logo'
 import { cn } from '@/lib/utils'
 import { NAV_GROUPS, FOOTER_NAV, type NavItem } from '@/lib/menu'
@@ -30,13 +30,32 @@ function ItemBadge({ item }: { item: NavItem }) {
 
 function SidebarItem({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
   const { icon: Icon } = item
+  const baseClasses =
+    'flex items-center gap-2.5 h-8 px-2.5 rounded-md text-sm font-medium transition-colors'
+
+  if (item.externalUrl) {
+    return (
+      <a
+        href={item.externalUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={onNavigate}
+        className={cn(baseClasses, 'text-fg-muted hover:bg-bg-subtle hover:text-fg')}
+      >
+        <Icon className="w-4 h-4 shrink-0" strokeWidth={1.75} />
+        <span className="truncate">{item.label}</span>
+        <ExternalLink className="ml-auto w-3 h-3 text-fg-subtle shrink-0" />
+      </a>
+    )
+  }
+
   return (
     <NavLink
       to={item.path}
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(
-          'flex items-center gap-2.5 h-8 px-2.5 rounded-md text-sm font-medium transition-colors',
+          baseClasses,
           isActive
             ? 'bg-bg-subtle text-fg'
             : 'text-fg-muted hover:bg-bg-subtle hover:text-fg'

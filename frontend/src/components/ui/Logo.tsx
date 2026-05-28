@@ -10,7 +10,7 @@ export function Logo({ className }: LogoProps) {
       src="/logo-flowoi.png"
       alt="Flowoi"
       width={978}
-      height={259}
+      height={326}
       draggable={false}
       className={cn(
         'h-9 w-auto select-none mix-blend-multiply',
