@@ -22,7 +22,7 @@ from typing import Any
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Order, OrderItem, Product, Stock
+from app.models import AnalyticsDaily, Order, OrderItem, Product, Stock
 from app.models.marketplace import Cancellation, Return
 from app.services.forecasting import ForecastConfidence, ForecastDefaults
 from app.services.forecasting.abc import abc_classify_3axis
@@ -120,12 +120,52 @@ async def _gather_velocity_inputs(
 ) -> tuple[int, int, int]:
     """Возвращает (total_units_sold, days_in_stock, days_out_of_stock) за окно.
 
-    total_units_sold = ВСЕ заказы (intent to buy: delivered+delivering+cancelled).
-    days_in_stock    = уникальные даты в окне где free_to_sell > 0 в каком-либо
-                       snapshot'е stocks.
-    """
-    cutoff = datetime.now(UTC) - timedelta(days=window_days)
+    ПРИОРИТЕТ: analytics_daily.ordered_units — самый точный источник суточной
+    скорости продаж (Ozon выдаёт уже агрегированно). Если данных нет (товар
+    новый или backfill не покрыл) — fallback на order_items × stocks.
 
+    days_in_stock в новом случае: дни где ordered_units > 0 ИЛИ free_to_sell > 0
+    в stocks snapshot.
+    """
+    cutoff_date = (datetime.now(UTC) - timedelta(days=window_days)).date()
+
+    # === Источник 1: analytics_daily (предпочтительный) ===
+    ad_row = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("units"),
+                func.count().label("days_with_data"),
+                func.count().filter(AnalyticsDaily.ordered_units > 0).label("days_with_sales"),
+            ).where(
+                AnalyticsDaily.product_id == product_id,
+                AnalyticsDaily.date >= cutoff_date,
+            )
+        )
+    ).one()
+    ad_units = int(ad_row.units or 0)
+    ad_days_with_data = int(ad_row.days_with_data or 0)
+
+    if ad_days_with_data >= max(7, window_days // 4):
+        # analytics_daily покрывает значительную часть окна — это достоверный
+        # источник. Считаем days_in_stock как «дни когда товар был доступен»:
+        # combine analytics-days с stocks-snapshot'ами (на случай overlap).
+        stocks_days = await db.execute(
+            select(
+                func.count(func.distinct(func.date_trunc("day", Stock.time)))
+            ).where(
+                Stock.product_id == product_id,
+                Stock.time >= datetime.combine(cutoff_date, datetime.min.time(), tzinfo=UTC),
+                Stock.free_to_sell > 0,
+            )
+        )
+        stocks_dis = int(stocks_days.scalar() or 0)
+        # Берём максимум — analytics покрывает реальные продажи, stocks показывает наличие
+        days_in_stock = max(ad_days_with_data, stocks_dis)
+        days_out_of_stock = max(0, window_days - days_in_stock)
+        return ad_units, days_in_stock, days_out_of_stock
+
+    # === Источник 2 (fallback): order_items + stocks history ===
+    cutoff_dt = datetime.now(UTC) - timedelta(days=window_days)
     units_row = await db.execute(
         select(func.coalesce(func.sum(OrderItem.quantity), 0))
         .select_from(OrderItem)
@@ -133,19 +173,17 @@ async def _gather_velocity_inputs(
         .where(
             Order.ozon_account_id == ozon_account_id,
             OrderItem.product_id == product_id,
-            Order.order_created_at >= cutoff,
+            Order.order_created_at >= cutoff_dt,
         )
     )
     units_sold = int(units_row.scalar() or 0)
 
-    # days_in_stock: число уникальных дат (date_trunc('day', time)) где есть запись со
-    # free_to_sell > 0
     dis_row = await db.execute(
         select(
             func.count(func.distinct(func.date_trunc("day", Stock.time)))
         ).where(
             Stock.product_id == product_id,
-            Stock.time >= cutoff,
+            Stock.time >= cutoff_dt,
             Stock.free_to_sell > 0,
         )
     )
