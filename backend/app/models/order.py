@@ -271,9 +271,10 @@ class AnalyticsDaily(Base):
     session_view_search: Mapped[int] = mapped_column(Integer, default=0)
     session_view_pdp: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Конверсии
-    conv_tocart_search: Mapped[float] = mapped_column(Numeric(5, 4), default=0)
-    conv_tocart_pdp: Mapped[float] = mapped_column(Numeric(5, 4), default=0)
+    # Конверсии (Ozon отдаёт как доли, могут быть > 1 в патологических случаях →
+    # держим запас: до 9999.9999, fail-safe против overflow при backfill).
+    conv_tocart_search: Mapped[float] = mapped_column(Numeric(10, 4), default=0)
+    conv_tocart_pdp: Mapped[float] = mapped_column(Numeric(10, 4), default=0)
 
     # Заказы
     ordered_units: Mapped[int] = mapped_column(Integer, default=0)
