@@ -43,6 +43,7 @@ class Return(BaseModel):
             "ozon_account_id", "ozon_return_id", name="uq_returns_account_return"
         ),
         Index("ix_returns_account_date", "ozon_account_id", "return_date"),
+        Index("ix_returns_user", "user_id"),
     )
 
     ozon_account_id: Mapped[uuid.UUID] = mapped_column(
@@ -50,6 +51,11 @@ class Return(BaseModel):
         ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     # ID возврата у Ozon
@@ -71,13 +77,61 @@ class Return(BaseModel):
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # Связь с заказом (если возврат связан с конкретным posting/order)
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     # Тайминги
     return_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    accepted_from_customer_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    returned_to_seller_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     moved_to_warehouse_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Cancellation(BaseModel):
+    """Отменённый заказ."""
+
+    __tablename__ = "cancellations"
+    __table_args__ = (
+        Index("ix_cancellations_user", "user_id"),
+        Index("ix_cancellations_posting", "posting_number"),
+        Index("ix_cancellations_account_date", "ozon_account_id", "cancelled_at"),
+    )
+
+    ozon_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    posting_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    ozon_sku: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    cancel_reason_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cancel_reason_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    initiator: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -102,6 +156,7 @@ class RealizationLine(BaseModel):
             name="uq_realization_account_period_sku",
         ),
         Index("ix_realization_account_period", "ozon_account_id", "period_from", "period_to"),
+        Index("ix_realization_user", "user_id"),
     )
 
     ozon_account_id: Mapped[uuid.UUID] = mapped_column(
@@ -109,6 +164,11 @@ class RealizationLine(BaseModel):
         ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     period_from: Mapped[date] = mapped_column(Date, nullable=False)
@@ -147,8 +207,9 @@ class Review(BaseModel):
         UniqueConstraint(
             "ozon_account_id", "ozon_review_id", name="uq_reviews_account_review"
         ),
-        Index("ix_reviews_account_date", "ozon_account_id", "review_date"),
+        Index("ix_reviews_account_date", "ozon_account_id", "created_at_ozon"),
         Index("ix_reviews_sku", "ozon_sku"),
+        Index("ix_reviews_user", "user_id"),
     )
 
     ozon_account_id: Mapped[uuid.UUID] = mapped_column(
@@ -156,6 +217,12 @@ class Review(BaseModel):
         ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    # Денормализация для быстрых per-user запросов (заполняется при синке).
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     ozon_review_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -169,16 +236,17 @@ class Review(BaseModel):
 
     author_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     rating: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
-    review_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
     pluses: Mapped[str | None] = mapped_column(Text, nullable=True)
     minuses: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    review_date: Mapped[datetime | None] = mapped_column(
+    created_at_ozon: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
     status: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    has_response: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    has_answer: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    our_answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     has_photos: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     has_videos: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -197,8 +265,9 @@ class Question(BaseModel):
         UniqueConstraint(
             "ozon_account_id", "ozon_question_id", name="uq_questions_account_question"
         ),
-        Index("ix_questions_account_date", "ozon_account_id", "question_date"),
+        Index("ix_questions_account_date", "ozon_account_id", "created_at_ozon"),
         Index("ix_questions_sku", "ozon_sku"),
+        Index("ix_questions_user", "user_id"),
     )
 
     ozon_account_id: Mapped[uuid.UUID] = mapped_column(
@@ -206,6 +275,11 @@ class Question(BaseModel):
         ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     ozon_question_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -218,8 +292,8 @@ class Question(BaseModel):
     )
 
     author_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    question_text: Mapped[str | None] = mapped_column(Text, nullable=False)
-    question_date: Mapped[datetime | None] = mapped_column(
+    text: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    created_at_ozon: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

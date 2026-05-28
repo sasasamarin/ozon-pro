@@ -152,5 +152,5 @@ class AuditLog(BaseModel):
     payload_before: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     payload_after: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    # Доп. метаданные
-    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Доп. метаданные (произвольный JSON-контекст события)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)

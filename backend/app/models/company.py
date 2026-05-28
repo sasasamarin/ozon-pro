@@ -111,6 +111,10 @@ class User(BaseModel, SoftDeleteMixin):
     # Статус
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Owner of the system Pro-кабинета (видит market_* данные и системные настройки)
+    is_admin: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
     # Метаданные
     last_login: Mapped[datetime | None] = mapped_column(

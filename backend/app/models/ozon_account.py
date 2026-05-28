@@ -81,6 +81,12 @@ class OzonAccount(BaseModel, SoftDeleteMixin):
         nullable=False,
     )
 
+    # is_system=true → данные этого кабинета идут в market_* (общие данные рынка).
+    # Заполнять только из админ-кабинета Flowoi. Юзерские кабинеты — всегда false.
+    is_system: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+
     # Статус
     status: Mapped[str] = mapped_column(
         String(20),

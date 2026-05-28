@@ -15,6 +15,11 @@ import uuid
 from datetime import UTC, date as date_cls, datetime, timedelta
 from typing import Any
 
+# Хелпер: NIL UUID для агрегатов «кампания целиком, без разбивки на товары».
+# product_id входит в PK ad_statistics, поэтому для агрегата нужен какой-то
+# валидный, но определённо «не-товарный» UUID.
+NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -207,12 +212,12 @@ async def _sync_ad_statistics_for_account(
                 if rows:
                     stmt = pg_insert(AdStatistics).values(rows)
                     stmt = stmt.on_conflict_do_update(
-                        index_elements=["date", "ozon_campaign_id"],
+                        index_elements=["date", "ozon_campaign_id", "product_id"],
                         set_={
                             col: stmt.excluded[col]
                             for col in (
-                                "views", "clicks", "orders", "revenue",
-                                "money_spent", "ctr", "drr", "raw_data",
+                                "impressions", "clicks", "orders", "revenue",
+                                "spend", "ctr", "drr", "roas", "avg_bid", "raw_data",
                             )
                         },
                     )
@@ -271,14 +276,17 @@ def _flatten_daily_stats(
             out.append({
                 "date": today,
                 "ozon_campaign_id": cid,
+                "product_id": NIL_UUID,
                 "ozon_account_id": account_id,
-                "views": 0,
+                "impressions": 0,
                 "clicks": 0,
                 "orders": 0,
                 "revenue": 0,
-                "money_spent": 0,
+                "spend": 0,
                 "ctr": None,
                 "drr": None,
+                "roas": None,
+                "avg_bid": None,
                 "raw_data": response,
             })
     return out
@@ -292,26 +300,30 @@ def _build_stat_row(
     if not date_value or not cid:
         return None
 
-    views = _to_int(r.get("views") or r.get("impressions"))
+    impressions = _to_int(r.get("views") or r.get("impressions"))
     clicks = _to_int(r.get("clicks"))
     orders = _to_int(r.get("orders") or r.get("ordered"))
     revenue = _to_float(r.get("revenue") or r.get("ordersMoney"))
-    spent = _to_float(r.get("moneySpent") or r.get("expense") or r.get("cost"))
+    spend = _to_float(r.get("moneySpent") or r.get("expense") or r.get("cost"))
 
-    ctr = (clicks / views) if views else None
-    drr = (spent / revenue) if revenue else None
+    ctr = (clicks / impressions) if impressions else None
+    drr = (spend / revenue) if revenue else None
+    roas = (revenue / spend) if spend else None
 
     return {
         "date": date_value,
         "ozon_campaign_id": cid,
+        "product_id": NIL_UUID,  # без разбивки по товарам
         "ozon_account_id": account_id,
-        "views": views,
+        "impressions": impressions,
         "clicks": clicks,
         "orders": orders,
         "revenue": revenue,
-        "money_spent": spent,
+        "spend": spend,
         "ctr": round(ctr, 4) if ctr is not None else None,
         "drr": round(drr, 4) if drr is not None else None,
+        "roas": round(roas, 4) if roas is not None else None,
+        "avg_bid": None,
         "raw_data": r,
     }
 

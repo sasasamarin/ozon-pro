@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     RATE_LIMIT_PRO: int = 5000
     RATE_LIMIT_BUSINESS: int = 20000
 
+    # --- AI LIMITS (per month, per user) ---
+    # Старт: 50 запросов на gpt_4o_mini
+    AI_LIMIT_START_MINI: int = 50
+    # Pro: 500 mini + 50 gpt_4o
+    AI_LIMIT_PRO_MINI: int = 500
+    AI_LIMIT_PRO_GPT4O: int = 50
+    # Business: 2000 mini + неограниченно gpt_4o (-1 = без лимита)
+    AI_LIMIT_BUSINESS_MINI: int = 2000
+    AI_LIMIT_BUSINESS_GPT4O: int = -1
+
     # --- ХОСТЫ ---
     ALLOWED_HOSTS: str = "localhost,127.0.0.1"
     CORS_ORIGINS: str = "http://localhost:5173"

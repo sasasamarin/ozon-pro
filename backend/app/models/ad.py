@@ -56,6 +56,7 @@ class AdCampaign(BaseModel):
             "ozon_account_id", "ozon_campaign_id", name="uq_ad_campaigns_account_campaign"
         ),
         Index("ix_ad_campaigns_state", "state"),
+        Index("ix_ad_campaigns_user", "user_id"),
     )
 
     ozon_account_id: Mapped[uuid.UUID] = mapped_column(
@@ -63,6 +64,11 @@ class AdCampaign(BaseModel):
         ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     # ID кампании в Ozon (string в API, но реально число)
@@ -76,15 +82,45 @@ class AdCampaign(BaseModel):
         String(20), default=AdCampaignState.UNKNOWN.value, nullable=False
     )
 
+    # from_date/to_date оставляем для обратной совместимости; start_date/end_date — каноничные.
     from_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     to_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
-    daily_budget: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
-    weekly_budget: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
-    budget: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
+    daily_budget: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    weekly_budget: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    budget: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+
+    created_at_ozon: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # Полный raw-ответ кампании из API — для разбора того, что мы пока не кладём в колонки
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AdCampaignProduct(BaseModel):
+    """Товары внутри кампании со ставкой / группой."""
+
+    __tablename__ = "ad_campaign_products"
+    __table_args__ = (
+        Index("ix_ad_campaign_products_campaign", "campaign_id"),
+        Index("ix_ad_campaign_products_product", "product_id"),
+    )
+
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ad_campaigns.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("products.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    bid: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    group_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 
 # ============================================
@@ -104,11 +140,19 @@ class AdStatistics(Base):
     __table_args__ = (
         Index("ix_ad_statistics_account_date", "ozon_account_id", "date"),
         Index("ix_ad_statistics_campaign_date", "ozon_campaign_id", "date"),
+        Index("ix_ad_statistics_user", "user_id"),
+        Index("ix_ad_statistics_product", "product_id"),
     )
 
     date: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False)
     ozon_campaign_id: Mapped[str] = mapped_column(
         String(50), primary_key=True, nullable=False
+    )
+    # Опциональный product_id попадает в составной PK, чтобы хранить разбивку
+    # «кампания×товар» в hypertable; для агрегатов на уровне кампании используем
+    # NIL UUID (00000000-0000-0000-0000-000000000000).
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, nullable=False
     )
 
     # Денормализация для быстрых per-account запросов без джойна на кампанию
@@ -117,16 +161,23 @@ class AdStatistics(Base):
         ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
         nullable=False,
     )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     # Метрики
-    views: Mapped[int] = mapped_column(BigInteger, default=0)
+    impressions: Mapped[int] = mapped_column(BigInteger, default=0)
     clicks: Mapped[int] = mapped_column(Integer, default=0)
     orders: Mapped[int] = mapped_column(Integer, default=0)
-    revenue: Mapped[float] = mapped_column(Numeric(15, 2), default=0)
-    money_spent: Mapped[float] = mapped_column(Numeric(15, 2), default=0)
-    # CTR (clicks/views), ДРР (money_spent/revenue) — храним для удобства запросов
+    revenue: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    spend: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    # CTR (clicks/impressions), ДРР (spend/revenue), ROAS (revenue/spend)
     ctr: Mapped[float | None] = mapped_column(Numeric(7, 4), nullable=True)
     drr: Mapped[float | None] = mapped_column(Numeric(7, 4), nullable=True)
+    roas: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
+    avg_bid: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
 
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
 

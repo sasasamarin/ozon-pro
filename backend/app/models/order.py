@@ -155,31 +155,40 @@ class OrderItem(BaseModel):
 # ============================================
 
 
+class TransactionCategory(str, Enum):
+    """Высокоуровневая категория транзакции (рассчитывается из operation_type)."""
+
+    ORDERS = "orders"
+    RETURNS = "returns"
+    SERVICES = "services"
+    COMPENSATION = "compensation"
+    OTHER = "other"
+
+
 class Transaction(Base):
     """
     Финансовая транзакция Озона (TimescaleDB hypertable).
 
-    Тип:
-    - "ProductSale" — продажа
-    - "ProductReturn" — возврат
-    - "Commission" — комиссия
-    - "Delivery" — логистика
-    - "Acquiring" — эквайринг
-    - "Marketing" — реклама
-    - "Other"
+    Комиссии/логистику/эквайринг/рекламу/штрафы/хранение мы НЕ считаем сами —
+    разносим из payload Ozon (`services[]`). Каждое отдельное удержание
+    распределяется в одну из именованных колонок (delivery_to_customer и т.д.).
+
+    PK = (time, ozon_transaction_id) → идемпотентный upsert.
     """
 
     __tablename__ = "transactions"
     __table_args__ = (
         Index("ix_transactions_account_time", "ozon_account_id", "time"),
         Index("ix_transactions_type", "operation_type"),
+        Index("ix_transactions_user", "user_id"),
+        Index("ix_transactions_category", "category"),
     )
 
     time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), primary_key=True, nullable=False
     )
 
-    # Уникальный ID транзакции из Озона
+    # Уникальный ID транзакции из Озона (operation_id в payload)
     ozon_transaction_id: Mapped[str] = mapped_column(
         String(100), primary_key=True, nullable=False
     )
@@ -189,20 +198,44 @@ class Transaction(Base):
         ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Денормализация для быстрых per-user запросов
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
-    # Тип операции
     operation_type: Mapped[str] = mapped_column(String(100), nullable=False)
     operation_type_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Дата операции по календарю Ozon (отличается от time — времени проведения)
+    operation_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Высокоуровневая категория для группировки в P&L
+    category: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
-    # Сумма (положительная — приход, отрицательная — расход)
-    amount: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False)
-    accruals: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
+    # Деньги
+    amount: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    accruals_for_sale: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    sale_commission: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
 
-    # Описание
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Привязка к заказу (если есть)
     posting_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    # Полный массив сервисных удержаний с тайпами Ozon (для drill-down).
+    services: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    # Разнесённые удержания. НЕ СЧИТАЕМ САМИ — берём из services[] Ozon.
+    delivery_to_customer: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    return_logistics: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    last_mile: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    storage: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    placement: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    acquiring: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    advertising: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    utilization: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    fine: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
+    compensation: Mapped[float] = mapped_column(Numeric(14, 2), default=0, server_default="0", nullable=False)
 
     # Сырые данные
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
