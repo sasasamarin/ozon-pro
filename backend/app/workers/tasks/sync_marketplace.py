@@ -97,33 +97,35 @@ async def _sync_returns_for_account(
                 client_id = decrypt_secret(account.client_id_encrypted)
                 api_key = decrypt_secret(account.api_key_encrypted)
                 async with OzonSellerClient(client_id, api_key) as client:
-                    last_id = 0
-                    page = 0
-                    while True:
-                        page += 1
-                        if page > _MAX_PAGES:
-                            log.error("pagination_runaway", method="returns", account=str(account_id))
-                            break
-                        response = await client.get_returns(
-                            last_id=last_id, limit=_PAGE_SIZE_RETURNS,
-                            date_from=df, date_to=dt,
-                        )
-                        returns = response.get("returns") or []
-                        has_next = bool(response.get("has_next", len(returns) >= _PAGE_SIZE_RETURNS))
-                        log.info("returns_page", account=str(account_id), page=page, items=len(returns), has_next=has_next)
-                        if not returns:
-                            break
-
-                        for r in returns:
-                            if not isinstance(r, dict):
-                                continue
-                            await _upsert_return(db, account_id=account.id, raw=r, sku_to_id=sku_to_id)
-                            stats.processed += 1
-
-                        if not has_next:
-                            break
-                        # last_id для следующей страницы
-                        last_id = int(returns[-1].get("id") or last_id + len(returns))
+                    # Возвраты тянем из двух endpoint'ов: FBO + FBS отдельно.
+                    for kind, fetcher in (
+                        ("fbo", client.get_fbo_returns),
+                        ("fbs", client.get_fbs_returns),
+                    ):
+                        offset = 0
+                        page = 0
+                        while True:
+                            page += 1
+                            if page > _MAX_PAGES:
+                                log.error("pagination_runaway", method=f"returns_{kind}", account=str(account_id))
+                                break
+                            response = await fetcher(offset=offset, limit=_PAGE_SIZE_RETURNS)
+                            returns = (
+                                response.get("returns")
+                                or response.get("result", {}).get("returns")
+                                or []
+                            )
+                            log.info("returns_page", account=str(account_id), kind=kind, page=page, items=len(returns))
+                            if not returns:
+                                break
+                            for r in returns:
+                                if not isinstance(r, dict):
+                                    continue
+                                await _upsert_return(db, account_id=account.id, raw=r, sku_to_id=sku_to_id)
+                                stats.processed += 1
+                            if len(returns) < _PAGE_SIZE_RETURNS:
+                                break
+                            offset += len(returns)
 
                 account.last_sync_at = datetime.now(UTC)
                 account.last_sync_error = None
@@ -391,7 +393,8 @@ async def _sync_realization_for_account(
                         try:
                             response = await client.get_realization(month=month, year=year)
                         except OzonAPIError as e:
-                            log.warning("realization_month_failed", year=year, month=month, err=str(e))
+                            # 404 «Report was not found» — норм для месяцев без отчёта (текущий незавершённый)
+                            log.info("realization_no_report", year=year, month=month, err=str(e)[:120])
                             continue
                         result = response.get("result") or {}
                         rows = result.get("rows") or []

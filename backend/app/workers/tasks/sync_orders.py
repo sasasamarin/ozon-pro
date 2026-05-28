@@ -236,15 +236,17 @@ async def _upsert_posting(
         "status": posting.get("status", "unknown"),
         "substatus": posting.get("substatus"),
         "total_amount": _sum_amount(financial.get("products") or posting.get("products")),
+        # commission_amount / delivery_price колонки NOT NULL DEFAULT 0 →
+        # подставляем 0 если Ozon не вернул (часто бывает на awaiting_packaging).
         "commission_amount": _safe_float(
             financial.get("commission", {}).get("amount") if isinstance(financial.get("commission"), dict)
             else financial.get("commission_amount")
-        ),
+        ) or 0,
         "delivery_price": _safe_float(
             financial.get("posting_services", {}).get("marketplace_service_item_deliv_to_customer")
             if isinstance(financial.get("posting_services"), dict)
             else None
-        ),
+        ) or 0,
         "cluster_from": analytics.get("warehouse_name") or posting.get("warehouse_name"),
         "cluster_to": analytics.get("cluster") or analytics.get("delivery_type"),
         "delivery_method_name": analytics.get("delivery_method_name"),

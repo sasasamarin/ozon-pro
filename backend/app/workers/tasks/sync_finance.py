@@ -104,30 +104,40 @@ async def _sync_transactions_for_account(
                 client_id = decrypt_secret(account.client_id_encrypted)
                 api_key = decrypt_secret(account.api_key_encrypted)
 
+                # Ozon ограничивает /v3/finance/transaction/list одним месяцем за запрос.
+                # Бьём окно (date_from → date_to) на месячные слайсы.
+                chunks = _month_chunks(date_from, date_to)
+                log.info("transactions_chunks", account=str(account_id), chunks=len(chunks))
+
                 async with OzonSellerClient(client_id, api_key) as client:
-                    page = 1
-                    while True:
-                        if page > _MAX_PAGES_TX:
-                            log.error("pagination_runaway", method="transactions", account=str(account_id), page=page)
-                            break
-                        response = await client.get_transactions(
-                            date_from=df,
-                            date_to=dt,
-                            page=page,
-                            page_size=_PAGE_SIZE,
-                        )
-                        result = response.get("result") or {}
-                        operations = result.get("operations") or []
-                        page_count = result.get("page_count", 1)
-                        log.info(
-                            "transactions_page",
-                            account=str(account_id),
-                            page=page,
-                            of=page_count,
-                            items=len(operations),
-                        )
-                        if not operations:
-                            break
+                    for chunk_idx, (cdf, cdt) in enumerate(chunks, 1):
+                        cdf_s = cdf.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                        cdt_s = cdt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                        page = 1
+                        while True:
+                            if page > _MAX_PAGES_TX:
+                                log.error("pagination_runaway", method="transactions", account=str(account_id), page=page)
+                                break
+                            response = await client.get_transactions(
+                                date_from=cdf_s,
+                                date_to=cdt_s,
+                                page=page,
+                                page_size=_PAGE_SIZE,
+                            )
+                            result = response.get("result") or {}
+                            operations = result.get("operations") or []
+                            page_count = result.get("page_count", 1)
+                            log.info(
+                                "transactions_page",
+                                account=str(account_id),
+                                chunk=chunk_idx,
+                                of_chunks=len(chunks),
+                                page=page,
+                                of=page_count,
+                                items=len(operations),
+                            )
+                            if not operations:
+                                break
 
                         rows = []
                         for op in operations:
@@ -163,9 +173,9 @@ async def _sync_transactions_for_account(
                             await db.execute(stmt)
                             stats.created += len(rows)
 
-                        if page >= page_count or len(operations) < _PAGE_SIZE:
-                            break
-                        page += 1
+                            if page >= page_count or len(operations) < _PAGE_SIZE:
+                                break
+                            page += 1
 
                 account.last_sync_at = datetime.now(UTC)
                 account.last_sync_error = None
@@ -180,6 +190,22 @@ async def _sync_transactions_for_account(
         except Exception as e:  # noqa: BLE001
             await db.rollback()
             return {"status": "failed", "error": str(e)}
+
+
+def _month_chunks(date_from: datetime, date_to: datetime) -> list[tuple[datetime, datetime]]:
+    """Разбивает интервал на месячные слайсы (Ozon ограничивает 1 месяц на запрос)."""
+    chunks: list[tuple[datetime, datetime]] = []
+    cur = date_from
+    while cur < date_to:
+        # Конец чанка — конец текущего месяца, но не дальше date_to
+        if cur.month == 12:
+            next_month = cur.replace(year=cur.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        else:
+            next_month = cur.replace(month=cur.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        chunk_end = min(next_month, date_to)
+        chunks.append((cur, chunk_end))
+        cur = chunk_end
+    return chunks
 
 
 def _parse_dt(value) -> datetime | None:

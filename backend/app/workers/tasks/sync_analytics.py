@@ -28,6 +28,7 @@ from app.workers.tasks._helpers import (
 
 
 _METRICS = [
+    # Ozon AnalyticsGetDataRequest.Metrics: max 14 items.
     "ordered_units",
     "revenue",
     "hits_view_search",
@@ -41,9 +42,8 @@ _METRICS = [
     "delivered_units",
     "returns",
     "cancellations",
-    "adv_view_pdp",
-    "adv_sum_all",
     "position_category",
+    # Дропнуты: adv_view_pdp, adv_sum_all (advertising есть в sync_ad_statistics).
 ]
 
 
@@ -184,7 +184,7 @@ async def _sync_analytics_for_account(
                                 "session_view_search", "session_view_pdp",
                                 "conv_tocart_search", "conv_tocart_pdp",
                                 "delivered_units", "returns", "cancellations",
-                                "adv_view_pdp", "adv_sum_all", "position_category",
+                                "position_category",
                             )
                         },
                     )
@@ -234,9 +234,8 @@ def _metric_row(m: dict) -> dict:
         "delivered_units": _to_int(m.get("delivered_units")),
         "returns": _to_int(m.get("returns")),
         "cancellations": _to_int(m.get("cancellations")),
-        "adv_view_pdp": _to_int(m.get("adv_view_pdp")),
-        "adv_sum_all": _to_float(m.get("adv_sum_all")),
         "position_category": _to_int(m.get("position_category"), nullable=True),
+        # adv_view_pdp / adv_sum_all — оставляем 0 в БД (поля NOT NULL DEFAULT 0).
     }
 
 

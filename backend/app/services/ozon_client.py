@@ -498,33 +498,37 @@ class OzonSellerClient:
     # ВОЗВРАТЫ / ОТМЕНЫ / РЕАЛИЗАЦИЯ / СКЛАДЫ
     # ============================================
 
-    async def get_returns(
+    async def get_fbo_returns(
         self,
         *,
-        last_id: int = 0,
-        limit: int = 500,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        statuses: list[str] | None = None,
+        offset: int = 0,
+        limit: int = 1000,
     ) -> dict:
-        """Возвраты (FBO + FBS объединены).
+        """Возвраты FBO. Endpoint: POST /v3/returns/company/fbo
 
-        Endpoint: POST /v3/returns/list
+        Filter обязателен (даже пустой).
         """
-        filter_: dict[str, Any] = {}
-        if date_from and date_to:
-            filter_["logistic_return_date"] = {
-                "time_from": date_from,
-                "time_to": date_to,
-            }
-        if statuses:
-            filter_["status"] = statuses
-        payload = {
-            "filter": filter_,
-            "last_id": last_id,
-            "limit": limit,
-        }
-        return await self._request("POST", "/v3/returns/list", json=payload)
+        return await self._request(
+            "POST",
+            "/v3/returns/company/fbo",
+            json={"filter": {}, "limit": limit, "offset": offset},
+        )
+
+    async def get_fbs_returns(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 1000,
+    ) -> dict:
+        """Возвраты FBS. Endpoint: POST /v3/returns/company/fbs
+
+        Filter обязателен (даже пустой).
+        """
+        return await self._request(
+            "POST",
+            "/v3/returns/company/fbs",
+            json={"filter": {}, "limit": limit, "offset": offset},
+        )
 
     async def get_realization(self, *, month: int, year: int) -> dict:
         """Отчёт о реализации Ozon за месяц.
@@ -609,10 +613,13 @@ class OzonSellerClient:
         """Список чатов с покупателями.
 
         Endpoint: POST /v3/chat/list
+        Filter требует валидный chat_status (All / Opened / Closed); пустой
+        фильтр ломается с «Cursor value is incorrect».
         """
+        eff_filter = filter_ or {"chat_status": "All"}
         payload: dict[str, Any] = {
             "limit": limit,
-            "filter": filter_ or {},
+            "filter": eff_filter,
         }
         if from_id:
             payload["cursor"] = from_id
