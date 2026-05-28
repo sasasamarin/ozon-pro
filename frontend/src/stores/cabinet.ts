@@ -19,8 +19,11 @@ export const useCabinetStore = create<CabinetState>()(
 export interface OzonAccountSummary {
   id: string
   name: string
+  description: string | null
   status: string
   is_active: boolean
+  premium_tier: 'free' | 'premium' | 'premium_plus' | 'premium_pro'
   has_performance_api: boolean
   last_sync_at: string | null
+  last_sync_error: string | null
 }
