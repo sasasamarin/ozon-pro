@@ -31,6 +31,28 @@ from app.services.forecasting.procurement import recommend_procurement
 from app.services.forecasting.unit_economics import calc_roi
 from app.services.forecasting.velocity import VelocityResult, calc_velocity
 
+# Дефолты для товаров без заполненных ProductSupplyParams
+_DEFAULT_LEAD_TIME = 14
+_DEFAULT_SAFETY_STOCK = 7
+_DEFAULT_MOQ = 1
+_DEFAULT_BATCH_STEP = 1
+_DEFAULT_BATCH_STRICT = False
+
+
+def _classify_reorder_signal(days_left: float, lead_time: int, safety: int) -> str:
+    """Возвращает 'stockout' / 'reorder_now' / 'ok'.
+
+    Логика nepsell-канон:
+      days_left <= lead_time            → 🔴 stockout (опаздываешь)
+      lead_time < days_left <= lead_time + safety → 🟡 reorder_now (пора заказывать)
+      days_left > lead_time + safety    → 🟢 ok (запас)
+    """
+    if days_left <= lead_time:
+        return "stockout"
+    if days_left <= lead_time + safety:
+        return "reorder_now"
+    return "ok"
+
 # ============================================================
 #  ВНУТРЕННИЕ ХЕЛПЕРЫ — собирают сырые цифры из БД
 # ============================================================
@@ -259,21 +281,59 @@ async def compute_product_recommendation(
         window=ForecastDefaults.DAYS_IN_STOCK_WINDOW,
     )
 
-    # --- procurement (требует supplier params + cost_price) ---
+    # --- missing data flags ---
     missing_data: list[str] = []
-    procurement = None
-    # TODO: вычитывать ProductSupplyParams; пока null → не считаем
-    # if not supply_params: missing_data.append("Параметры поставки не заполнены — нет рекомендации закупки")
-
     if product.cost_price is None:
         missing_data.append("Себестоимость не заполнена — нет валовой маржи и ROI")
-    # TODO: supplier params, OPEX
 
     # --- current stock + in transit ---
     current_stock = await _current_stock_total(db, product.id)
     in_transit_to_customer = await _in_transit_to_customer(
         db, ozon_account_id=product.ozon_account_id, product_id=product.id
     )
+
+    # --- procurement: всегда считаем с дефолтами, флаг supply_params_set отдельно ---
+    # ProductSupplyParams (lead_time, MOQ, safety) — TODO: дочитывать из БД,
+    # пока берём дефолты (14 / 7 / 1).
+    supply_params_set = False
+    lead_time = _DEFAULT_LEAD_TIME
+    safety = _DEFAULT_SAFETY_STOCK
+    moq = _DEFAULT_MOQ
+    batch_step = _DEFAULT_BATCH_STEP
+    batch_strict = _DEFAULT_BATCH_STRICT
+    if not supply_params_set:
+        missing_data.append(
+            "Параметры поставки не заполнены — точка заказа использует дефолты "
+            f"(lead_time={lead_time}, safety={safety} дней)"
+        )
+
+    procurement_result = recommend_procurement(
+        today=today,
+        current_stock=current_stock,
+        in_transit_from_supplier=0,  # TODO: SupplierOrder с status='in_transit'
+        in_transit_from_customer=in_transit_to_customer,
+        velocity=velocity,
+        buyout=buyout,
+        lead_time_total_days=lead_time,
+        safety_stock_days=safety,
+        moq=moq,
+        batch_step=batch_step,
+        batch_strict=batch_strict,
+    )
+    signal = _classify_reorder_signal(
+        procurement_result.days_left, lead_time, safety
+    )
+    procurement: dict[str, Any] = asdict(procurement_result)
+    procurement["signal"] = signal               # stockout / reorder_now / ok
+    procurement["lead_time_days"] = lead_time
+    procurement["safety_stock_days"] = safety
+    procurement["moq"] = moq
+    procurement["supply_params_set"] = supply_params_set
+    # Заменяем date-объекты на ISO-строки (Pydantic v2 их сериализует, но проще явно)
+    if procurement.get("order_by"):
+        procurement["order_by"] = procurement["order_by"].isoformat()
+    if procurement.get("projected_stockout"):
+        procurement["projected_stockout"] = procurement["projected_stockout"].isoformat()
 
     # --- ROI (если есть себестоимость) ---
     roi = None
@@ -303,6 +363,19 @@ async def compute_product_recommendation(
         )
         roi = asdict(roi_result)
 
+    # --- image_url из products.raw_data (как в /products endpoint) ---
+    image_url = None
+    raw = product.raw_data if isinstance(product.raw_data, dict) else None
+    if raw:
+        primary = raw.get("primary_image")
+        if isinstance(primary, list):
+            for item in primary:
+                if isinstance(item, str) and item:
+                    image_url = item
+                    break
+        elif isinstance(primary, str) and primary:
+            image_url = primary
+
     # --- сборка ответа ---
     return {
         "product_id": str(product.id),
@@ -311,6 +384,7 @@ async def compute_product_recommendation(
         "ozon_sku": product.ozon_sku,
         "current_price": float(product.current_price) if product.current_price is not None else None,
         "cost_price": float(product.cost_price) if product.cost_price is not None else None,
+        "image_url": image_url,
         "current_stock": current_stock,
         "in_transit_to_customer": in_transit_to_customer,
         "buyout": asdict(buyout),

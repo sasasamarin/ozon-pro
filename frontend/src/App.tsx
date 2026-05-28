@@ -8,6 +8,8 @@ import { CabinetEdit } from '@/pages/CabinetEdit'
 import { Products } from '@/pages/Products'
 import { Orders } from '@/pages/Orders'
 import { FinanceTransactions } from '@/pages/FinanceTransactions'
+import { Stockouts } from '@/pages/Stockouts'
+import { ProcurementForecast } from '@/pages/ProcurementForecast'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -36,6 +38,8 @@ export default function App() {
         <Route path="/products" element={<Products />} />
         <Route path="/orders" element={<Orders />} />
         <Route path="/finance/transactions" element={<FinanceTransactions />} />
+        <Route path="/analytics/stockouts" element={<Stockouts />} />
+        <Route path="/procurement/forecast" element={<ProcurementForecast />} />
         <Route path="/settings" element={<Settings />} />
 
         {placeholderItems
@@ -43,7 +47,9 @@ export default function App() {
             (item) =>
               item.path !== '/products' &&
               item.path !== '/orders' &&
-              item.path !== '/finance/transactions',
+              item.path !== '/finance/transactions' &&
+              item.path !== '/analytics/stockouts' &&
+              item.path !== '/procurement/forecast',
           )
           .map((item) => (
             <Route
