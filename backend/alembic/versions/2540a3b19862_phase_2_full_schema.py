@@ -488,7 +488,6 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['product_id'], ['products.id'], name=op.f('fk_product_cost_history_product_id_products'), ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], name=op.f('fk_product_cost_history_user_id_users'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('effective_from', 'product_id', name=op.f('pk_product_cost_history')),
-    sa.UniqueConstraint('id', name='uq_product_cost_history_id')
     )
     op.create_index('ix_product_cost_user', 'product_cost_history', ['user_id'], unique=False)
     op.create_table('product_supply_params',

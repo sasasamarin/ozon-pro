@@ -120,7 +120,8 @@ class ProductCostHistory(Base):
     __tablename__ = "product_cost_history"
     __table_args__ = (
         Index("ix_product_cost_user", "user_id"),
-        UniqueConstraint("id", name="uq_product_cost_history_id"),
+        # NB: id NOT unique — TimescaleDB не разрешает UNIQUE без partitioning column.
+        # Уникальность даёт composite PK (effective_from, product_id).
     )
 
     # Hypertable PK: (effective_from, product_id)
