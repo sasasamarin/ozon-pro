@@ -21,6 +21,7 @@ from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
+    load_offer_id_map,
     load_sku_map,
     run_celery_async,
     track_sync_log,
@@ -111,6 +112,7 @@ async def _sync_orders_for_account(
         try:
             async with track_sync_log(db, account.id, "sync_orders") as stats:
                 sku_to_id = await load_sku_map(db, account.id)
+                offer_to_id = await load_offer_id_map(db, account.id)
                 client_id = decrypt_secret(account.client_id_encrypted)
                 api_key = decrypt_secret(account.api_key_encrypted)
 
@@ -132,6 +134,7 @@ async def _sync_orders_for_account(
                                 date_from=_df, date_to=_dt, limit=_FBO_PAGE_SIZE, offset=offset
                             ),
                             sku_to_id=sku_to_id,
+                            offer_to_id=offer_to_id,
                             stats=stats,
                         )
                         await _ingest_postings(
@@ -142,6 +145,7 @@ async def _sync_orders_for_account(
                                 date_from=_df, date_to=_dt, limit=_FBS_PAGE_SIZE, offset=offset
                             ),
                             sku_to_id=sku_to_id,
+                            offer_to_id=offer_to_id,
                             stats=stats,
                         )
 
@@ -170,6 +174,7 @@ async def _ingest_postings(
     order_type: str,
     fetch,
     sku_to_id: dict[int, uuid.UUID],
+    offer_to_id: dict[str, uuid.UUID],
     stats,
 ) -> None:
     """Постранично тянет список отправлений и upsert'ит каждое.
@@ -221,6 +226,7 @@ async def _ingest_postings(
                 order_type=order_type,
                 posting=posting,
                 sku_to_id=sku_to_id,
+                offer_to_id=offer_to_id,
             )
             stats.processed += 1
 
@@ -236,6 +242,7 @@ async def _upsert_posting(
     order_type: str,
     posting: dict,
     sku_to_id: dict[int, uuid.UUID],
+    offer_to_id: dict[str, uuid.UUID],
 ) -> None:
     posting_number = posting.get("posting_number")
     if not posting_number:
@@ -297,12 +304,19 @@ async def _upsert_posting(
 
     for item in posting.get("products") or []:
         ozon_sku = item.get("sku") or item.get("product_id")
+        offer_id = item.get("offer_id")
+        # offer_id у Ozon стабильный, sku в постингах = SKU варианта склада
+        # (FBO/FBS), отличается от primary ozon_sku в /v3/product/list. Поэтому
+        # матчим сначала по offer_id, потом fallback на sku.
+        product_id = offer_to_id.get(offer_id) if offer_id else None
+        if product_id is None and ozon_sku is not None:
+            product_id = sku_to_id.get(ozon_sku)
         db.add(
             OrderItem(
                 order_id=order.id,
-                product_id=sku_to_id.get(ozon_sku),
+                product_id=product_id,
                 ozon_sku=ozon_sku or 0,
-                offer_id=item.get("offer_id"),
+                offer_id=offer_id,
                 name=item.get("name"),
                 quantity=int(item.get("quantity", 1)),
                 price=_safe_float(item.get("price")) or 0,

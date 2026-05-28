@@ -149,6 +149,26 @@ async def load_sku_map(
     return {row.ozon_sku: row.id for row in result.all()}
 
 
+async def load_offer_id_map(
+    db: AsyncSession, account_id: uuid.UUID
+) -> dict[str, uuid.UUID]:
+    """{offer_id: product.id} для всех активных товаров аккаунта.
+
+    Зачем отдельно от load_sku_map: Ozon в /v3/product/list отдаёт ОДИН
+    `sku` (primary), а в /v3/posting/fbo/list возвращает SKU варианта
+    склада (FBO/FBS — разные числа), который не совпадает с primary.
+    Поэтому order_items надо матчить по offer_id, который у Ozon
+    стабильный и одинаковый везде.
+    """
+    result = await db.execute(
+        select(Product.id, Product.offer_id).where(
+            Product.ozon_account_id == account_id,
+            Product.deleted_at.is_(None),
+        )
+    )
+    return {row.offer_id: row.id for row in result.all() if row.offer_id}
+
+
 def tier_at_least(account: OzonAccount, *required: OzonPremiumTier) -> bool:
     """True, если premium_tier кабинета входит в required-набор."""
     return account.premium_tier in {t.value for t in required}
