@@ -168,14 +168,15 @@ class OzonSellerClient:
 
         Endpoint: POST /v3/product/list
         Docs: https://docs.ozon.ru/api/seller/
+
+        Ozon ВСЕГДА требует поле filter в payload (даже пустое):
+        без него 400 «Request validation error: invalid ...Filter: value is required».
         """
         payload = {
             "limit": limit,
             "last_id": last_id,
+            "filter": filter_params or {},
         }
-        if filter_params:
-            payload["filter"] = filter_params
-
         return await self._request("POST", "/v3/product/list", json=payload)
 
     async def get_product_info(self, sku_list: list[int]) -> dict:
