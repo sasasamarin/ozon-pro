@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,17 @@ from app.db.session import get_db
 from app.models import OzonAccount, Product, Stock, User
 
 router = APIRouter()
+
+
+class ProductStockRow(BaseModel):
+    warehouse_type: str
+    warehouse_name: str | None
+    warehouse_id: int | None
+    cluster: str | None
+    free_to_sell: int
+    reserved: int
+    in_transit: int
+    snapshot_at: str
 
 
 class ProductItem(BaseModel):
@@ -105,7 +116,8 @@ async def list_products(
 
     result = await db.execute(query)
     items: list[ProductItem] = []
-    for row in result.all():
+    rows_all = result.all()
+    for row in rows_all:
         product = row.Product
         raw = product.raw_data or {}
         image_url = (
@@ -135,3 +147,61 @@ async def list_products(
         )
 
     return items
+
+
+@router.get("/{product_id}/stocks", response_model=list[ProductStockRow])
+async def product_stocks(
+    product_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ProductStockRow]:
+    """Разбивка остатков по складам/типам в последнем snapshot'е.
+
+    Берём время последнего снимка для product_id и возвращаем ВСЕ строки
+    stocks этого момента — одна строка на (warehouse_type, warehouse_name).
+    """
+    import uuid as _uuid
+
+    try:
+        pid = _uuid.UUID(product_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Невалидный product_id")
+
+    # Проверяем что товар принадлежит компании юзера
+    pcheck = await db.execute(
+        select(Product)
+        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+        .where(
+            Product.id == pid,
+            OzonAccount.company_id == current_user.company_id,
+        )
+    )
+    if not pcheck.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Товар не найден")
+
+    latest_time_row = await db.execute(
+        select(func.max(Stock.time)).where(Stock.product_id == pid)
+    )
+    latest_time = latest_time_row.scalar_one_or_none()
+    if not latest_time:
+        return []
+
+    rows = await db.execute(
+        select(Stock).where(
+            Stock.product_id == pid,
+            Stock.time == latest_time,
+        ).order_by(Stock.warehouse_type, Stock.warehouse_name)
+    )
+    return [
+        ProductStockRow(
+            warehouse_type=s.warehouse_type,
+            warehouse_name=s.warehouse_name,
+            warehouse_id=s.warehouse_id,
+            cluster=s.cluster,
+            free_to_sell=s.free_to_sell,
+            reserved=s.reserved,
+            in_transit=s.in_transit,
+            snapshot_at=latest_time.isoformat(),
+        )
+        for s in rows.scalars().all()
+    ]

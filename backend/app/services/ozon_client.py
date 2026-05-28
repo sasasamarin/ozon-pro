@@ -171,6 +171,10 @@ class OzonSellerClient:
 
         Ozon ВСЕГДА требует поле filter в payload (даже пустое):
         без него 400 «Request validation error: invalid ...Filter: value is required».
+
+        По умолчанию фильтр пустой → Ozon берёт visibility=VISIBLE, отдаст
+        только видимые товары. Передай {"visibility": "ALL"} чтобы вытянуть
+        ВСЁ (включая архивные/невидимые) — нужно для синка.
         """
         payload = {
             "limit": limit,
@@ -179,16 +183,35 @@ class OzonSellerClient:
         }
         return await self._request("POST", "/v3/product/list", json=payload)
 
-    async def get_product_info(self, sku_list: list[int]) -> dict:
+    async def get_product_info(
+        self,
+        *,
+        offer_ids: list[str] | None = None,
+        product_ids: list[int] | None = None,
+        sku: list[int] | None = None,
+    ) -> dict:
         """
-        Получить детальную информацию о товарах.
+        Получить детальную информацию о товарах (батч).
 
         Endpoint: POST /v3/product/info/list
+
+        Передай ОДИН из массивов (offer_ids / product_ids / sku) — макс 1000
+        элементов за запрос. Возвращает name, primary_image, images, barcode,
+        category и др. — используется для enrichment'а после /v3/product/list.
+
+        Ozon принимает имя поля product_id (camelCase в payload — нет, snake_case).
         """
+        payload: dict[str, Any] = {}
+        if offer_ids:
+            payload["offer_id"] = offer_ids
+        if product_ids:
+            payload["product_id"] = product_ids
+        if sku:
+            payload["sku"] = sku
         return await self._request(
             "POST",
             "/v3/product/info/list",
-            json={"sku": sku_list},
+            json=payload,
         )
 
     async def get_product_prices(

@@ -39,6 +39,9 @@ from app.workers.tasks._helpers import (
 )
 
 
+_ENRICH_BATCH = 100  # Размер чанка для /v3/product/info/list (limit Ozon = 1000, но 100 безопаснее по таймаутам)
+
+
 def _clear_sync_error(account: OzonAccount) -> None:
     """Очищает last_sync_error и переводит статус в ACTIVE после успешного синка."""
     account.last_sync_error = None
@@ -95,9 +98,15 @@ async def _sync_products_for_account(
                 client_id = decrypt_secret(account.client_id_encrypted)
                 api_key = decrypt_secret(account.api_key_encrypted)
                 async with OzonSellerClient(client_id, api_key) as client:
+                    # ---- ШАГ 1: /v3/product/list (visibility=ALL → достаём ВСЁ) ----
                     last_id = ""
+                    offer_ids_to_enrich: list[str] = []
                     while True:
-                        response = await client.get_products(limit=100, last_id=last_id)
+                        response = await client.get_products(
+                            limit=100,
+                            last_id=last_id,
+                            filter_params={"visibility": "ALL"},
+                        )
                         items = response.get("result", {}).get("items", [])
                         if not items:
                             break
@@ -116,21 +125,19 @@ async def _sync_products_for_account(
                             product = existing.scalar_one_or_none()
 
                             offer_id = item.get("offer_id", "")
-                            name = item.get("name", "") or f"SKU {ozon_sku}"
-                            is_archived = item.get("is_discounted", False)
+                            name_placeholder = f"SKU {ozon_sku}"
+                            is_archived = bool(item.get("archived") or item.get("is_discounted"))
 
                             if product:
                                 product.offer_id = offer_id
-                                product.name = name
                                 product.is_archived = is_archived
-                                product.raw_data = item
                                 stats.updated += 1
                             else:
                                 product = Product(
                                     ozon_account_id=account.id,
                                     ozon_sku=ozon_sku,
                                     offer_id=offer_id,
-                                    name=name,
+                                    name=name_placeholder,
                                     is_archived=is_archived,
                                     raw_data=item,
                                 )
@@ -138,9 +145,58 @@ async def _sync_products_for_account(
                                 stats.created += 1
                             stats.processed += 1
 
+                            if offer_id:
+                                offer_ids_to_enrich.append(offer_id)
+
                         last_id = response.get("result", {}).get("last_id", "")
                         if not last_id:
                             break
+
+                    # Сохраняем созданные Product, чтобы enrichment мог их найти.
+                    await db.flush()
+
+                    # ---- ШАГ 2: /v3/product/info/list — enrichment (имя, фото, баркод, категория) ----
+                    if offer_ids_to_enrich:
+                        for chunk_start in range(0, len(offer_ids_to_enrich), _ENRICH_BATCH):
+                            chunk = offer_ids_to_enrich[chunk_start : chunk_start + _ENRICH_BATCH]
+                            try:
+                                info = await client.get_product_info(offer_ids=chunk)
+                            except OzonAPIError as e:
+                                log.warning("product_enrich_failed", chunk_size=len(chunk), err=str(e))
+                                continue
+                            detail_items = (
+                                info.get("items")
+                                or info.get("result", {}).get("items")
+                                or []
+                            )
+                            for det in detail_items:
+                                offer = det.get("offer_id")
+                                if not offer:
+                                    continue
+                                row = await db.execute(
+                                    select(Product).where(
+                                        Product.ozon_account_id == account.id,
+                                        Product.offer_id == offer,
+                                    )
+                                )
+                                p = row.scalar_one_or_none()
+                                if not p:
+                                    continue
+                                real_name = det.get("name")
+                                if real_name and real_name.strip():
+                                    p.name = real_name.strip()
+                                barcode = det.get("barcode") or (
+                                    (det.get("barcodes") or [None])[0]
+                                )
+                                if barcode:
+                                    p.barcode = str(barcode)[:50]
+                                category_id = det.get("category_id") or det.get("description_category_id")
+                                if category_id:
+                                    p.category_id = int(category_id)
+                                if det.get("category_name"):
+                                    p.category_name = det["category_name"][:255]
+                                # raw_data из enrich — полнее, перезаписываем
+                                p.raw_data = det
 
                 account.last_sync_at = datetime.now(UTC)
                 _clear_sync_error(account)
