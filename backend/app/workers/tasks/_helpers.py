@@ -149,6 +149,41 @@ async def load_sku_map(
     return {row.ozon_sku: row.id for row in result.all()}
 
 
+async def load_extended_sku_map(
+    db: AsyncSession, account_id: uuid.UUID
+) -> dict[int, uuid.UUID]:
+    """Расширенный {ozon_sku: product.id} — primary + все варианты складов.
+
+    Зачем нужно: Ozon в /v1/analytics/data, /v3/posting/* и подобных
+    endpoint'ах возвращает SKU **варианта склада** (FBO/FBS), который ≠
+    primary `products.ozon_sku` из /v3/product/list. Без этой расширенной
+    карты analytics-backfill писал 0 строк (все entries пропускались).
+
+    Дополняем primary-карту всеми SKU из order_items (где product_id уже
+    был привязан через offer_id-матчинг при синке заказов). Это даёт полный
+    маппинг variant→product для большинства SKU.
+    """
+    from app.models import Order, OrderItem  # local import чтобы избежать circular
+
+    base = await load_sku_map(db, account_id)
+
+    # SKU вариантов из order_items
+    rows = await db.execute(
+        select(OrderItem.ozon_sku, OrderItem.product_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            Order.ozon_account_id == account_id,
+            OrderItem.product_id.is_not(None),
+            OrderItem.ozon_sku.is_not(None),
+        )
+        .distinct()
+    )
+    for sku, pid in rows.all():
+        if sku and pid and sku not in base:
+            base[sku] = pid
+    return base
+
+
 async def load_offer_id_map(
     db: AsyncSession, account_id: uuid.UUID
 ) -> dict[str, uuid.UUID]:

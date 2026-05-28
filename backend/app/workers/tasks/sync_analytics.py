@@ -31,7 +31,7 @@ from app.services.ozon_client import OzonAPIError, OzonRateLimitError, OzonSelle
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
-    load_sku_map,
+    load_extended_sku_map,
     run_celery_async,
     track_sync_log,
 )
@@ -209,7 +209,9 @@ async def _chunk_async(
 
         try:
             async with track_sync_log(db, account.id, "sync_analytics") as stats:
-                sku_to_id = await load_sku_map(db, account.id)
+                # extended map включает SKU вариантов складов (Ozon в analytics
+                # возвращает sku варианта, не primary).
+                sku_to_id = await load_extended_sku_map(db, account.id)
                 if not sku_to_id:
                     return {"status": "skipped", "reason": "no_products"}
 
