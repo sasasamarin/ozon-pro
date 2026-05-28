@@ -26,7 +26,8 @@ export interface VelocityMetric {
 
 export interface ProcurementMetric {
   need_reorder: boolean
-  days_left: number
+  /** null/Infinity = нет продаж в окне, days_left не определён. */
+  days_left: number | null
   raw_need: number
   recommended_qty: number
   order_by: string | null

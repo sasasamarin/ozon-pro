@@ -49,6 +49,10 @@ function exportCsv(rows: ProductRecommendation[]) {
   ]
   for (const p of rows) {
     const pr = p.procurement
+    const dl =
+      pr && pr.days_left != null && Number.isFinite(pr.days_left)
+        ? pr.days_left.toFixed(0)
+        : ''
     lines.push([
       escapeCsv(p.offer_id),
       escapeCsv(p.product_name),
@@ -56,7 +60,7 @@ function exportCsv(rows: ProductRecommendation[]) {
       p.in_transit_to_customer,
       p.velocity.adjusted_daily.toFixed(2).replace('.', ','),
       (p.buyout.rate * 100).toFixed(0) + '%',
-      pr ? pr.days_left.toFixed(0) : '',
+      dl,
       pr ? (pr.lead_time_days + pr.safety_stock_days) : '',
       pr ? pr.recommended_qty : '',
       pr?.order_by ?? '',
@@ -99,7 +103,11 @@ export function ProcurementForecast() {
       .sort((a, b) => {
         if (a.product_id === highlightId) return -1
         if (b.product_id === highlightId) return 1
-        return (a.procurement!.days_left ?? 99999) - (b.procurement!.days_left ?? 99999)
+        const da = a.procurement!.days_left
+        const db = b.procurement!.days_left
+        const va = da == null || !Number.isFinite(da) ? Infinity : da
+        const vb = db == null || !Number.isFinite(db) ? Infinity : db
+        return va - vb
       })
   }, [data, search, signalFilter, highlightId])
 
@@ -236,7 +244,11 @@ export function ProcurementForecast() {
                   />
                   <Stat
                     label="Дни до конца"
-                    value={Number.isFinite(pr.days_left) ? pr.days_left.toFixed(0) : '∞'}
+                    value={
+                      pr.days_left != null && Number.isFinite(pr.days_left)
+                        ? pr.days_left.toFixed(0)
+                        : '∞'
+                    }
                     accent={pr.signal === 'stockout' ? 'red' : pr.signal === 'reorder_now' ? 'amber' : undefined}
                   />
                   <Stat

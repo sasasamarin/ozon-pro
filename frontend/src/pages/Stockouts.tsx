@@ -58,8 +58,14 @@ export function Stockouts() {
     if (filter !== 'all') {
       r = r.filter((p) => p.procurement!.signal === filter)
     }
-    // sort by days_left ASC (горящие сверху)
-    r.sort((a, b) => (a.procurement!.days_left ?? 99999) - (b.procurement!.days_left ?? 99999))
+    // sort by days_left ASC (горящие сверху); null/∞ — в конец
+    r.sort((a, b) => {
+      const da = a.procurement!.days_left
+      const db = b.procurement!.days_left
+      const va = da == null || !Number.isFinite(da) ? Infinity : da
+      const vb = db == null || !Number.isFinite(db) ? Infinity : db
+      return va - vb
+    })
     return r
   }, [data, filter])
 
@@ -199,7 +205,9 @@ export function Stockouts() {
                             pr.signal === 'reorder_now' && 'text-amber-700 font-semibold',
                           )}
                         >
-                          {Number.isFinite(pr.days_left) ? pr.days_left.toFixed(0) : '∞'}
+                          {pr.days_left != null && Number.isFinite(pr.days_left)
+                            ? pr.days_left.toFixed(0)
+                            : '∞'}
                         </span>
                       </td>
                       <td className="py-2.5 px-4 text-right tabular-nums text-fg-muted">
