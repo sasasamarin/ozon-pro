@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Plus, Store, ArrowUpRight, AlertCircle } from 'lucide-react'
+import { Plus, Store, ArrowUpRight, AlertCircle, Megaphone } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { HelpHint } from '@/components/ui/HelpHint'
 import { api } from '@/lib/api'
 import { formatRelativeTime, cn } from '@/lib/utils'
 import { PREMIUM_TIER_OPTIONS, type PremiumTier } from '@/components/PremiumTierSelect'
@@ -13,6 +14,13 @@ const TIER_BY_VALUE = Object.fromEntries(
   PREMIUM_TIER_OPTIONS.map((o) => [o.value, o])
 ) as Record<PremiumTier, (typeof PREMIUM_TIER_OPTIONS)[number]>
 
+const STATUS_LABEL: Record<string, { label: string; tone: 'success' | 'error' | 'muted' }> = {
+  active: { label: 'Активен', tone: 'success' },
+  syncing: { label: 'Синхронизация', tone: 'muted' },
+  error: { label: 'Ошибка', tone: 'error' },
+  inactive: { label: 'Отключён', tone: 'muted' },
+}
+
 export function Cabinets() {
   const { data, isLoading } = useQuery<OzonAccountSummary[]>({
     queryKey: ['ozon-accounts'],
@@ -20,6 +28,11 @@ export function Cabinets() {
       const res = await api.get('/ozon-accounts/')
       return res.data
     },
+    // Карточки чувствительны к свежему статусу — синки бегут параллельно,
+    // не доверяем stale-кэшу.
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    staleTime: 0,
   })
 
   const cabinets = data || []
@@ -28,7 +41,10 @@ export function Cabinets() {
     <div className="flex flex-col gap-8">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-semibold text-fg tracking-tight">Кабинеты Ozon</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-semibold text-fg tracking-tight">Кабинеты Ozon</h1>
+            <HelpHint text="Подключенные магазины Ozon, по одной карточке на каждый. Клик → редактирование (ключи, тариф, удаление). Статус «Активен» = последний sync прошёл; «Ошибка» = есть проблема с Ozon API. Бэйдж «Реклама» = подключён Performance API (рекламная статистика тянется)." />
+          </div>
           <p className="text-sm text-fg-muted mt-1.5">
             {cabinets.length > 0
               ? `Подключено кабинетов: ${cabinets.length}`
@@ -73,6 +89,7 @@ export function Cabinets() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {cabinets.map((cab) => {
             const tier = TIER_BY_VALUE[cab.premium_tier] || TIER_BY_VALUE.free
+            const statusMeta = STATUS_LABEL[cab.status] || { label: cab.status, tone: 'muted' as const }
             return (
               <Link
                 to={`/cabinets/${cab.id}`}
@@ -92,24 +109,32 @@ export function Cabinets() {
                     <ArrowUpRight className="w-4 h-4 text-fg-subtle group-hover:text-fg transition-colors shrink-0" />
                   </div>
 
-                  <div className="flex items-center gap-2 text-xs mb-3">
+                  <div className="flex items-center gap-2 text-xs mb-3 flex-wrap">
                     <span
                       className={cn(
-                        'inline-flex items-center gap-1',
-                        cab.is_active ? 'text-success' : 'text-fg-subtle'
+                        'inline-flex items-center gap-1.5',
+                        statusMeta.tone === 'success' && 'text-success',
+                        statusMeta.tone === 'error' && 'text-error',
+                        statusMeta.tone === 'muted' && 'text-fg-subtle',
                       )}
                     >
                       <span
                         className={cn(
                           'w-1.5 h-1.5 rounded-full',
-                          cab.is_active ? 'bg-success' : 'bg-fg-subtle'
+                          statusMeta.tone === 'success' && 'bg-success',
+                          statusMeta.tone === 'error' && 'bg-error',
+                          statusMeta.tone === 'muted' && 'bg-fg-subtle',
                         )}
                       />
-                      {cab.status}
+                      {statusMeta.label}
                     </span>
                     {cab.has_performance_api && (
-                      <span className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wider text-fg-muted bg-bg-subtle rounded-full px-2 py-0.5">
-                        PA
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-fg-muted bg-bg-subtle rounded-full px-2 py-0.5"
+                        title="Performance API подключён — синхронизация рекламных кампаний и ДРР/ROAS"
+                      >
+                        <Megaphone className="w-2.5 h-2.5" />
+                        Реклама
                       </span>
                     )}
                   </div>

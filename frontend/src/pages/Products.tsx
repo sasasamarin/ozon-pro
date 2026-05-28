@@ -3,9 +3,11 @@ import { Link } from 'react-router-dom'
 import { Package, AlertCircle, Image as ImageIcon, Store } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { HelpHint } from '@/components/ui/HelpHint'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors'
+import { useCabinetStore } from '@/stores/cabinet'
 
 interface ProductItem {
   id: string
@@ -57,12 +59,18 @@ function StockBadge({ value }: { value: number }) {
 }
 
 export function Products() {
+  const { selectedCabinetIds } = useCabinetStore()
   const { data, isLoading, error } = useQuery<ProductItem[]>({
-    queryKey: ['products'],
+    queryKey: ['products', selectedCabinetIds],
     queryFn: async () => {
-      const res = await api.get('/products/')
+      const params = new URLSearchParams()
+      selectedCabinetIds.forEach((id) => params.append('cabinet_ids', id))
+      const qs = params.toString()
+      const res = await api.get(qs ? `/products/?${qs}` : '/products/')
       return res.data
     },
+    refetchOnMount: 'always',
+    staleTime: 0,
   })
 
   const products = data || []
@@ -71,13 +79,16 @@ export function Products() {
     <div className="flex flex-col gap-6">
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-semibold text-fg tracking-tight">Товары</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-semibold text-fg tracking-tight">Товары</h1>
+            <HelpHint text="Все товары из подключенных кабинетов Ozon. Список фильтруется multi-select переключателем кабинетов в шапке. Цены — текущая+старая, остаток — суммарный по всем складам (FBO+FBS) из последнего снимка. Имена и фото пока заглушки: Ozon /v3/product/list их не отдаёт, нужен enrichment через /v3/product/info/list (в backlog)." />
+          </div>
           <p className="text-sm text-fg-muted mt-1.5">
             {isLoading
               ? 'Загрузка…'
               : products.length === 0
                 ? 'Товары не подгружены'
-                : `Всего товаров: ${products.length}`}
+                : `Всего товаров: ${products.length}${selectedCabinetIds.length > 0 ? ' (фильтр по выбранным кабинетам)' : ''}`}
           </p>
         </div>
         <Link to="/cabinets">

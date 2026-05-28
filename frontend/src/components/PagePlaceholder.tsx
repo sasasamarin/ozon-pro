@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react'
 import { Sparkles } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { HelpHint } from '@/components/ui/HelpHint'
 
 interface PagePlaceholderProps {
   icon: LucideIcon
@@ -34,9 +35,19 @@ export function PagePlaceholder({
           <Icon className="w-7 h-7 text-fg-muted" strokeWidth={1.5} />
         </div>
 
-        <h1 className="text-3xl font-semibold text-fg tracking-tight text-balance">
-          {title}
-        </h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-3xl font-semibold text-fg tracking-tight text-balance">
+            {title}
+          </h1>
+          <HelpHint
+            text={
+              description +
+              (plannedFeatures.length
+                ? '\n\nЧто будет:\n• ' + plannedFeatures.join('\n• ')
+                : '')
+            }
+          />
+        </div>
         <p className="text-base text-fg-muted mt-3 max-w-lg text-balance">{description}</p>
 
         <div className="mt-3 text-xs font-medium text-fg-subtle">

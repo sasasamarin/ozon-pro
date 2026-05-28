@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.core.logging import log
 from app.core.security import (
     create_access_token,
@@ -159,3 +160,65 @@ async def login(
         ),
         refresh_token=create_refresh_token(subject=str(user.id)),
     )
+
+
+# ============================================================
+# /me — current user info + profile update
+# ============================================================
+
+
+class MeResponse(BaseModel):
+    id: str
+    email: str
+    full_name: str | None
+    company_id: str
+    company_name: str | None
+    role: str
+    is_admin: bool
+
+
+class MeUpdateRequest(BaseModel):
+    """Edit-profile payload. Email пока не редактируется (нужна верификация — отдельно)."""
+
+    full_name: str | None = None
+
+
+async def _build_me_response(user: User, db: AsyncSession) -> MeResponse:
+    role = (
+        await db.execute(select(Role).where(Role.id == user.role_id))
+    ).scalar_one_or_none()
+    company = (
+        await db.execute(select(Company).where(Company.id == user.company_id))
+    ).scalar_one_or_none()
+    return MeResponse(
+        id=str(user.id),
+        email=user.email,
+        full_name=user.full_name,
+        company_id=str(user.company_id),
+        company_name=company.name if company else None,
+        role=role.name if role else "viewer",
+        is_admin=user.is_admin,
+    )
+
+
+@router.get("/me", response_model=MeResponse)
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    """Текущий пользователь — для подгрузки профиля во фронт."""
+    return await _build_me_response(current_user, db)
+
+
+@router.patch("/me", response_model=MeResponse)
+async def update_me(
+    payload: MeUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    """Редактирование профиля — пока только full_name. Email — отдельно (верификация)."""
+    if payload.full_name is not None:
+        current_user.full_name = payload.full_name.strip() or None
+    await db.flush()
+    log.info("user_profile_updated", user_id=str(current_user.id))
+    return await _build_me_response(current_user, db)

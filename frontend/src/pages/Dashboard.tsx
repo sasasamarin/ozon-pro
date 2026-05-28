@@ -12,9 +12,10 @@ import {
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Sparkline } from '@/components/ui/Sparkline'
+import { HelpHint } from '@/components/ui/HelpHint'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, formatRelativeTime, cn } from '@/lib/utils'
-import { getCurrentUser } from '@/lib/auth'
+import { useCurrentUser } from '@/lib/auth'
 
 interface DashboardData {
   cabinets_count: number
@@ -29,7 +30,7 @@ const TREND_FLAT = [42, 44, 41, 43, 45, 44, 46, 45, 47, 46, 48, 47, 49, 48, 50]
 const TREND_REVENUE = [48, 52, 50, 58, 62, 60, 68, 65, 72, 78, 76, 84, 88, 92, 96]
 
 export function Dashboard() {
-  const user = getCurrentUser()
+  const { data: user } = useCurrentUser()
   const { data, isLoading } = useQuery<DashboardData>({
     queryKey: ['dashboard'],
     queryFn: async () => {
@@ -93,9 +94,12 @@ export function Dashboard() {
               <Sparkles className="w-3 h-3" />
               Сводка · 30 дней
             </div>
-            <h1 className="text-3xl font-semibold text-fg tracking-tight mt-3">
-              Привет, {companyName}
-            </h1>
+            <div className="flex items-center gap-2 mt-3">
+              <h1 className="text-3xl font-semibold text-fg tracking-tight">
+                Привет, {companyName}
+              </h1>
+              <HelpHint text="Главная сводка: текущие метрики по выбранным кабинетам (см. переключатель в шапке). Карточки показывают кабинеты, оборот за 30 дней, остатки. Sparklines и delta-проценты — placeholder, реальные time-series подключим, когда бэк начнёт отдавать суточные снимки." />
+            </div>
             <p className="text-sm text-fg-muted mt-1.5">
               Управление кабинетами Ozon и аналитика продаж
             </p>

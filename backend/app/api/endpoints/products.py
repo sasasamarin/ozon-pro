@@ -39,7 +39,12 @@ class ProductItem(BaseModel):
 
 @router.get("/", response_model=list[ProductItem])
 async def list_products(
-    cabinet_id: uuid.UUID | None = Query(None, description="Опционально: фильтр по кабинету"),
+    cabinet_ids: list[uuid.UUID] | None = Query(
+        None, description="Multi-select: повторяющийся параметр (?cabinet_ids=a&cabinet_ids=b). Если пусто — все кабинеты компании."
+    ),
+    cabinet_id: uuid.UUID | None = Query(
+        None, description="Legacy single-select (для обратной совместимости)."
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ProductItem]:
@@ -92,7 +97,10 @@ async def list_products(
         .order_by(Product.name)
     )
 
-    if cabinet_id:
+    # Multi-select имеет приоритет; legacy cabinet_id обрабатываем для совместимости
+    if cabinet_ids:
+        query = query.where(Product.ozon_account_id.in_(cabinet_ids))
+    elif cabinet_id:
         query = query.where(Product.ozon_account_id == cabinet_id)
 
     result = await db.execute(query)
