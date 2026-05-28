@@ -121,15 +121,35 @@ async def _ingest_postings(
     sku_to_id: dict[int, uuid.UUID],
     stats,
 ) -> None:
-    """Постранично тянет список отправлений и upsert'ит каждое."""
+    """Постранично тянет список отправлений и upsert'ит каждое.
+
+    Shape ответа отличается между endpoint'ами:
+    - /v2/posting/fbo/list → {"result": [posting, ...], "has_next": bool}
+    - /v3/posting/fbs/list → {"result": {"postings": [...], "has_next": bool}}
+    """
     offset = 0
     while True:
         response = await fetch(offset)
-        result = response.get("result") or []
-        if not result:
+        result = response.get("result")
+
+        if isinstance(result, dict):
+            # FBS v3 shape
+            postings = result.get("postings") or []
+            has_next = bool(result.get("has_next", False))
+        elif isinstance(result, list):
+            # FBO v2 shape
+            postings = result
+            has_next = bool(response.get("has_next", len(postings) >= _FBO_PAGE_SIZE))
+        else:
+            postings = []
+            has_next = False
+
+        if not postings:
             break
 
-        for posting in result:
+        for posting in postings:
+            if not isinstance(posting, dict):
+                continue
             await _upsert_posting(
                 db,
                 account_id=account_id,
@@ -139,10 +159,9 @@ async def _ingest_postings(
             )
             stats.processed += 1
 
-        has_next = response.get("has_next", len(result) >= _FBO_PAGE_SIZE)
         if not has_next:
             break
-        offset += len(result)
+        offset += len(postings)
 
 
 async def _upsert_posting(

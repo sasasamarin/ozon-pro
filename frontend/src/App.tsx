@@ -5,6 +5,7 @@ import { Dashboard } from '@/pages/Dashboard'
 import { Cabinets } from '@/pages/Cabinets'
 import { CabinetNew } from '@/pages/CabinetNew'
 import { CabinetEdit } from '@/pages/CabinetEdit'
+import { Products } from '@/pages/Products'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -30,22 +31,25 @@ export default function App() {
         <Route path="/cabinets" element={<Cabinets />} />
         <Route path="/cabinets/new" element={<CabinetNew />} />
         <Route path="/cabinets/:id" element={<CabinetEdit />} />
+        <Route path="/products" element={<Products />} />
         <Route path="/settings" element={<Settings />} />
 
-        {placeholderItems.map((item) => (
-          <Route
-            key={item.path}
-            path={item.path}
-            element={
-              <PagePlaceholder
-                icon={item.icon}
-                title={item.label}
-                description={item.placeholder!.description}
-                plannedFeatures={item.placeholder!.plannedFeatures}
-              />
-            }
-          />
-        ))}
+        {placeholderItems
+          .filter((item) => item.path !== '/products')
+          .map((item) => (
+            <Route
+              key={item.path}
+              path={item.path}
+              element={
+                <PagePlaceholder
+                  icon={item.icon}
+                  title={item.label}
+                  description={item.placeholder!.description}
+                  plannedFeatures={item.placeholder!.plannedFeatures}
+                />
+              }
+            />
+          ))}
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

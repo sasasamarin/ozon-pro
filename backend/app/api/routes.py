@@ -5,7 +5,7 @@
 """
 from fastapi import APIRouter
 
-from app.api.endpoints import auth, dashboard, ozon_accounts
+from app.api.endpoints import auth, dashboard, ozon_accounts, products
 
 api_router = APIRouter()
 
@@ -15,3 +15,4 @@ api_router.include_router(
     ozon_accounts.router, prefix="/ozon-accounts", tags=["ozon-accounts"]
 )
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+api_router.include_router(products.router, prefix="/products", tags=["products"])
