@@ -2,6 +2,9 @@ import axios from 'axios'
 
 const baseURL = import.meta.env.VITE_API_URL || '/api/v1'
 
+/** Удобно для прямых fetch() вызовов (CSV-экспорт и т.п.), где axios не подходит. */
+export const API_BASE_URL = baseURL
+
 export const api = axios.create({
   baseURL,
   timeout: 15000,
