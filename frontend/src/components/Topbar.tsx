@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { getCurrentUser, logout } from '@/lib/auth'
 import { useCabinetStore, type OzonAccountSummary } from '@/stores/cabinet'
+import { Logo } from './ui/Logo'
 
 interface TopbarProps {
   onOpenSidebar: () => void
@@ -70,6 +71,11 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
           >
             <Menu className="w-5 h-5" />
           </button>
+
+          {/* Mobile-only logo (sidebar Logo is hidden when collapsed) */}
+          <Link to="/dashboard" className="lg:hidden">
+            <Logo className="h-7" />
+          </Link>
 
           {/* Cabinet switcher */}
           <div ref={cabinetRef} className="relative min-w-0">

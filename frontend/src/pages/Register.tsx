@@ -34,7 +34,7 @@ export function Register() {
     <div className="min-h-screen flex flex-col items-center justify-center bg-bg px-4 py-12">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="flex flex-col items-center mb-8">
-          <Logo className="mb-6" />
+          <Logo className="h-11 mb-6" />
           <h1 className="text-2xl font-semibold text-fg tracking-tight">Создать аккаунт</h1>
           <p className="text-sm text-fg-muted mt-1.5">Начни управлять кабинетами Ozon</p>
         </div>

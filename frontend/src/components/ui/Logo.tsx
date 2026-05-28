@@ -13,7 +13,7 @@ export function Logo({ className }: LogoProps) {
       height={887}
       draggable={false}
       className={cn(
-        'h-7 w-auto select-none mix-blend-multiply',
+        'h-9 w-auto select-none mix-blend-multiply',
         className
       )}
     />

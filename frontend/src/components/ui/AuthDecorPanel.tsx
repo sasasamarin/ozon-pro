@@ -1,5 +1,6 @@
 import { TrendingUp, CheckCircle2, Package } from 'lucide-react'
 import { Sparkline } from './Sparkline'
+import { Logo } from './Logo'
 
 export function AuthDecorPanel() {
   return (
@@ -77,6 +78,7 @@ export function AuthDecorPanel() {
           </div>
 
           <div className="max-w-md">
+            <Logo className="h-12 mb-5" />
             <h2 className="text-3xl font-semibold text-fg tracking-tight text-balance">
               Финансовый мозг для&nbsp;селлеров Ozon
             </h2>

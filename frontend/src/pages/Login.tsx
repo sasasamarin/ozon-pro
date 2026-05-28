@@ -33,7 +33,7 @@ export function Login() {
     <div className="min-h-screen bg-bg lg:grid lg:grid-cols-2">
       {/* Left: form */}
       <div className="relative flex flex-col px-6 py-8 lg:px-12 lg:py-10 min-h-screen">
-        <Logo />
+        <Logo className="h-11" />
 
         <div className="flex-1 flex items-center justify-center py-12">
           <div className="w-full max-w-sm animate-slide-up">
