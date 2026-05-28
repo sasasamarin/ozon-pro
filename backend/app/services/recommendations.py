@@ -63,6 +63,7 @@ async def _gather_buyout_inputs(
                 0,
             ).label("cancelled"),
         )
+        .select_from(Order)
         .join(OrderItem, OrderItem.order_id == Order.id)
         .where(
             Order.ozon_account_id == ozon_account_id,
@@ -105,6 +106,7 @@ async def _gather_velocity_inputs(
 
     units_row = await db.execute(
         select(func.coalesce(func.sum(OrderItem.quantity), 0))
+        .select_from(OrderItem)
         .join(Order, Order.id == OrderItem.order_id)
         .where(
             Order.ozon_account_id == ozon_account_id,
@@ -150,6 +152,7 @@ async def _in_transit_to_customer(
     """Заказы в пути к покупателю (status = delivering)."""
     row = await db.execute(
         select(func.coalesce(func.sum(OrderItem.quantity), 0))
+        .select_from(OrderItem)
         .join(Order, Order.id == OrderItem.order_id)
         .where(
             Order.ozon_account_id == ozon_account_id,
@@ -171,6 +174,7 @@ async def _revenue_in_window(
     cutoff = datetime.now(UTC) - timedelta(days=window_days)
     row = await db.execute(
         select(func.coalesce(func.sum(OrderItem.total_price), 0))
+        .select_from(OrderItem)
         .join(Order, Order.id == OrderItem.order_id)
         .where(
             Order.ozon_account_id == ozon_account_id,
@@ -193,6 +197,7 @@ async def _commission_in_window(
     cutoff = datetime.now(UTC) - timedelta(days=window_days)
     row = await db.execute(
         select(func.coalesce(func.sum(OrderItem.commission), 0))
+        .select_from(OrderItem)
         .join(Order, Order.id == OrderItem.order_id)
         .where(
             Order.ozon_account_id == ozon_account_id,
@@ -372,6 +377,7 @@ async def compute_list_recommendations(
             # cogs = (units_sold_30d) × cost_price
             units_row = await db.execute(
                 select(func.coalesce(func.sum(OrderItem.quantity), 0))
+                .select_from(OrderItem)
                 .join(Order, Order.id == OrderItem.order_id)
                 .where(
                     Order.ozon_account_id == p.ozon_account_id,

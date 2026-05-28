@@ -185,6 +185,7 @@ async def _units_in_window(db, account_id, product_id, window_days: int) -> int:
     cutoff = datetime.now(UTC) - timedelta(days=window_days)
     row = await db.execute(
         select(func.coalesce(func.sum(OrderItem.quantity), 0))
+        .select_from(OrderItem)
         .join(Order, Order.id == OrderItem.order_id)
         .where(
             Order.ozon_account_id == account_id,
