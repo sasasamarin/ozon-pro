@@ -2,16 +2,23 @@
 Синхронизация финансовых транзакций Ozon.
 
 Endpoint: POST /v3/finance/transaction/list
-Идемпотентно: каждая транзакция уникальна по (time, ozon_transaction_id).
+Ozon ограничивает диапазон одним месяцем на запрос → разбиваем по 7-дневным
+чанкам отдельными Celery-тасками.
 
-NB: user_id и поля разнесённых удержаний (delivery_to_customer, …, compensation)
-пока не заполняются — Phase 2 миграция сделала их nullable / с server_default=0.
-Будут заполнены в отдельной задаче после того как user-mapping станет
-устойчивым (один Company → много User'ов).
+- sync_all_transactions   — orchestrator: ищет кабинеты, строит чанки,
+                             диспатчит sync_transactions_chunk через .delay()+
+                             .get(), агрегирует результаты.
+- sync_transactions_chunk — атомарная Celery-таск на один (account, df→dt)
+                             7-дневный (или меньше) отрезок. Внутри —
+                             пагинация по странице, ON CONFLICT upsert.
+
+Идемпотентно: PK (time, ozon_transaction_id) + on_conflict_do_nothing.
+Ошибка одного чанка НЕ валит весь backfill.
 """
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -32,6 +39,13 @@ from app.workers.tasks._helpers import (
 
 
 _PAGE_SIZE = 1000
+_MAX_PAGES_TX = 5000  # >5000 страниц на 7-дневный чанк маловероятно
+_CHUNK_DAYS = 7  # размер sub-chunk'а — безопасно укладывается в Celery soft-time-limit
+
+
+# ============================================================
+# ORCHESTRATOR
+# ============================================================
 
 
 @celery_app.task(name="app.workers.tasks.sync_finance.sync_all_transactions")
@@ -40,104 +54,182 @@ def sync_all_transactions(
     date_from: str | None = None,
     account_id: str | None = None,
 ) -> dict:
-    """Транзакции Ozon. cron → days_window=3, ручной backfill → date_from."""
-    return run_celery_async(_sync_all_transactions_async, days_window, date_from, account_id)
+    """Транзакции: orchestrator → sub-tasks по 7-дневным чанкам."""
+    return run_celery_async(_orchestrate, days_window, date_from, account_id)
 
 
-async def _sync_all_transactions_async(
+async def _orchestrate(
     SessionLocal: async_sessionmaker[AsyncSession],
     days_window: int,
-    date_from: str | None = None,
-    account_id: str | None = None,
+    date_from_iso: str | None,
+    account_id: str | None,
 ) -> dict:
     async with SessionLocal() as db:
         if account_id:
             acc = (
                 await db.execute(
-                    select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None))
+                    select(OzonAccount).where(
+                        OzonAccount.id == uuid.UUID(account_id),
+                        OzonAccount.deleted_at.is_(None),
+                    )
                 )
             ).scalar_one_or_none()
             accounts = [acc] if acc else []
         else:
             accounts = await get_active_accounts(db)
 
-    log.info("sync_transactions_started", accounts_count=len(accounts), days=days_window, date_from=date_from)
-    results = await asyncio.gather(
-        *[_sync_transactions_for_account(SessionLocal, acc.id, days_window, date_from) for acc in accounts],
-        return_exceptions=True,
-    )
-    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
-    return {"total": len(accounts), "success": success, "failed": len(results) - success}
+    date_to = datetime.now(UTC)
+    if date_from_iso:
+        try:
+            date_from = datetime.fromisoformat(date_from_iso.replace("Z", "+00:00"))
+            if date_from.tzinfo is None:
+                date_from = date_from.replace(tzinfo=UTC)
+        except ValueError:
+            return {"error": f"invalid date_from={date_from_iso}"}
+    else:
+        date_from = date_to - timedelta(days=days_window)
+
+    summary = {
+        "total_chunks": 0,
+        "success": 0,
+        "failed": 0,
+        "skipped": 0,
+        "records": 0,
+        "by_account": {},
+    }
+
+    for acc in accounts:
+        chunks = _build_chunks(date_from, date_to, days=_CHUNK_DAYS)
+        log.info(
+            "transactions_backfill_start",
+            account=str(acc.id),
+            account_name=acc.name,
+            date_from=date_from.isoformat(),
+            date_to=date_to.isoformat(),
+            chunks=len(chunks),
+        )
+
+        per_acc = {"chunks": len(chunks), "success": 0, "failed": 0, "skipped": 0, "records": 0}
+
+        for (chunk_from, chunk_to) in chunks:
+            df_iso = chunk_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            dt_iso = chunk_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            ar = sync_transactions_chunk.delay(str(acc.id), df_iso, dt_iso)
+            try:
+                # Каждый чанк не должен идти дольше 5 мин (мы делим по 7 дней)
+                result = ar.get(timeout=600, disable_sync_subtasks=False)
+            except Exception as e:
+                log.error(
+                    "tx_chunk_dispatch_failed",
+                    account=str(acc.id),
+                    date_from=df_iso,
+                    date_to=dt_iso,
+                    error=str(e),
+                )
+                summary["total_chunks"] += 1
+                summary["failed"] += 1
+                per_acc["failed"] += 1
+                continue
+
+            summary["total_chunks"] += 1
+            status = result.get("status") if isinstance(result, dict) else "failed"
+            if status == "success":
+                summary["success"] += 1
+                per_acc["success"] += 1
+                records = int(result.get("records", 0))
+                summary["records"] += records
+                per_acc["records"] += records
+            elif status == "skipped":
+                summary["skipped"] += 1
+                per_acc["skipped"] += 1
+            else:
+                summary["failed"] += 1
+                per_acc["failed"] += 1
+
+        summary["by_account"][str(acc.id)] = per_acc
+        log.info(
+            "transactions_backfill_done",
+            account=str(acc.id),
+            **per_acc,
+        )
+
+    log.info("transactions_backfill_summary", **{k: v for k, v in summary.items() if k != "by_account"})
+    return summary
 
 
-_MAX_PAGES_TX = 5000  # >5000 страниц транзакций маловероятно даже за 5 лет
+def _build_chunks(date_from: datetime, date_to: datetime, days: int) -> list[tuple[datetime, datetime]]:
+    """[date_from, date_to) → список интервалов по N дней."""
+    chunks: list[tuple[datetime, datetime]] = []
+    cur = date_from
+    while cur < date_to:
+        end = min(cur + timedelta(days=days), date_to)
+        chunks.append((cur, end))
+        cur = end
+    return chunks
 
 
-async def _sync_transactions_for_account(
+# ============================================================
+# SUB-TASK: один чанк
+# ============================================================
+
+
+@celery_app.task(name="app.workers.tasks.sync_finance.sync_transactions_chunk")
+def sync_transactions_chunk(account_id: str, date_from: str, date_to: str) -> dict:
+    """Один атомарный чанк транзакций. Idempotent, retryable."""
+    return run_celery_async(_sync_chunk, account_id, date_from, date_to)
+
+
+async def _sync_chunk(
     SessionLocal: async_sessionmaker[AsyncSession],
-    account_id: uuid.UUID,
-    days_window: int,
-    date_from_iso: str | None = None,
+    account_id: str,
+    df_iso: str,
+    dt_iso: str,
 ) -> dict:
+    t0 = time.monotonic()
+    cab_uuid = uuid.UUID(account_id)
+
     async with SessionLocal() as db:
         account = (
-            await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
+            await db.execute(select(OzonAccount).where(OzonAccount.id == cab_uuid))
         ).scalar_one_or_none()
         if not account:
-            return {"status": "failed", "error": "account_not_found"}
+            return {
+                "status": "failed",
+                "cabinet_id": account_id,
+                "date_from": df_iso,
+                "date_to": dt_iso,
+                "error": "account_not_found",
+            }
 
-        date_to = datetime.now(UTC)
-        if date_from_iso:
-            try:
-                date_from = datetime.fromisoformat(date_from_iso.replace("Z", "+00:00"))
-                if date_from.tzinfo is None:
-                    date_from = date_from.replace(tzinfo=UTC)
-            except ValueError:
-                return {"status": "failed", "error": f"invalid date_from={date_from_iso}"}
-        else:
-            date_from = date_to - timedelta(days=days_window)
-        df = date_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        dt = date_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
+        records_total = 0
         try:
-            async with track_sync_log(db, account.id, "sync_transactions") as stats:
+            async with track_sync_log(db, account.id, "sync_transactions_chunk") as stats:
                 client_id = decrypt_secret(account.client_id_encrypted)
                 api_key = decrypt_secret(account.api_key_encrypted)
 
-                # Ozon ограничивает /v3/finance/transaction/list одним месяцем за запрос.
-                # Бьём окно (date_from → date_to) на месячные слайсы.
-                chunks = _month_chunks(date_from, date_to)
-                log.info("transactions_chunks", account=str(account_id), chunks=len(chunks))
-
                 async with OzonSellerClient(client_id, api_key) as client:
-                    for chunk_idx, (cdf, cdt) in enumerate(chunks, 1):
-                        cdf_s = cdf.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                        cdt_s = cdt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                        page = 1
-                        while True:
-                            if page > _MAX_PAGES_TX:
-                                log.error("pagination_runaway", method="transactions", account=str(account_id), page=page)
-                                break
-                            response = await client.get_transactions(
-                                date_from=cdf_s,
-                                date_to=cdt_s,
-                                page=page,
-                                page_size=_PAGE_SIZE,
+                    page = 1
+                    while True:
+                        if page > _MAX_PAGES_TX:
+                            log.error(
+                                "tx_chunk_pagination_runaway",
+                                cabinet=account_id, df=df_iso, dt=dt_iso, page=page,
                             )
-                            result = response.get("result") or {}
-                            operations = result.get("operations") or []
-                            page_count = result.get("page_count", 1)
-                            log.info(
-                                "transactions_page",
-                                account=str(account_id),
-                                chunk=chunk_idx,
-                                of_chunks=len(chunks),
-                                page=page,
-                                of=page_count,
-                                items=len(operations),
-                            )
-                            if not operations:
-                                break
+                            break
+                        response = await client.get_transactions(
+                            date_from=df_iso, date_to=dt_iso,
+                            page=page, page_size=_PAGE_SIZE,
+                        )
+                        result = response.get("result") or {}
+                        operations = result.get("operations") or []
+                        page_count = int(result.get("page_count", 1) or 1)
+                        log.info(
+                            "tx_chunk_page",
+                            cabinet=account_id, df=df_iso, dt=dt_iso,
+                            page=page, of=page_count, items=len(operations),
+                        )
+                        if not operations:
+                            break
 
                         rows = []
                         for op in operations:
@@ -151,7 +243,7 @@ async def _sync_transactions_for_account(
                             rows.append({
                                 "time": op_date,
                                 "ozon_transaction_id": tid,
-                                "ozon_account_id": account_id,
+                                "ozon_account_id": cab_uuid,
                                 "operation_type": op.get("operation_type", "unknown"),
                                 "operation_type_name": op.get("operation_type_name"),
                                 "operation_date": op_date,
@@ -172,40 +264,56 @@ async def _sync_transactions_for_account(
                             )
                             await db.execute(stmt)
                             stats.created += len(rows)
+                            records_total += len(rows)
 
-                            if page >= page_count or len(operations) < _PAGE_SIZE:
-                                break
-                            page += 1
+                        if page >= page_count or len(operations) < _PAGE_SIZE:
+                            break
+                        page += 1
 
+                # На success чанка — обновим last_sync_at, но НЕ статус (несколько чанков
+                # параллельно: один может упасть, другой пройти — статус управляется orchestrator'ом)
                 account.last_sync_at = datetime.now(UTC)
                 account.last_sync_error = None
                 account.status = OzonAccountStatus.ACTIVE.value
             await db.commit()
-            return {"status": "success", "rows": stats.created}
+            dur = time.monotonic() - t0
+            return {
+                "status": "success",
+                "cabinet_id": account_id,
+                "date_from": df_iso,
+                "date_to": dt_iso,
+                "records": records_total,
+                "duration_s": round(dur, 2),
+            }
         except OzonAPIError as e:
             account.status = OzonAccountStatus.ERROR.value
             account.last_sync_error = str(e)[:500]
             await db.commit()
-            return {"status": "failed", "error": str(e)}
+            log.exception(
+                "tx_chunk_failed",
+                cabinet=account_id, df=df_iso, dt=dt_iso, err=str(e),
+            )
+            return {
+                "status": "failed",
+                "cabinet_id": account_id,
+                "date_from": df_iso,
+                "date_to": dt_iso,
+                "records": records_total,
+                "duration_s": round(time.monotonic() - t0, 2),
+                "error": str(e),
+            }
         except Exception as e:  # noqa: BLE001
             await db.rollback()
-            return {"status": "failed", "error": str(e)}
-
-
-def _month_chunks(date_from: datetime, date_to: datetime) -> list[tuple[datetime, datetime]]:
-    """Разбивает интервал на месячные слайсы (Ozon ограничивает 1 месяц на запрос)."""
-    chunks: list[tuple[datetime, datetime]] = []
-    cur = date_from
-    while cur < date_to:
-        # Конец чанка — конец текущего месяца, но не дальше date_to
-        if cur.month == 12:
-            next_month = cur.replace(year=cur.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        else:
-            next_month = cur.replace(month=cur.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        chunk_end = min(next_month, date_to)
-        chunks.append((cur, chunk_end))
-        cur = chunk_end
-    return chunks
+            log.exception("tx_chunk_unexpected", cabinet=account_id, df=df_iso, dt=dt_iso)
+            return {
+                "status": "failed",
+                "cabinet_id": account_id,
+                "date_from": df_iso,
+                "date_to": dt_iso,
+                "records": records_total,
+                "duration_s": round(time.monotonic() - t0, 2),
+                "error": str(e),
+            }
 
 
 def _parse_dt(value) -> datetime | None:

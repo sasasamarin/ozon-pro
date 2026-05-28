@@ -157,6 +157,7 @@ async def _sync_reviews_for_account(SessionLocal, account_id: uuid.UUID) -> dict
             return {"status": "failed", "error": str(e)}
         except Exception as e:  # noqa: BLE001
             await db.rollback()
+            log.exception("sync_failed_unexpected", account_id=str(account_id))
             return {"status": "failed", "error": str(e)}
 
 
@@ -261,6 +262,7 @@ async def _sync_questions_for_account(SessionLocal, account_id: uuid.UUID) -> di
             return {"status": "failed", "error": str(e)}
         except Exception as e:  # noqa: BLE001
             await db.rollback()
+            log.exception("sync_failed_unexpected", account_id=str(account_id))
             return {"status": "failed", "error": str(e)}
 
 
@@ -334,6 +336,7 @@ async def _sync_chats_for_account(SessionLocal, account_id: uuid.UUID) -> dict:
             return {"status": "failed", "error": str(e)}
         except Exception as e:  # noqa: BLE001
             await db.rollback()
+            log.exception("sync_failed_unexpected", account_id=str(account_id))
             return {"status": "failed", "error": str(e)}
 
 

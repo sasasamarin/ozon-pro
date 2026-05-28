@@ -112,6 +112,7 @@ async def _sync_ad_campaigns_for_account(
             return {"status": "failed", "error": str(e)}
         except Exception as e:  # noqa: BLE001
             await db.rollback()
+            log.exception("sync_failed_unexpected", account_id=str(account_id))
             return {"status": "failed", "error": str(e)}
 
 
@@ -277,6 +278,7 @@ async def _sync_ad_statistics_for_account(
             return {"status": "failed", "error": str(e)}
         except Exception as e:  # noqa: BLE001
             await db.rollback()
+            log.exception("sync_failed_unexpected", account_id=str(account_id))
             return {"status": "failed", "error": str(e)}
 
 
