@@ -200,15 +200,16 @@ class OzonSellerClient:
         Получить цены товаров + индекс цен.
 
         Endpoint: POST /v5/product/info/prices
-        Это самая важная инфа: цены, СПП, индекс цен (выгодно/невыгодно)
+        Это самая важная инфа: цены, СПП, индекс цен (выгодно/невыгодно).
+
+        Ozon ВСЕГДА требует поле filter в payload (даже пустое):
+        без него 400 «Request validation error: invalid ...Filter: value is required».
         """
         payload: dict[str, Any] = {
             "limit": limit,
             "cursor": cursor,
+            "filter": filter_params or {},
         }
-        if filter_params:
-            payload["filter"] = filter_params
-
         return await self._request(
             "POST", "/v5/product/info/prices", json=payload
         )
@@ -227,14 +228,13 @@ class OzonSellerClient:
         Получить остатки товаров.
 
         Endpoint: POST /v4/product/info/stocks
+        Ozon ВСЕГДА требует поле filter в payload (даже пустое).
         """
         payload: dict[str, Any] = {
             "limit": limit,
             "cursor": cursor,
+            "filter": filter_params or {},
         }
-        if filter_params:
-            payload["filter"] = filter_params
-
         return await self._request(
             "POST", "/v4/product/info/stocks", json=payload
         )
