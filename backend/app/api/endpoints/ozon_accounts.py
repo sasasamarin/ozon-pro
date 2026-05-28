@@ -10,15 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.logging import log
-from app.core.security import decrypt_secret, encrypt_secret
+from app.core.security import decrypt_secret, encrypt_secret  # noqa: F401
 from app.db.session import get_db
-from app.models import OzonAccount, OzonAccountStatus, User
+from app.models import OzonAccount, OzonAccountStatus, OzonPremiumTier, User
 from app.services.ozon_client import OzonSellerClient
 
 router = APIRouter()
 
 
 # === Pydantic схемы ===
+
+VALID_PREMIUM_TIERS = {t.value for t in OzonPremiumTier}
+
 
 class OzonAccountCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
@@ -27,7 +30,9 @@ class OzonAccountCreate(BaseModel):
     api_key: str = Field(min_length=1, max_length=255)
     # Performance API опционально
     perf_client_id: str | None = None
-    perf_secret: str | None = None
+    perf_client_secret: str | None = None
+    # Тариф селлера — управляет тем, какие API доступны
+    premium_tier: str = OzonPremiumTier.FREE.value
 
 
 class OzonAccountResponse(BaseModel):
@@ -36,12 +41,27 @@ class OzonAccountResponse(BaseModel):
     description: str | None
     status: str
     is_active: bool
+    premium_tier: str
     last_sync_at: str | None
     last_sync_error: str | None
     has_performance_api: bool
 
     class Config:
         from_attributes = True
+
+
+def _account_to_response(account: OzonAccount) -> OzonAccountResponse:
+    return OzonAccountResponse(
+        id=str(account.id),
+        name=account.name,
+        description=account.description,
+        status=account.status,
+        is_active=account.is_active,
+        premium_tier=account.premium_tier,
+        last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
+        last_sync_error=account.last_sync_error,
+        has_performance_api=bool(account.perf_client_id_encrypted),
+    )
 
 
 # === Endpoints ===
@@ -60,19 +80,7 @@ async def list_ozon_accounts(
     )
     accounts = result.scalars().all()
 
-    return [
-        OzonAccountResponse(
-            id=str(acc.id),
-            name=acc.name,
-            description=acc.description,
-            status=acc.status,
-            is_active=acc.is_active,
-            last_sync_at=acc.last_sync_at.isoformat() if acc.last_sync_at else None,
-            last_sync_error=acc.last_sync_error,
-            has_performance_api=bool(acc.perf_client_id_encrypted),
-        )
-        for acc in accounts
-    ]
+    return [_account_to_response(acc) for acc in accounts]
 
 
 @router.post("/", response_model=OzonAccountResponse, status_code=201)
@@ -87,6 +95,12 @@ async def create_ozon_account(
     Сразу проверяем валидность API ключей через тестовый запрос.
     Сохраняем ключи ЗАШИФРОВАННЫМИ.
     """
+    if payload.premium_tier not in VALID_PREMIUM_TIERS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"premium_tier должен быть одним из {sorted(VALID_PREMIUM_TIERS)}",
+        )
+
     # Проверяем валидность ключей
     log.info("checking_ozon_credentials", company_id=str(current_user.company_id))
 
@@ -112,9 +126,10 @@ async def create_ozon_account(
         perf_client_id_encrypted=(
             encrypt_secret(payload.perf_client_id) if payload.perf_client_id else None
         ),
-        perf_secret_encrypted=(
-            encrypt_secret(payload.perf_secret) if payload.perf_secret else None
+        perf_client_secret_encrypted=(
+            encrypt_secret(payload.perf_client_secret) if payload.perf_client_secret else None
         ),
+        premium_tier=payload.premium_tier,
         status=OzonAccountStatus.ACTIVE.value,
         is_active=True,
     )
@@ -127,16 +142,7 @@ async def create_ozon_account(
         company_id=str(current_user.company_id),
     )
 
-    return OzonAccountResponse(
-        id=str(account.id),
-        name=account.name,
-        description=account.description,
-        status=account.status,
-        is_active=account.is_active,
-        last_sync_at=None,
-        last_sync_error=None,
-        has_performance_api=bool(account.perf_client_id_encrypted),
-    )
+    return _account_to_response(account)
 
 
 @router.delete("/{account_id}", status_code=204)

@@ -24,12 +24,25 @@ class OzonAccountStatus(str, Enum):
     SYNCING = "syncing"
 
 
+class OzonPremiumTier(str, Enum):
+    """Уровень подписки селлера на Ozon.
+
+    Определяет какие API-эндпоинты доступны для синхронизации.
+    Юзер выбирает уровень вручную при подключении кабинета.
+    """
+
+    FREE = "free"
+    PREMIUM = "premium"  # 5990₽/мес — API-привилегий не даёт, эквивалент FREE
+    PREMIUM_PLUS = "premium_plus"  # 24990₽ — конкуренты (8), расширенная аналитика, реализация
+    PREMIUM_PRO = "premium_pro"  # 24990₽ + 2.5% — всё выше + отзывы, поиск, конкуренты без лимита
+
+
 class OzonAccount(BaseModel, SoftDeleteMixin):
     """
     Магазин Озона.
 
     У одной Company может быть несколько магазинов (у тебя их 4).
-    Каждый магазин имеет свои API ключи (Seller + Performance).
+    Каждый магазин имеет свои API ключи (Seller + Performance) и свой premium-тариф.
     """
 
     __tablename__ = "ozon_accounts"
@@ -53,7 +66,20 @@ class OzonAccount(BaseModel, SoftDeleteMixin):
 
     # Performance API (для рекламы) — опционально
     perf_client_id_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    perf_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    perf_client_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Кэш access_token: получается из POST /api/client/token, живёт ~30 минут
+    perf_access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    perf_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Тариф селлера на Ozon — управляет тем, какие API-методы доступны
+    premium_tier: Mapped[str] = mapped_column(
+        String(20),
+        default=OzonPremiumTier.FREE.value,
+        server_default=OzonPremiumTier.FREE.value,
+        nullable=False,
+    )
 
     # Статус
     status: Mapped[str] = mapped_column(

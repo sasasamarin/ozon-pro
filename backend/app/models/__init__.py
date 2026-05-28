@@ -3,8 +3,20 @@
 Используется Alembic и приложением для регистрации всех таблиц.
 """
 from app.db.base import Base  # noqa: F401
+from app.models.ad import (  # noqa: F401
+    AdCampaign,
+    AdCampaignState,
+    AdCampaignType,
+    AdStatistics,
+)
 from app.models.company import Company, Role, RoleName, User  # noqa: F401
 from app.models.marker import AuditLog, Marker, MarkerType  # noqa: F401
+from app.models.marketplace import (  # noqa: F401
+    Question,
+    RealizationLine,
+    Return,
+    Review,
+)
 from app.models.order import (  # noqa: F401
     AnalyticsDaily,
     Order,
@@ -16,6 +28,7 @@ from app.models.order import (  # noqa: F401
 from app.models.ozon_account import (  # noqa: F401
     OzonAccount,
     OzonAccountStatus,
+    OzonPremiumTier,
     SyncLog,
     SyncStatus,
 )
@@ -30,6 +43,7 @@ __all__ = [
     "RoleName",
     "OzonAccount",
     "OzonAccountStatus",
+    "OzonPremiumTier",
     "SyncLog",
     "SyncStatus",
     "Product",
@@ -44,4 +58,12 @@ __all__ = [
     "Marker",
     "MarkerType",
     "AuditLog",
+    "Return",
+    "RealizationLine",
+    "Review",
+    "Question",
+    "AdCampaign",
+    "AdCampaignType",
+    "AdCampaignState",
+    "AdStatistics",
 ]
