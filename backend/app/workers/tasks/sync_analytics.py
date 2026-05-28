@@ -350,7 +350,50 @@ async def _fetch_analytics_chunk(
         offset += 1000
         await asyncio.sleep(_PAGE_SLEEP_S)  # rate-limit budget
 
-    return rows
+    # Дедуп: у extended_sku_map несколько вариантов SKU могут указывать на
+    # один product → две entries для одного (date, product_id). Это валит
+    # ON CONFLICT DO UPDATE (CardinalityViolationError). Суммируем метрики.
+    return _aggregate_duplicates(rows)
+
+
+def _aggregate_duplicates(rows: list[dict]) -> list[dict]:
+    """Группируем по (date, product_id), суммируем количественные метрики,
+    усредняем конверсионные (Ozon в редких случаях даёт разные SKU-варианты
+    одного товара на одну дату — типично это одинаковые продажи)."""
+    by_key: dict[tuple, dict] = {}
+    sumable = (
+        "ordered_units", "revenue",
+        "hits_view_search", "hits_view_pdp",
+        "hits_tocart_search", "hits_tocart_pdp",
+        "session_view_search", "session_view_pdp",
+        "delivered_units", "returns", "cancellations",
+    )
+    avgable = ("conv_tocart_search", "conv_tocart_pdp")
+    for r in rows:
+        key = (r["date"], r["product_id"])
+        existing = by_key.get(key)
+        if existing is None:
+            by_key[key] = dict(r)
+            by_key[key]["_count"] = 1
+            continue
+        for col in sumable:
+            existing[col] = (existing.get(col) or 0) + (r.get(col) or 0)
+        for col in avgable:
+            ev = existing.get(col) or 0
+            rv = r.get(col) or 0
+            existing[col] = (ev * existing["_count"] + rv) / (existing["_count"] + 1)
+        # position_category — берём минимум (лучшая позиция)
+        if r.get("position_category") is not None:
+            pc_existing = existing.get("position_category")
+            if pc_existing is None or r["position_category"] < pc_existing:
+                existing["position_category"] = r["position_category"]
+        existing["_count"] += 1
+
+    out: list[dict] = []
+    for v in by_key.values():
+        v.pop("_count", None)
+        out.append(v)
+    return out
 
 
 # ============================================================
