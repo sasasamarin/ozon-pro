@@ -19,6 +19,34 @@ from app.models import OzonAccount, Product, Stock, User
 router = APIRouter()
 
 
+def _extract_image_url(raw: dict | None) -> str | None:
+    """Из raw_data Ozon /v3/product/info/list достаём URL первой картинки.
+
+    Ozon шлёт primary_image как массив `["url"]`, иногда как строку.
+    images — массив строк-URL. Берём первый валидный URL, иначе None.
+    """
+    if not isinstance(raw, dict):
+        return None
+    primary = raw.get("primary_image")
+    if isinstance(primary, list):
+        for item in primary:
+            if isinstance(item, str) and item:
+                return item
+    elif isinstance(primary, str) and primary:
+        return primary
+    images = raw.get("images") or []
+    if isinstance(images, list):
+        for item in images:
+            if isinstance(item, str) and item:
+                return item
+            # Иногда images = [{"file_name": "url"}, ...]
+            if isinstance(item, dict):
+                v = item.get("file_name") or item.get("url")
+                if isinstance(v, str) and v:
+                    return v
+    return None
+
+
 class ProductStockRow(BaseModel):
     warehouse_type: str
     warehouse_name: str | None
@@ -119,13 +147,7 @@ async def list_products(
     rows_all = result.all()
     for row in rows_all:
         product = row.Product
-        raw = product.raw_data or {}
-        image_url = (
-            raw.get("primary_image")
-            or (raw.get("images") or [None])[0]
-            if isinstance(raw, dict)
-            else None
-        )
+        image_url = _extract_image_url(product.raw_data)
         items.append(
             ProductItem(
                 id=str(product.id),
