@@ -47,7 +47,14 @@ _METRICS = [
 ]
 
 
-@celery_app.task(name="app.workers.tasks.sync_analytics.sync_all_analytics")
+@celery_app.task(
+    name="app.workers.tasks.sync_analytics.sync_all_analytics",
+    # Аналитика на длинной истории: /v1/analytics/data Ozon throttle'ит даже
+    # на 90-дневных чанках, плюс много (SKU × day) строк. Per-task override
+    # лимита (только для этой таски, остальные остаются на дефолте 9 мин).
+    soft_time_limit=1800,
+    time_limit=2100,
+)
 def sync_all_analytics(
     days_window: int = 3,
     date_from: str | None = None,
