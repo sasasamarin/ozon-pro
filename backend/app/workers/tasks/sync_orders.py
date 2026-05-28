@@ -29,6 +29,7 @@ from app.workers.tasks._helpers import (
 
 _FBO_PAGE_SIZE = 1000
 _FBS_PAGE_SIZE = 1000
+_DATE_CHUNK_DAYS = 30  # Ozon enforces MAX_OFFSET (~20 000) — стартуем offset=0 на каждом 30-дневном окне
 
 
 @celery_app.task(name="app.workers.tasks.sync_orders.sync_all_orders")
@@ -89,8 +90,23 @@ async def _sync_orders_for_account(
                 return {"status": "failed", "error": f"invalid date_from={date_from_iso}"}
         else:
             date_from = date_to - timedelta(days=days_window)
-        df = date_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        dt = date_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        # Бьём весь интервал на 30-дневные окна — внутри окна offset стартует
+        # с 0, что обходит MAX_OFFSET_EXCEEDED у Ozon (порог ~20 000).
+        date_chunks: list[tuple[datetime, datetime]] = []
+        cur = date_from
+        while cur < date_to:
+            end = min(cur + timedelta(days=_DATE_CHUNK_DAYS), date_to)
+            date_chunks.append((cur, end))
+            cur = end
+
+        log.info(
+            "orders_chunks",
+            account=str(account_id),
+            date_from=date_from.isoformat(),
+            date_to=date_to.isoformat(),
+            chunks=len(date_chunks),
+        )
 
         try:
             async with track_sync_log(db, account.id, "sync_orders") as stats:
@@ -99,26 +115,35 @@ async def _sync_orders_for_account(
                 api_key = decrypt_secret(account.api_key_encrypted)
 
                 async with OzonSellerClient(client_id, api_key) as client:
-                    await _ingest_postings(
-                        db,
-                        account_id=account.id,
-                        order_type=OrderType.FBO.value,
-                        fetch=lambda offset: client.get_fbo_orders(
-                            date_from=df, date_to=dt, limit=_FBO_PAGE_SIZE, offset=offset
-                        ),
-                        sku_to_id=sku_to_id,
-                        stats=stats,
-                    )
-                    await _ingest_postings(
-                        db,
-                        account_id=account.id,
-                        order_type=OrderType.FBS.value,
-                        fetch=lambda offset: client.get_fbs_orders(
-                            date_from=df, date_to=dt, limit=_FBS_PAGE_SIZE, offset=offset
-                        ),
-                        sku_to_id=sku_to_id,
-                        stats=stats,
-                    )
+                    for chunk_idx, (chunk_from, chunk_to) in enumerate(date_chunks, 1):
+                        df = chunk_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                        dt = chunk_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                        log.info(
+                            "orders_chunk_start",
+                            account=str(account_id),
+                            chunk=chunk_idx, of=len(date_chunks),
+                            df=df, dt=dt,
+                        )
+                        await _ingest_postings(
+                            db,
+                            account_id=account.id,
+                            order_type=OrderType.FBO.value,
+                            fetch=lambda offset, _df=df, _dt=dt: client.get_fbo_orders(
+                                date_from=_df, date_to=_dt, limit=_FBO_PAGE_SIZE, offset=offset
+                            ),
+                            sku_to_id=sku_to_id,
+                            stats=stats,
+                        )
+                        await _ingest_postings(
+                            db,
+                            account_id=account.id,
+                            order_type=OrderType.FBS.value,
+                            fetch=lambda offset, _df=df, _dt=dt: client.get_fbs_orders(
+                                date_from=_df, date_to=_dt, limit=_FBS_PAGE_SIZE, offset=offset
+                            ),
+                            sku_to_id=sku_to_id,
+                            stats=stats,
+                        )
 
                 account.last_sync_at = datetime.now(UTC)
                 account.last_sync_error = None

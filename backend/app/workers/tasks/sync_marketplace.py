@@ -217,53 +217,68 @@ async def _sync_cancellations_for_account(
 
         date_to = datetime.now(UTC)
         date_from = _parse_dt(date_from_iso) or (date_to - timedelta(days=days_window))
-        df = date_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-        dt = date_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        # Бьём интервал на 30-дневные окна, чтобы избежать MAX_OFFSET_EXCEEDED.
+        date_chunks: list[tuple[datetime, datetime]] = []
+        cur = date_from
+        while cur < date_to:
+            end = min(cur + timedelta(days=30), date_to)
+            date_chunks.append((cur, end))
+            cur = end
+
+        log.info("cancellations_chunks", account=str(account_id), chunks=len(date_chunks))
 
         try:
             async with track_sync_log(db, account.id, "sync_cancellations") as stats:
                 client_id = decrypt_secret(account.client_id_encrypted)
                 api_key = decrypt_secret(account.api_key_encrypted)
                 async with OzonSellerClient(client_id, api_key) as client:
-                    # FBO + FBS, оба отдают cancellation_reason если status=cancelled
-                    for label, fetch in (
-                        (OrderType.FBO.value, lambda offset: client.get_fbo_orders(
-                            date_from=df, date_to=dt, limit=_PAGE_SIZE_POSTINGS, offset=offset
-                        )),
-                        (OrderType.FBS.value, lambda offset: client.get_fbs_orders(
-                            date_from=df, date_to=dt, limit=_PAGE_SIZE_POSTINGS, offset=offset
-                        )),
-                    ):
-                        offset = 0
-                        page = 0
-                        while True:
-                            page += 1
-                            if page > _MAX_PAGES:
-                                log.error("pagination_runaway", method="cancellations", account=str(account_id))
-                                break
-                            response = await fetch(offset)
-                            result = response.get("result")
-                            if isinstance(result, dict):
-                                postings = result.get("postings") or []
-                                has_next = bool(result.get("has_next", False))
-                            elif isinstance(result, list):
-                                postings = result
-                                has_next = bool(response.get("has_next", len(postings) >= _PAGE_SIZE_POSTINGS))
-                            else:
-                                postings, has_next = [], False
-                            log.info("cancellations_page", account=str(account_id), type=label, page=page, items=len(postings))
-                            if not postings:
-                                break
-                            for p in postings:
-                                if not isinstance(p, dict):
-                                    continue
-                                if str(p.get("status", "")).lower() != "cancelled":
-                                    continue
-                                await _upsert_cancellation(db, account_id=account.id, raw=p, order_type=label)
-                                stats.processed += 1
-                            if not has_next:
-                                break
-                            offset += len(postings)
+                    for chunk_idx, (chunk_from, chunk_to) in enumerate(date_chunks, 1):
+                        df = chunk_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                        dt = chunk_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                        for label, fetch in (
+                            (OrderType.FBO.value, lambda offset, _df=df, _dt=dt: client.get_fbo_orders(
+                                date_from=_df, date_to=_dt, limit=_PAGE_SIZE_POSTINGS, offset=offset
+                            )),
+                            (OrderType.FBS.value, lambda offset, _df=df, _dt=dt: client.get_fbs_orders(
+                                date_from=_df, date_to=_dt, limit=_PAGE_SIZE_POSTINGS, offset=offset
+                            )),
+                        ):
+                            offset = 0
+                            page = 0
+                            while True:
+                                page += 1
+                                if page > _MAX_PAGES:
+                                    log.error("pagination_runaway", method="cancellations", account=str(account_id))
+                                    break
+                                response = await fetch(offset)
+                                result = response.get("result")
+                                if isinstance(result, dict):
+                                    postings = result.get("postings") or []
+                                    has_next = bool(result.get("has_next", False))
+                                elif isinstance(result, list):
+                                    postings = result
+                                    has_next = bool(response.get("has_next", len(postings) >= _PAGE_SIZE_POSTINGS))
+                                else:
+                                    postings, has_next = [], False
+                                log.info(
+                                    "cancellations_page",
+                                    account=str(account_id), type=label,
+                                    chunk=chunk_idx, of=len(date_chunks),
+                                    page=page, items=len(postings),
+                                )
+                                if not postings:
+                                    break
+                                for p in postings:
+                                    if not isinstance(p, dict):
+                                        continue
+                                    if str(p.get("status", "")).lower() != "cancelled":
+                                        continue
+                                    await _upsert_cancellation(db, account_id=account.id, raw=p, order_type=label)
+                                    stats.processed += 1
+                                if not has_next:
+                                    break
+                                offset += len(postings)
 
                 account.last_sync_at = datetime.now(UTC)
                 account.last_sync_error = None

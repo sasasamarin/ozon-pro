@@ -108,6 +108,18 @@ async def _sync_analytics_for_account(
         else:
             date_from = date_to - timedelta(days=days_window)
 
+        # Ozon: «cannot get more than one year» → бьём по 365-дневным окнам.
+        # Берём с запасом 350 дней.
+        from datetime import timedelta as _td
+        year_chunks: list[tuple[date_cls, date_cls]] = []
+        cur = date_from
+        while cur < date_to:
+            end = min(cur + _td(days=350), date_to)
+            year_chunks.append((cur, end))
+            cur = end
+
+        log.info("analytics_chunks", account=str(account_id), chunks=len(year_chunks))
+
         try:
             async with track_sync_log(db, account.id, "sync_analytics") as stats:
                 sku_to_id = await load_sku_map(db, account.id)
@@ -117,26 +129,32 @@ async def _sync_analytics_for_account(
                 rows: list[dict] = []
 
                 async with OzonSellerClient(client_id, api_key) as client:
-                    offset = 0
-                    page = 0
-                    while True:
-                        page += 1
-                        if page > _MAX_PAGES_ANALYTICS:
-                            log.error("pagination_runaway", method="analytics", account=str(account_id), page=page)
-                            break
-                        response = await client.get_analytics(
-                            date_from=date_from.isoformat(),
-                            date_to=date_to.isoformat(),
-                            dimension=["sku", "day"],
-                            metrics=_METRICS,
-                            limit=1000,
-                            offset=offset,
-                        )
-                        result = response.get("result") or {}
-                        data = result.get("data") or []
-                        log.info("analytics_page", account=str(account_id), page=page, items=len(data))
-                        if not data:
-                            break
+                    for chunk_idx, (chunk_from, chunk_to) in enumerate(year_chunks, 1):
+                        offset = 0
+                        page = 0
+                        while True:
+                            page += 1
+                            if page > _MAX_PAGES_ANALYTICS:
+                                log.error("pagination_runaway", method="analytics", account=str(account_id), page=page)
+                                break
+                            response = await client.get_analytics(
+                                date_from=chunk_from.isoformat(),
+                                date_to=chunk_to.isoformat(),
+                                dimension=["sku", "day"],
+                                metrics=_METRICS,
+                                limit=1000,
+                                offset=offset,
+                            )
+                            result = response.get("result") or {}
+                            data = result.get("data") or []
+                            log.info(
+                                "analytics_page",
+                                account=str(account_id),
+                                chunk=chunk_idx, of=len(year_chunks),
+                                page=page, items=len(data),
+                            )
+                            if not data:
+                                break
 
                         for entry in data:
                             dims = entry.get("dimensions") or []
@@ -165,10 +183,10 @@ async def _sync_analytics_for_account(
                             })
                             stats.processed += 1
 
-                        # Pagination
-                        if len(data) < 1000:
-                            break
-                        offset += 1000
+                            # Pagination внутри year-chunk'а
+                            if len(data) < 1000:
+                                break
+                            offset += 1000
 
                 if rows:
                     stmt = pg_insert(AnalyticsDaily).values(rows)
