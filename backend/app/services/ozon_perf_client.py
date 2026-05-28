@@ -12,13 +12,14 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncio
+
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
 )
 
 from app.core.config import settings
@@ -29,6 +30,9 @@ from app.services.ozon_client import (
     OzonAPIError,
     OzonAuthError,
     OzonRateLimitError,
+    TokenBucket,
+    _parse_retry_after,
+    _rate_limit_wait,
 )
 
 # Safety margin — refresh token этот промежуток времени до фактической истечения
@@ -52,18 +56,32 @@ class OzonPerformanceClient:
     в account (flush, не commit — это ответственность вызывающего).
     """
 
+    # Performance API лимиты строже, чем Seller — берём 40 RPS с burst 10.
+    DEFAULT_RATE = 40.0
+    DEFAULT_BURST = 10
+    DEFAULT_CONCURRENCY = 4
+
     def __init__(
         self,
         account: OzonAccount,
         db: AsyncSession,
         base_url: str | None = None,
-        timeout: float = 30.0,
+        timeout: float = 60.0,
+        *,
+        rate: float | None = None,
+        burst: int | None = None,
+        concurrency: int | None = None,
     ):
         self.account = account
         self.db = db
         self.base_url = base_url or settings.OZON_PERFORMANCE_API_BASE_URL
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        self._bucket = TokenBucket(
+            rate=rate or self.DEFAULT_RATE,
+            capacity=burst or self.DEFAULT_BURST,
+        )
+        self._sema = asyncio.Semaphore(concurrency or self.DEFAULT_CONCURRENCY)
 
     async def __aenter__(self) -> OzonPerformanceClient:
         self._client = httpx.AsyncClient(
@@ -156,8 +174,8 @@ class OzonPerformanceClient:
     # ------------------------------------------------------------
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(5),
+        wait=_rate_limit_wait,
         retry=retry_if_exception_type((httpx.NetworkError, OzonRateLimitError)),
         reraise=True,
     )
@@ -171,49 +189,59 @@ class OzonPerformanceClient:
     ) -> dict:
         assert self._client is not None, "use as async context manager"
 
-        token = await self._ensure_token()
-        headers = {"Authorization": f"Bearer {token}"}
+        async with self._sema:
+            await self._bucket.acquire()
 
-        log.info(
-            "ozon_perf_request",
-            method=method,
-            endpoint=endpoint,
-            account_id=str(self.account.id),
-        )
-
-        async def _do_request(_token: str) -> httpx.Response:
-            return await self._client.request(  # type: ignore[union-attr]
-                method=method,
-                url=endpoint,
-                json=json,
-                params=params,
-                headers={"Authorization": f"Bearer {_token}"},
-            )
-
-        response = await _do_request(token)
-
-        # Одна попытка обновить токен при 401: возможно протух с того момента как мы его получили
-        if response.status_code == 401:
-            log.warning(
-                "ozon_perf_token_invalid", account_id=str(self.account.id)
-            )
-            self.account.perf_access_token_encrypted = None
-            self.account.perf_token_expires_at = None
-            await self.db.flush()
             token = await self._ensure_token()
+            headers = {"Authorization": f"Bearer {token}"}
+
+            log.info(
+                "ozon_perf_request",
+                method=method,
+                endpoint=endpoint,
+                account_id=str(self.account.id),
+            )
+
+            async def _do_request(_token: str) -> httpx.Response:
+                return await self._client.request(  # type: ignore[union-attr]
+                    method=method,
+                    url=endpoint,
+                    json=json,
+                    params=params,
+                    headers={"Authorization": f"Bearer {_token}"},
+                )
+
             response = await _do_request(token)
 
-        if response.status_code == 429:
-            raise OzonRateLimitError("Performance API: превышен лимит", status_code=429)
+            # 401 — токен мог просто истечь между ensure_token и запросом. Один retry.
+            if response.status_code == 401:
+                log.warning("ozon_perf_token_invalid", account_id=str(self.account.id))
+                self.account.perf_access_token_encrypted = None
+                self.account.perf_token_expires_at = None
+                await self.db.flush()
+                token = await self._ensure_token()
+                response = await _do_request(token)
 
-        if response.status_code >= 400:
-            raise OzonAPIError(
-                f"Ozon Performance {response.status_code}: {response.text[:300]}",
-                status_code=response.status_code,
-                response_data=response.json() if response.content else {},
-            )
+            if response.status_code == 429:
+                ra = _parse_retry_after(response.headers.get("Retry-After"))
+                log.warning(
+                    "ozon_perf_rate_limited",
+                    endpoint=endpoint,
+                    retry_after=ra,
+                )
+                raise OzonRateLimitError(
+                    f"Performance API 429, Retry-After={ra}",
+                    retry_after=ra,
+                )
 
-        return response.json()
+            if response.status_code >= 400:
+                raise OzonAPIError(
+                    f"Ozon Performance {response.status_code}: {response.text[:300]}",
+                    status_code=response.status_code,
+                    response_data=response.json() if response.content else {},
+                )
+
+            return response.json()
 
     # ------------------------------------------------------------
     # Эндпоинты

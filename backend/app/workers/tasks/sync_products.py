@@ -54,21 +54,23 @@ def _clear_sync_error(account: OzonAccount) -> None:
 
 
 @celery_app.task(bind=True, name="app.workers.tasks.sync_products.sync_all_products")
-def sync_all_products(self) -> dict:
-    """Запустить синхронизацию товаров по всем активным магазинам."""
-    return run_celery_async(_sync_all_products_async)
+def sync_all_products(self, account_id: str | None = None) -> dict:
+    """Синхронизация товаров. account_id='<uuid>' → один кабинет (Phase A)."""
+    return run_celery_async(_sync_all_products_async, account_id)
 
 
 async def _sync_all_products_async(
     SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
-        result = await db.execute(
-            select(OzonAccount).where(
-                OzonAccount.is_active.is_(True),
-                OzonAccount.deleted_at.is_(None),
-            )
+        q = select(OzonAccount).where(
+            OzonAccount.is_active.is_(True),
+            OzonAccount.deleted_at.is_(None),
         )
+        if account_id:
+            q = q.where(OzonAccount.id == uuid.UUID(account_id))
+        result = await db.execute(q)
         accounts = list(result.scalars().all())
 
     log.info("sync_products_started", accounts_count=len(accounts))
@@ -218,15 +220,24 @@ async def _sync_products_for_account(
 
 
 @celery_app.task(name="app.workers.tasks.sync_products.sync_all_stocks")
-def sync_all_stocks() -> dict:
-    return run_celery_async(_sync_all_stocks_async)
+def sync_all_stocks(account_id: str | None = None) -> dict:
+    return run_celery_async(_sync_all_stocks_async, account_id)
 
 
 async def _sync_all_stocks_async(
     SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
-        accounts = await get_active_accounts(db)
+        if account_id:
+            acc = (
+                await db.execute(
+                    select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None))
+                )
+            ).scalar_one_or_none()
+            accounts = [acc] if acc else []
+        else:
+            accounts = await get_active_accounts(db)
 
     log.info("sync_stocks_started", accounts_count=len(accounts))
     results = await asyncio.gather(
@@ -328,15 +339,24 @@ def _stock_row(
 
 
 @celery_app.task(name="app.workers.tasks.sync_products.sync_all_prices")
-def sync_all_prices() -> dict:
-    return run_celery_async(_sync_all_prices_async)
+def sync_all_prices(account_id: str | None = None) -> dict:
+    return run_celery_async(_sync_all_prices_async, account_id)
 
 
 async def _sync_all_prices_async(
     SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
-        accounts = await get_active_accounts(db)
+        if account_id:
+            acc = (
+                await db.execute(
+                    select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None))
+                )
+            ).scalar_one_or_none()
+            accounts = [acc] if acc else []
+        else:
+            accounts = await get_active_accounts(db)
 
     log.info("sync_prices_started", accounts_count=len(accounts))
     results = await asyncio.gather(

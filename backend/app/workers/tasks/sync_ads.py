@@ -45,16 +45,25 @@ from app.workers.tasks._helpers import (
 
 
 @celery_app.task(name="app.workers.tasks.sync_ads.sync_all_ad_campaigns")
-def sync_all_ad_campaigns() -> dict:
+def sync_all_ad_campaigns(account_id: str | None = None) -> dict:
     """Список рекламных кампаний по всем активным магазинам с подключённым PA."""
-    return run_celery_async(_sync_all_ad_campaigns_async)
+    return run_celery_async(_sync_all_ad_campaigns_async, account_id)
 
 
 async def _sync_all_ad_campaigns_async(
     SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
-        accounts = await get_active_accounts(db)
+        if account_id:
+            acc = (
+                await db.execute(
+                    select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None))
+                )
+            ).scalar_one_or_none()
+            accounts = [acc] if acc else []
+        else:
+            accounts = await get_active_accounts(db)
 
     eligible = [a for a in accounts if a.perf_client_id_encrypted]
     log.info(
@@ -147,25 +156,41 @@ async def _upsert_campaign(
 
 
 @celery_app.task(name="app.workers.tasks.sync_ads.sync_all_ad_statistics")
-def sync_all_ad_statistics(days_window: int = 3) -> dict:
-    """Дневная статистика рекламы по всем активным магазинам с PA."""
-    return run_celery_async(_sync_all_ad_statistics_async, days_window)
+def sync_all_ad_statistics(
+    days_window: int = 3,
+    date_from: str | None = None,
+    account_id: str | None = None,
+) -> dict:
+    """Дневная статистика рекламы. cron → days_window=3, ручной backfill → date_from."""
+    return run_celery_async(_sync_all_ad_statistics_async, days_window, date_from, account_id)
 
 
 async def _sync_all_ad_statistics_async(
-    SessionLocal: async_sessionmaker[AsyncSession], days_window: int
+    SessionLocal: async_sessionmaker[AsyncSession],
+    days_window: int,
+    date_from: str | None = None,
+    account_id: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
-        accounts = await get_active_accounts(db)
+        if account_id:
+            acc = (
+                await db.execute(
+                    select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None))
+                )
+            ).scalar_one_or_none()
+            accounts = [acc] if acc else []
+        else:
+            accounts = await get_active_accounts(db)
 
     eligible = [a for a in accounts if a.perf_client_id_encrypted]
     log.info(
         "sync_ad_statistics_started",
         accounts_with_pa=len(eligible),
         days=days_window,
+        date_from=date_from,
     )
     results = await asyncio.gather(
-        *[_sync_ad_statistics_for_account(SessionLocal, a.id, days_window) for a in eligible],
+        *[_sync_ad_statistics_for_account(SessionLocal, a.id, days_window, date_from) for a in eligible],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
@@ -181,6 +206,7 @@ async def _sync_ad_statistics_for_account(
     SessionLocal: async_sessionmaker[AsyncSession],
     account_id: uuid.UUID,
     days_window: int,
+    date_from_iso: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
         account = (
@@ -203,7 +229,13 @@ async def _sync_ad_statistics_for_account(
             return {"status": "skipped", "reason": "no_campaigns_yet"}
 
         date_to = datetime.now(UTC).date()
-        date_from = date_to - timedelta(days=days_window)
+        if date_from_iso:
+            try:
+                date_from = date_cls.fromisoformat(date_from_iso[:10])
+            except ValueError:
+                return {"status": "failed", "error": f"invalid date_from={date_from_iso}"}
+        else:
+            date_from = date_to - timedelta(days=days_window)
 
         try:
             async with track_sync_log(db, account.id, "sync_ad_statistics") as stats:

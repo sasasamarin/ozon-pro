@@ -35,30 +35,49 @@ _PAGE_SIZE = 1000
 
 
 @celery_app.task(name="app.workers.tasks.sync_finance.sync_all_transactions")
-def sync_all_transactions(days_window: int = 3) -> dict:
-    """Тянет последние `days_window` дней транзакций по всем магазинам."""
-    return run_celery_async(_sync_all_transactions_async, days_window)
+def sync_all_transactions(
+    days_window: int = 3,
+    date_from: str | None = None,
+    account_id: str | None = None,
+) -> dict:
+    """Транзакции Ozon. cron → days_window=3, ручной backfill → date_from."""
+    return run_celery_async(_sync_all_transactions_async, days_window, date_from, account_id)
 
 
 async def _sync_all_transactions_async(
-    SessionLocal: async_sessionmaker[AsyncSession], days_window: int
+    SessionLocal: async_sessionmaker[AsyncSession],
+    days_window: int,
+    date_from: str | None = None,
+    account_id: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
-        accounts = await get_active_accounts(db)
+        if account_id:
+            acc = (
+                await db.execute(
+                    select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None))
+                )
+            ).scalar_one_or_none()
+            accounts = [acc] if acc else []
+        else:
+            accounts = await get_active_accounts(db)
 
-    log.info("sync_transactions_started", accounts_count=len(accounts), days=days_window)
+    log.info("sync_transactions_started", accounts_count=len(accounts), days=days_window, date_from=date_from)
     results = await asyncio.gather(
-        *[_sync_transactions_for_account(SessionLocal, acc.id, days_window) for acc in accounts],
+        *[_sync_transactions_for_account(SessionLocal, acc.id, days_window, date_from) for acc in accounts],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
     return {"total": len(accounts), "success": success, "failed": len(results) - success}
 
 
+_MAX_PAGES_TX = 5000  # >5000 страниц транзакций маловероятно даже за 5 лет
+
+
 async def _sync_transactions_for_account(
     SessionLocal: async_sessionmaker[AsyncSession],
     account_id: uuid.UUID,
     days_window: int,
+    date_from_iso: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
         account = (
@@ -68,7 +87,15 @@ async def _sync_transactions_for_account(
             return {"status": "failed", "error": "account_not_found"}
 
         date_to = datetime.now(UTC)
-        date_from = date_to - timedelta(days=days_window)
+        if date_from_iso:
+            try:
+                date_from = datetime.fromisoformat(date_from_iso.replace("Z", "+00:00"))
+                if date_from.tzinfo is None:
+                    date_from = date_from.replace(tzinfo=UTC)
+            except ValueError:
+                return {"status": "failed", "error": f"invalid date_from={date_from_iso}"}
+        else:
+            date_from = date_to - timedelta(days=days_window)
         df = date_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         dt = date_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -80,6 +107,9 @@ async def _sync_transactions_for_account(
                 async with OzonSellerClient(client_id, api_key) as client:
                     page = 1
                     while True:
+                        if page > _MAX_PAGES_TX:
+                            log.error("pagination_runaway", method="transactions", account=str(account_id), page=page)
+                            break
                         response = await client.get_transactions(
                             date_from=df,
                             date_to=dt,
@@ -88,6 +118,14 @@ async def _sync_transactions_for_account(
                         )
                         result = response.get("result") or {}
                         operations = result.get("operations") or []
+                        page_count = result.get("page_count", 1)
+                        log.info(
+                            "transactions_page",
+                            account=str(account_id),
+                            page=page,
+                            of=page_count,
+                            items=len(operations),
+                        )
                         if not operations:
                             break
 
@@ -125,7 +163,6 @@ async def _sync_transactions_for_account(
                             await db.execute(stmt)
                             stats.created += len(rows)
 
-                        page_count = result.get("page_count", 1)
                         if page >= page_count or len(operations) < _PAGE_SIZE:
                             break
                         page += 1

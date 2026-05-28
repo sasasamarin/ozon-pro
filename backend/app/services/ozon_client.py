@@ -3,11 +3,12 @@
 
 Особенности:
 - Async (httpx)
-- Retry с exponential backoff при ошибках
-- Логирование каждого запроса (для отладки)
+- Token-bucket rate-limit (per-client = per-account)
+- Retry-After parsing: если Ozon ответил 429 с заголовком, ждём ровно столько
 - Шифрование API ключей в БД, расшифровка при создании клиента
-- Rate limiting (учёт лимитов Озона)
 """
+import asyncio
+import time
 from typing import Any
 
 import httpx
@@ -15,11 +16,63 @@ from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
 )
 
 from app.core.config import settings
 from app.core.logging import log
+
+
+# ============================================================
+# Rate-limit primitive: token bucket
+# ============================================================
+
+
+class TokenBucket:
+    """Простой token-bucket с пополнением `rate` токенов/сек и `capacity` burst.
+
+    async-safe (asyncio.Lock). На каждый запрос делается `await acquire()` —
+    если токенов хватает, возвращается мгновенно; иначе спит ровно столько,
+    сколько нужно для накопления.
+    """
+
+    __slots__ = ("rate", "capacity", "tokens", "_last", "_lock")
+
+    def __init__(self, *, rate: float, capacity: int):
+        self.rate = rate
+        self.capacity = capacity
+        self.tokens = float(capacity)
+        self._last = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self, n: int = 1) -> None:
+        async with self._lock:
+            while True:
+                now = time.monotonic()
+                elapsed = now - self._last
+                self._last = now
+                self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+                if self.tokens >= n:
+                    self.tokens -= n
+                    return
+                wait = (n - self.tokens) / self.rate
+                # Освобождаем lock на время сна — не пользуемся им из-под себя.
+                # На практике acquire вызывается из одной таски, конкурентных
+                # acquire в рамках одного клиента обычно нет; для надёжности —
+                # sleep ВНУТРИ lock'а, чтобы tokens не съели рядом.
+                await asyncio.sleep(wait)
+
+
+def _parse_retry_after(header: str | None) -> float | None:
+    """Парсит заголовок Retry-After. Поддерживаем секунды (наиболее частый формат)."""
+    if not header:
+        return None
+    s = header.strip()
+    try:
+        v = float(s)
+        return v if v >= 0 else None
+    except ValueError:
+        # HTTP-date — редкость для rate-limit, не парсим
+        return None
 
 
 class OzonAPIError(Exception):
@@ -41,7 +94,32 @@ class OzonAuthError(OzonAPIError):
 
 
 class OzonRateLimitError(OzonAPIError):
-    """Превышен лимит запросов."""
+    """429 от Ozon. retry_after — сколько секунд просили подождать."""
+
+    def __init__(
+        self,
+        message: str = "Превышен лимит запросов",
+        *,
+        retry_after: float | None = None,
+        status_code: int | None = 429,
+        response_data: dict | None = None,
+    ):
+        super().__init__(message, status_code=status_code, response_data=response_data)
+        self.retry_after = retry_after
+
+
+def _rate_limit_wait(retry_state) -> float:
+    """tenacity-wait: если знаем Retry-After, ждём его; иначе exponential 2→30 сек.
+
+    Защита от тонкой ситуации: Retry-After=0 → ждём минимум 1 секунду, чтобы
+    не зацикливаться.
+    """
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    if isinstance(exc, OzonRateLimitError) and exc.retry_after is not None:
+        return max(1.0, float(exc.retry_after))
+    attempt = max(1, retry_state.attempt_number)
+    # Экспоненциальный backoff: 2, 4, 8, 16, 30 (cap)
+    return float(min(30, 2 ** attempt))
 
 
 class OzonSellerClient:
@@ -53,12 +131,22 @@ class OzonSellerClient:
         products = await client.get_products()
     """
 
+    # Default-лимиты для Seller API. Документация Ozon — около 100 RPS на seller,
+    # некоторые endpoint'ы строже. Берём 80 с запасом + burst 20 + 8 concurrent.
+    DEFAULT_RATE = 80.0
+    DEFAULT_BURST = 20
+    DEFAULT_CONCURRENCY = 8
+
     def __init__(
         self,
         client_id: str,
         api_key: str,
         base_url: str | None = None,
-        timeout: float = 30.0,
+        timeout: float = 60.0,
+        *,
+        rate: float | None = None,
+        burst: int | None = None,
+        concurrency: int | None = None,
     ):
         self.client_id = client_id
         self.api_key = api_key
@@ -66,6 +154,11 @@ class OzonSellerClient:
         self.timeout = timeout
 
         self._client: httpx.AsyncClient | None = None
+        self._bucket = TokenBucket(
+            rate=rate or self.DEFAULT_RATE,
+            capacity=burst or self.DEFAULT_BURST,
+        )
+        self._sema = asyncio.Semaphore(concurrency or self.DEFAULT_CONCURRENCY)
 
     async def __aenter__(self) -> "OzonSellerClient":
         self._client = httpx.AsyncClient(
@@ -84,8 +177,8 @@ class OzonSellerClient:
             await self._client.aclose()
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(5),
+        wait=_rate_limit_wait,
         retry=retry_if_exception_type((httpx.NetworkError, OzonRateLimitError)),
         reraise=True,
     )
@@ -96,62 +189,70 @@ class OzonSellerClient:
         json: dict | None = None,
         params: dict | None = None,
     ) -> dict:
-        """Сделать запрос к Озон API с retry."""
+        """Сделать запрос к Озон API с rate-limit + retry."""
         if not self._client:
             raise RuntimeError("Client must be used as async context manager")
 
-        log.info(
-            "ozon_api_request",
-            method=method,
-            endpoint=endpoint,
-            client_id=self.client_id[:8] + "...",  # частично, для безопасности
-        )
-
-        try:
-            response = await self._client.request(
-                method=method,
-                url=endpoint,
-                json=json,
-                params=params,
-            )
-
-            # Обработка статусов
-            if response.status_code == 401:
-                raise OzonAuthError(
-                    "Неверные API ключи",
-                    status_code=401,
-                    response_data=response.json() if response.content else {},
-                )
-
-            if response.status_code == 429:
-                raise OzonRateLimitError(
-                    "Превышен лимит запросов",
-                    status_code=429,
-                )
-
-            response.raise_for_status()
-            data = response.json()
+        async with self._sema:
+            await self._bucket.acquire()
 
             log.info(
-                "ozon_api_response",
+                "ozon_api_request",
+                method=method,
                 endpoint=endpoint,
-                status=response.status_code,
+                client_id=self.client_id[:8] + "...",
             )
 
-            return data
+            try:
+                response = await self._client.request(
+                    method=method,
+                    url=endpoint,
+                    json=json,
+                    params=params,
+                )
 
-        except httpx.HTTPStatusError as e:
-            log.error(
-                "ozon_api_error",
-                endpoint=endpoint,
-                status=e.response.status_code,
-                body=e.response.text[:500],
-            )
-            raise OzonAPIError(
-                f"Ошибка Озон API: {e.response.status_code}",
-                status_code=e.response.status_code,
-                response_data=e.response.json() if e.response.content else {},
-            ) from e
+                if response.status_code == 401:
+                    raise OzonAuthError(
+                        "Неверные API ключи",
+                        status_code=401,
+                        response_data=response.json() if response.content else {},
+                    )
+
+                if response.status_code == 429:
+                    ra = _parse_retry_after(response.headers.get("Retry-After"))
+                    log.warning(
+                        "ozon_api_rate_limited",
+                        endpoint=endpoint,
+                        retry_after=ra,
+                    )
+                    raise OzonRateLimitError(
+                        f"429 от Ozon, Retry-After={ra}",
+                        retry_after=ra,
+                    )
+
+                response.raise_for_status()
+                data = response.json()
+
+                log.info(
+                    "ozon_api_response",
+                    endpoint=endpoint,
+                    status=response.status_code,
+                )
+
+                return data
+
+            except httpx.HTTPStatusError as e:
+                log.error(
+                    "ozon_api_error",
+                    endpoint=endpoint,
+                    status=e.response.status_code,
+                    body=e.response.text[:500],
+                )
+                raise OzonAPIError(
+                    f"Ошибка Озон API: {e.response.status_code}",
+                    status_code=e.response.status_code,
+                    response_data=e.response.json() if e.response.content else {},
+                ) from e
 
     # ============================================
     # ТОВАРЫ

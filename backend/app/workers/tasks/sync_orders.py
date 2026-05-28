@@ -32,20 +32,34 @@ _FBS_PAGE_SIZE = 1000
 
 
 @celery_app.task(name="app.workers.tasks.sync_orders.sync_all_orders")
-def sync_all_orders(days_window: int = 3) -> dict:
-    """Синхронизация заказов FBO + FBS по всем активным магазинам."""
-    return run_celery_async(_sync_all_orders_async, days_window)
+def sync_all_orders(days_window: int = 3, date_from: str | None = None, account_id: str | None = None) -> dict:
+    """Синхронизация заказов FBO + FBS.
+
+    - cron: вызывает с default days_window=3 → incremental
+    - manual backfill: передай date_from="2025-01-01" чтобы тянуть с указанной даты
+    - phase-A прогон: account_id="<uuid>" чтобы прогнать на одном кабинете
+    """
+    return run_celery_async(_sync_all_orders_async, days_window, date_from, account_id)
 
 
 async def _sync_all_orders_async(
-    SessionLocal: async_sessionmaker[AsyncSession], days_window: int
+    SessionLocal: async_sessionmaker[AsyncSession],
+    days_window: int,
+    date_from: str | None = None,
+    account_id: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
-        accounts = await get_active_accounts(db)
+        if account_id:
+            account = (
+                await db.execute(select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None)))
+            ).scalar_one_or_none()
+            accounts = [account] if account else []
+        else:
+            accounts = await get_active_accounts(db)
 
-    log.info("sync_orders_started", accounts_count=len(accounts), days=days_window)
+    log.info("sync_orders_started", accounts_count=len(accounts), days=days_window, date_from=date_from)
     results = await asyncio.gather(
-        *[_sync_orders_for_account(SessionLocal, acc.id, days_window) for acc in accounts],
+        *[_sync_orders_for_account(SessionLocal, acc.id, days_window, date_from) for acc in accounts],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
@@ -56,6 +70,7 @@ async def _sync_orders_for_account(
     SessionLocal: async_sessionmaker[AsyncSession],
     account_id: uuid.UUID,
     days_window: int,
+    date_from_iso: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
         account = (
@@ -65,7 +80,15 @@ async def _sync_orders_for_account(
             return {"status": "failed", "error": "account_not_found"}
 
         date_to = datetime.now(UTC)
-        date_from = date_to - timedelta(days=days_window)
+        if date_from_iso:
+            try:
+                date_from = datetime.fromisoformat(date_from_iso.replace("Z", "+00:00"))
+                if date_from.tzinfo is None:
+                    date_from = date_from.replace(tzinfo=UTC)
+            except ValueError:
+                return {"status": "failed", "error": f"invalid date_from={date_from_iso}"}
+        else:
+            date_from = date_to - timedelta(days=days_window)
         df = date_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         dt = date_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -112,6 +135,9 @@ async def _sync_orders_for_account(
             return {"status": "failed", "error": str(e)}
 
 
+_MAX_PAGES = 1000  # sanity-cap для всех paginate-циклов
+
+
 async def _ingest_postings(
     db: AsyncSession,
     *,
@@ -128,7 +154,12 @@ async def _ingest_postings(
     - /v3/posting/fbs/list → {"result": {"postings": [...], "has_next": bool}}
     """
     offset = 0
+    page = 0
     while True:
+        page += 1
+        if page > _MAX_PAGES:
+            log.error("pagination_runaway", method="orders", account=str(account_id), page=page)
+            break
         response = await fetch(offset)
         result = response.get("result")
 
@@ -143,6 +174,15 @@ async def _ingest_postings(
         else:
             postings = []
             has_next = False
+
+        log.info(
+            "orders_page",
+            account=str(account_id),
+            type=order_type,
+            page=page,
+            items=len(postings),
+            has_next=has_next,
+        )
 
         if not postings:
             break

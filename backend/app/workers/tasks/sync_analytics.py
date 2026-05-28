@@ -48,30 +48,49 @@ _METRICS = [
 
 
 @celery_app.task(name="app.workers.tasks.sync_analytics.sync_all_analytics")
-def sync_all_analytics(days_window: int = 3) -> dict:
-    """Тянет аналитику последних N дней по всем магазинам."""
-    return run_celery_async(_sync_all_analytics_async, days_window)
+def sync_all_analytics(
+    days_window: int = 3,
+    date_from: str | None = None,
+    account_id: str | None = None,
+) -> dict:
+    """Аналитика. cron → days_window=3, ручной backfill → date_from='2025-01-01'."""
+    return run_celery_async(_sync_all_analytics_async, days_window, date_from, account_id)
 
 
 async def _sync_all_analytics_async(
-    SessionLocal: async_sessionmaker[AsyncSession], days_window: int
+    SessionLocal: async_sessionmaker[AsyncSession],
+    days_window: int,
+    date_from: str | None = None,
+    account_id: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
-        accounts = await get_active_accounts(db)
+        if account_id:
+            acc = (
+                await db.execute(
+                    select(OzonAccount).where(OzonAccount.id == uuid.UUID(account_id), OzonAccount.deleted_at.is_(None))
+                )
+            ).scalar_one_or_none()
+            accounts = [acc] if acc else []
+        else:
+            accounts = await get_active_accounts(db)
 
-    log.info("sync_analytics_started", accounts_count=len(accounts), days=days_window)
+    log.info("sync_analytics_started", accounts_count=len(accounts), days=days_window, date_from=date_from)
     results = await asyncio.gather(
-        *[_sync_analytics_for_account(SessionLocal, acc.id, days_window) for acc in accounts],
+        *[_sync_analytics_for_account(SessionLocal, acc.id, days_window, date_from) for acc in accounts],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
     return {"total": len(accounts), "success": success, "failed": len(results) - success}
 
 
+_MAX_PAGES_ANALYTICS = 2000
+
+
 async def _sync_analytics_for_account(
     SessionLocal: async_sessionmaker[AsyncSession],
     account_id: uuid.UUID,
     days_window: int,
+    date_from_iso: str | None = None,
 ) -> dict:
     async with SessionLocal() as db:
         account = (
@@ -81,7 +100,13 @@ async def _sync_analytics_for_account(
             return {"status": "failed", "error": "account_not_found"}
 
         date_to = datetime.now(UTC).date()
-        date_from = date_to - timedelta(days=days_window)
+        if date_from_iso:
+            try:
+                date_from = date_cls.fromisoformat(date_from_iso[:10])
+            except ValueError:
+                return {"status": "failed", "error": f"invalid date_from={date_from_iso}"}
+        else:
+            date_from = date_to - timedelta(days=days_window)
 
         try:
             async with track_sync_log(db, account.id, "sync_analytics") as stats:
@@ -93,7 +118,12 @@ async def _sync_analytics_for_account(
 
                 async with OzonSellerClient(client_id, api_key) as client:
                     offset = 0
+                    page = 0
                     while True:
+                        page += 1
+                        if page > _MAX_PAGES_ANALYTICS:
+                            log.error("pagination_runaway", method="analytics", account=str(account_id), page=page)
+                            break
                         response = await client.get_analytics(
                             date_from=date_from.isoformat(),
                             date_to=date_to.isoformat(),
@@ -104,6 +134,7 @@ async def _sync_analytics_for_account(
                         )
                         result = response.get("result") or {}
                         data = result.get("data") or []
+                        log.info("analytics_page", account=str(account_id), page=page, items=len(data))
                         if not data:
                             break
 
