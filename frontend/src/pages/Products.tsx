@@ -341,20 +341,30 @@ export function Products() {
                           </div>
                         </td>
                         <td className="py-3 px-4 text-right">
-                          {p.current_price != null ? (
-                            <div className="font-mono tabular-nums text-fg">
-                              {formatCurrency(p.current_price)}
-                            </div>
-                          ) : (
-                            <span className="text-fg-subtle">—</span>
-                          )}
-                          {p.old_price != null &&
-                            p.current_price != null &&
-                            p.old_price > p.current_price && (
-                              <div className="text-[10px] text-fg-subtle line-through tabular-nums">
-                                {formatCurrency(p.old_price)}
-                              </div>
-                            )}
+                          {(() => {
+                            // Покупатель на витрине видит marketing_price (с СПП).
+                            // current_price (исходная цена продавца) показываем
+                            // зачёркнутой, если она ВЫШЕ чем marketing_price.
+                            const visible = p.marketing_price ?? p.current_price
+                            const showOriginal =
+                              p.marketing_price != null &&
+                              p.current_price != null &&
+                              p.current_price > p.marketing_price
+                            return visible != null ? (
+                              <>
+                                <div className="font-mono tabular-nums text-fg">
+                                  {formatCurrency(visible)}
+                                </div>
+                                {showOriginal && (
+                                  <div className="text-[10px] text-fg-subtle line-through tabular-nums">
+                                    {formatCurrency(p.current_price as number)}
+                                  </div>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-fg-subtle">—</span>
+                            )
+                          })()}
                         </td>
                         <td className="py-3 px-4 text-right">
                           <StockBadge value={p.total_stock} />

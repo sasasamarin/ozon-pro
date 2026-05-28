@@ -59,6 +59,7 @@ from app.models.cost import (  # noqa: F401
     CostConfidence,
     CostImportLog,
     CostSource,
+    PendingCost,
     ProductCostHistory,
     Supplier,
     SupplierOrder,
@@ -152,6 +153,7 @@ __all__ = [
     "SupplierOrderStatus",
     "ProductCostHistory",
     "CostImportLog",
+    "PendingCost",
     "CostSource",
     "CostConfidence",
     # Phase 2 — финансовые продукты Ozon

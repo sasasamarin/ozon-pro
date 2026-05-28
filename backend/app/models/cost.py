@@ -182,3 +182,31 @@ class CostImportLog(BaseModel):
     rows_imported: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rows_failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     errors_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class PendingCost(BaseModel):
+    """Себестоимость для SKU, которых ещё нет в products.
+
+    Юзер импортирует CSV до того как товар появился в Ozon (или товар архивный
+    с visibility-фильтром который синк не покрывает). При появлении product с
+    matching offer_id (case-insensitive) sync_products переносит запись в
+    product_cost_history и удаляет отсюда.
+    """
+
+    __tablename__ = "pending_costs"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "offer_id_lower", name="uq_pending_costs_user_offer"
+        ),
+        Index("ix_pending_costs_offer", "offer_id_lower"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    offer_id_lower: Mapped[str] = mapped_column(String(255), nullable=False)
+    purchase_price: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -16,7 +16,7 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -25,10 +25,13 @@ from app.core.security import decrypt_secret
 from app.models import (
     OzonAccount,
     OzonAccountStatus,
+    PendingCost,
     PriceHistory,
     Product,
+    ProductCostHistory,
     Stock,
 )
+from app.models.cost import CostConfidence, CostSource
 from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
@@ -207,6 +210,106 @@ async def _sync_all_products_async(
     return {"total": len(accounts), "success": success_count, "failed": failed_count}
 
 
+async def _pickup_pending_costs(db: AsyncSession, account: OzonAccount) -> int:
+    """Переносит pending_costs в product_cost_history для появившихся товаров.
+
+    Один user может владеть несколькими кабинетами; pending_costs привязаны к
+    user_id, а не к account. Тянем все pending для company-owner этого кабинета
+    и матчим к products *именно этого* account_id (чтобы не путать варианты
+    между разными кабинетами).
+
+    Возвращает количество перенесённых записей.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from app.models import User
+
+    # user_id = первый юзер компании (owner)
+    user_q = await db.execute(
+        select(User.id)
+        .where(User.company_id == account.company_id)
+        .order_by(User.created_at)
+        .limit(1)
+    )
+    user_id = user_q.scalar_one_or_none()
+    if user_id is None:
+        return 0
+
+    # Все pending для этого юзера
+    pendings = list(
+        (
+            await db.execute(
+                select(PendingCost).where(PendingCost.user_id == user_id)
+            )
+        ).scalars().all()
+    )
+    if not pendings:
+        return 0
+
+    # Все products account'a с lower(offer_id) для быстрого map
+    products = list(
+        (
+            await db.execute(
+                select(Product).where(
+                    Product.ozon_account_id == account.id,
+                    Product.deleted_at.is_(None),
+                )
+            )
+        ).scalars().all()
+    )
+    products_by_lower = {(p.offer_id or "").lower().strip(): p for p in products if p.offer_id}
+
+    picked = 0
+    effective_from = _dt(2026, 1, 1, 0, 0, 0, tzinfo=_tz.utc)
+
+    for pending in pendings:
+        matched = products_by_lower.get(pending.offer_id_lower)
+        if not matched:
+            continue
+
+        # UPSERT в product_cost_history (PK = effective_from + product_id).
+        # Если уже есть запись на 2026-01-01 (например, missing-stub) — UPDATE
+        # её на estimated с реальной ценой. Иначе INSERT.
+        existing = (
+            await db.execute(
+                select(ProductCostHistory).where(
+                    ProductCostHistory.product_id == matched.id,
+                    ProductCostHistory.effective_from == effective_from,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing:
+            existing.purchase_price = pending.purchase_price
+            existing.full_cost = pending.purchase_price
+            existing.confidence = CostConfidence.ESTIMATED.value
+            existing.source = CostSource.MANUAL.value
+        else:
+            db.add(
+                ProductCostHistory(
+                    effective_from=effective_from,
+                    product_id=matched.id,
+                    ozon_account_id=account.id,
+                    user_id=user_id,
+                    purchase_price=pending.purchase_price,
+                    delivery_to_wh=0,
+                    packaging=0,
+                    other_costs=0,
+                    full_cost=pending.purchase_price,
+                    source=CostSource.MANUAL.value,
+                    confidence=CostConfidence.ESTIMATED.value,
+                )
+            )
+        matched.cost_price = pending.purchase_price
+
+        # Удаляем pending
+        await db.execute(
+            delete(PendingCost).where(PendingCost.id == pending.id)
+        )
+        picked += 1
+
+    return picked
+
+
 async def _sync_products_for_account(
     SessionLocal: async_sessionmaker[AsyncSession], account_id: uuid.UUID
 ) -> dict:
@@ -342,10 +445,24 @@ async def _sync_products_for_account(
                                 # raw_data из enrich — полнее, перезаписываем
                                 p.raw_data = det
 
+                # ---- ШАГ 3: подцепить pending_costs к свежесозданным продуктам ----
+                # Если юзер импортировал CSV ДО появления товара на Ozon — в
+                # pending_costs лежит (offer_id_lower, purchase_price). Берём
+                # все pending_costs пользователя этого кабинета и матчим к
+                # текущим products по lower(offer_id). Найденное → переносим
+                # в product_cost_history, удаляем из pending_costs.
+                picked = await _pickup_pending_costs(db, account)
+                if picked:
+                    log.info(
+                        "pending_costs_picked",
+                        account=str(account.id),
+                        count=picked,
+                    )
+
                 account.last_sync_at = datetime.now(UTC)
                 _clear_sync_error(account)
             await db.commit()
-            return {"status": "success", "created": stats.created, "updated": stats.updated}
+            return {"status": "success", "created": stats.created, "updated": stats.updated, "pending_picked": picked}
         except OzonAPIError as e:
             account.status = OzonAccountStatus.ERROR.value
             account.last_sync_error = str(e)[:500]
