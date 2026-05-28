@@ -12,16 +12,17 @@ from datetime import UTC, date as date_cls, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
 from app.core.security import decrypt_secret
-from app.db.session import AsyncSessionLocal
-from app.models import AnalyticsDaily, OzonAccount
+from app.models import AnalyticsDaily, OzonAccount, OzonAccountStatus
 from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
     load_sku_map,
+    run_celery_async,
     track_sync_log,
 )
 
@@ -49,24 +50,30 @@ _METRICS = [
 @celery_app.task(name="app.workers.tasks.sync_analytics.sync_all_analytics")
 def sync_all_analytics(days_window: int = 3) -> dict:
     """Тянет аналитику последних N дней по всем магазинам."""
-    return asyncio.run(_sync_all_analytics_async(days_window))
+    return run_celery_async(_sync_all_analytics_async, days_window)
 
 
-async def _sync_all_analytics_async(days_window: int) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_all_analytics_async(
+    SessionLocal: async_sessionmaker[AsyncSession], days_window: int
+) -> dict:
+    async with SessionLocal() as db:
         accounts = await get_active_accounts(db)
 
     log.info("sync_analytics_started", accounts_count=len(accounts), days=days_window)
     results = await asyncio.gather(
-        *[_sync_analytics_for_account(acc.id, days_window) for acc in accounts],
+        *[_sync_analytics_for_account(SessionLocal, acc.id, days_window) for acc in accounts],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
     return {"total": len(accounts), "success": success, "failed": len(results) - success}
 
 
-async def _sync_analytics_for_account(account_id: uuid.UUID, days_window: int) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_analytics_for_account(
+    SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: uuid.UUID,
+    days_window: int,
+) -> dict:
+    async with SessionLocal() as db:
         account = (
             await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
         ).scalar_one_or_none()
@@ -154,9 +161,12 @@ async def _sync_analytics_for_account(account_id: uuid.UUID, days_window: int) -
                     stats.updated += len(rows)
 
                 account.last_sync_at = datetime.now(UTC)
+                account.last_sync_error = None
+                account.status = OzonAccountStatus.ACTIVE.value
             await db.commit()
             return {"status": "success", "rows": stats.processed}
         except OzonAPIError as e:
+            account.status = OzonAccountStatus.ERROR.value
             account.last_sync_error = str(e)[:500]
             await db.commit()
             return {"status": "failed", "error": str(e)}

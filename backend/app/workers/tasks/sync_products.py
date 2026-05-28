@@ -5,6 +5,10 @@
 - sync_all_stocks   — снимки остатков (insert в stocks hypertable)
 - sync_all_prices   — снимки цен (insert в price_history hypertable) +
                        обновляет текущие цены в products
+
+Все 3 таска запускаются через `run_celery_async()` — она создаёт фреш
+AsyncEngine на каждый вызов (Celery prefork + asyncio.run несовместимы
+со static-engine'ом из db.session).
 """
 from __future__ import annotations
 
@@ -14,11 +18,10 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
 from app.core.security import decrypt_secret
-from app.db.session import AsyncSessionLocal
 from app.models import (
     OzonAccount,
     OzonAccountStatus,
@@ -31,8 +34,15 @@ from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
     load_sku_map,
+    run_celery_async,
     track_sync_log,
 )
+
+
+def _clear_sync_error(account: OzonAccount) -> None:
+    """Очищает last_sync_error и переводит статус в ACTIVE после успешного синка."""
+    account.last_sync_error = None
+    account.status = OzonAccountStatus.ACTIVE.value
 
 
 # ============================================================
@@ -43,40 +53,40 @@ from app.workers.tasks._helpers import (
 @celery_app.task(bind=True, name="app.workers.tasks.sync_products.sync_all_products")
 def sync_all_products(self) -> dict:
     """Запустить синхронизацию товаров по всем активным магазинам."""
-    return asyncio.run(_sync_all_products_async())
+    return run_celery_async(_sync_all_products_async)
 
 
-async def _sync_all_products_async() -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_all_products_async(
+    SessionLocal: async_sessionmaker[AsyncSession],
+) -> dict:
+    async with SessionLocal() as db:
         result = await db.execute(
             select(OzonAccount).where(
                 OzonAccount.is_active.is_(True),
                 OzonAccount.deleted_at.is_(None),
-                OzonAccount.status == OzonAccountStatus.ACTIVE.value,
             )
         )
-        accounts = result.scalars().all()
+        accounts = list(result.scalars().all())
 
     log.info("sync_products_started", accounts_count=len(accounts))
     results = await asyncio.gather(
-        *[_sync_products_for_account(account.id) for account in accounts],
+        *[_sync_products_for_account(SessionLocal, account.id) for account in accounts],
         return_exceptions=True,
     )
 
     success_count = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
     failed_count = len(results) - success_count
-    log.info(
-        "sync_products_finished",
-        success=success_count,
-        failed=failed_count,
-    )
+    log.info("sync_products_finished", success=success_count, failed=failed_count)
     return {"total": len(accounts), "success": success_count, "failed": failed_count}
 
 
-async def _sync_products_for_account(account_id: uuid.UUID) -> dict:
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
-        account = result.scalar_one_or_none()
+async def _sync_products_for_account(
+    SessionLocal: async_sessionmaker[AsyncSession], account_id: uuid.UUID
+) -> dict:
+    async with SessionLocal() as db:
+        account = (
+            await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
+        ).scalar_one_or_none()
         if not account:
             return {"status": "failed", "error": "account_not_found"}
 
@@ -133,8 +143,7 @@ async def _sync_products_for_account(account_id: uuid.UUID) -> dict:
                             break
 
                 account.last_sync_at = datetime.now(UTC)
-                account.last_sync_error = None
-                account.status = OzonAccountStatus.ACTIVE.value
+                _clear_sync_error(account)
             await db.commit()
             return {"status": "success", "created": stats.created, "updated": stats.updated}
         except OzonAPIError as e:
@@ -154,25 +163,28 @@ async def _sync_products_for_account(account_id: uuid.UUID) -> dict:
 
 @celery_app.task(name="app.workers.tasks.sync_products.sync_all_stocks")
 def sync_all_stocks() -> dict:
-    """Снимки остатков по всем активным магазинам."""
-    return asyncio.run(_sync_all_stocks_async())
+    return run_celery_async(_sync_all_stocks_async)
 
 
-async def _sync_all_stocks_async() -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_all_stocks_async(
+    SessionLocal: async_sessionmaker[AsyncSession],
+) -> dict:
+    async with SessionLocal() as db:
         accounts = await get_active_accounts(db)
 
     log.info("sync_stocks_started", accounts_count=len(accounts))
     results = await asyncio.gather(
-        *[_sync_stocks_for_account(acc.id) for acc in accounts],
+        *[_sync_stocks_for_account(SessionLocal, acc.id) for acc in accounts],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
     return {"total": len(accounts), "success": success, "failed": len(results) - success}
 
 
-async def _sync_stocks_for_account(account_id: uuid.UUID) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_stocks_for_account(
+    SessionLocal: async_sessionmaker[AsyncSession], account_id: uuid.UUID
+) -> dict:
+    async with SessionLocal() as db:
         account = (
             await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
         ).scalar_one_or_none()
@@ -201,10 +213,8 @@ async def _sync_stocks_for_account(account_id: uuid.UUID) -> dict:
                             ozon_sku = item.get("product_id") or item.get("sku")
                             product_id = sku_to_id.get(ozon_sku)
                             if not product_id:
-                                # Товар ещё не синхронизирован — пропускаем
                                 continue
 
-                            # Каждая позиция приходит со списком stocks по складам
                             for st in item.get("stocks", []):
                                 rows.append(_stock_row(
                                     snapshot_at=snapshot_at,
@@ -226,9 +236,11 @@ async def _sync_stocks_for_account(account_id: uuid.UUID) -> dict:
                     stats.created += len(rows)
 
                 account.last_sync_at = snapshot_at
+                _clear_sync_error(account)
             await db.commit()
             return {"status": "success", "rows": stats.created}
         except OzonAPIError as e:
+            account.status = OzonAccountStatus.ERROR.value
             account.last_sync_error = str(e)[:500]
             await db.commit()
             return {"status": "failed", "error": str(e)}
@@ -240,7 +252,6 @@ async def _sync_stocks_for_account(account_id: uuid.UUID) -> dict:
 def _stock_row(
     *, snapshot_at: datetime, product_id: uuid.UUID, raw: dict
 ) -> dict:
-    """Превращает один stocks-элемент Ozon API в строку для bulk-insert."""
     warehouse_type = (raw.get("type") or "FBO").upper()
     return {
         "time": snapshot_at,
@@ -262,25 +273,28 @@ def _stock_row(
 
 @celery_app.task(name="app.workers.tasks.sync_products.sync_all_prices")
 def sync_all_prices() -> dict:
-    """Снимки цен + обновление текущих цен в products."""
-    return asyncio.run(_sync_all_prices_async())
+    return run_celery_async(_sync_all_prices_async)
 
 
-async def _sync_all_prices_async() -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_all_prices_async(
+    SessionLocal: async_sessionmaker[AsyncSession],
+) -> dict:
+    async with SessionLocal() as db:
         accounts = await get_active_accounts(db)
 
     log.info("sync_prices_started", accounts_count=len(accounts))
     results = await asyncio.gather(
-        *[_sync_prices_for_account(acc.id) for acc in accounts],
+        *[_sync_prices_for_account(SessionLocal, acc.id) for acc in accounts],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
     return {"total": len(accounts), "success": success, "failed": len(results) - success}
 
 
-async def _sync_prices_for_account(account_id: uuid.UUID) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_prices_for_account(
+    SessionLocal: async_sessionmaker[AsyncSession], account_id: uuid.UUID
+) -> dict:
+    async with SessionLocal() as db:
         account = (
             await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
         ).scalar_one_or_none()
@@ -320,7 +334,6 @@ async def _sync_prices_for_account(account_id: uuid.UUID) -> dict:
                                 "color_index"
                             ) or item.get("price_index")
 
-                            # Snapshot row для price_history
                             if price is not None:
                                 rows.append({
                                     "time": snapshot_at,
@@ -331,7 +344,6 @@ async def _sync_prices_for_account(account_id: uuid.UUID) -> dict:
                                     "price_index": price_index,
                                 })
 
-                            # Обновим текущие цены на самом Product
                             existing = await db.execute(
                                 select(Product).where(Product.id == product_id)
                             )
@@ -358,9 +370,11 @@ async def _sync_prices_for_account(account_id: uuid.UUID) -> dict:
                     stats.created += len(rows)
 
                 account.last_sync_at = snapshot_at
+                _clear_sync_error(account)
             await db.commit()
             return {"status": "success", "rows": stats.created}
         except OzonAPIError as e:
+            account.status = OzonAccountStatus.ERROR.value
             account.last_sync_error = str(e)[:500]
             await db.commit()
             return {"status": "failed", "error": str(e)}
@@ -370,7 +384,6 @@ async def _sync_prices_for_account(account_id: uuid.UUID) -> dict:
 
 
 def _to_decimal(value) -> float | None:
-    """Безопасно парсит строковое/числовое поле денег из Ozon API."""
     if value is None or value == "":
         return None
     try:

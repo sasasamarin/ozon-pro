@@ -12,17 +12,17 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
 from app.core.security import decrypt_secret
-from app.db.session import AsyncSessionLocal
-from app.models import Order, OrderItem, OrderType, OzonAccount
+from app.models import Order, OrderItem, OrderType, OzonAccount, OzonAccountStatus
 from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
     load_sku_map,
+    run_celery_async,
     track_sync_log,
 )
 
@@ -34,24 +34,30 @@ _FBS_PAGE_SIZE = 1000
 @celery_app.task(name="app.workers.tasks.sync_orders.sync_all_orders")
 def sync_all_orders(days_window: int = 3) -> dict:
     """Синхронизация заказов FBO + FBS по всем активным магазинам."""
-    return asyncio.run(_sync_all_orders_async(days_window))
+    return run_celery_async(_sync_all_orders_async, days_window)
 
 
-async def _sync_all_orders_async(days_window: int) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_all_orders_async(
+    SessionLocal: async_sessionmaker[AsyncSession], days_window: int
+) -> dict:
+    async with SessionLocal() as db:
         accounts = await get_active_accounts(db)
 
     log.info("sync_orders_started", accounts_count=len(accounts), days=days_window)
     results = await asyncio.gather(
-        *[_sync_orders_for_account(acc.id, days_window) for acc in accounts],
+        *[_sync_orders_for_account(SessionLocal, acc.id, days_window) for acc in accounts],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
     return {"total": len(accounts), "success": success, "failed": len(results) - success}
 
 
-async def _sync_orders_for_account(account_id: uuid.UUID, days_window: int) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_orders_for_account(
+    SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: uuid.UUID,
+    days_window: int,
+) -> dict:
+    async with SessionLocal() as db:
         account = (
             await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
         ).scalar_one_or_none()
@@ -60,7 +66,6 @@ async def _sync_orders_for_account(account_id: uuid.UUID, days_window: int) -> d
 
         date_to = datetime.now(UTC)
         date_from = date_to - timedelta(days=days_window)
-        # Ozon хочет ISO 8601 с миллисекундами и Z
         df = date_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
         dt = date_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
@@ -71,7 +76,6 @@ async def _sync_orders_for_account(account_id: uuid.UUID, days_window: int) -> d
                 api_key = decrypt_secret(account.api_key_encrypted)
 
                 async with OzonSellerClient(client_id, api_key) as client:
-                    # FBO
                     await _ingest_postings(
                         db,
                         account_id=account.id,
@@ -82,7 +86,6 @@ async def _sync_orders_for_account(account_id: uuid.UUID, days_window: int) -> d
                         sku_to_id=sku_to_id,
                         stats=stats,
                     )
-                    # FBS
                     await _ingest_postings(
                         db,
                         account_id=account.id,
@@ -95,9 +98,12 @@ async def _sync_orders_for_account(account_id: uuid.UUID, days_window: int) -> d
                     )
 
                 account.last_sync_at = datetime.now(UTC)
+                account.last_sync_error = None
+                account.status = OzonAccountStatus.ACTIVE.value
             await db.commit()
             return {"status": "success", "rows": stats.processed}
         except OzonAPIError as e:
+            account.status = OzonAccountStatus.ERROR.value
             account.last_sync_error = str(e)[:500]
             await db.commit()
             return {"status": "failed", "error": str(e)}
@@ -133,7 +139,6 @@ async def _ingest_postings(
             )
             stats.processed += 1
 
-        # has_next в одних эндпоинтах FBO/FBS возвращается в верхнем уровне ответа
         has_next = response.get("has_next", len(result) >= _FBO_PAGE_SIZE)
         if not has_next:
             break
@@ -198,14 +203,12 @@ async def _upsert_posting(
         for k, v in payload.items():
             setattr(order, k, v)
         await db.flush()
-        # Replace items
         await db.execute(delete(OrderItem).where(OrderItem.order_id == order.id))
     else:
         order = Order(**payload)
         db.add(order)
         await db.flush()
 
-    # Items
     for item in posting.get("products") or []:
         ozon_sku = item.get("sku") or item.get("product_id")
         db.add(
@@ -228,7 +231,6 @@ def _parse_dt(value) -> datetime | None:
     if not value:
         return None
     try:
-        # Ozon отдаёт ISO с Z
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return None
@@ -244,7 +246,6 @@ def _safe_float(value) -> float | None:
 
 
 def _sum_amount(items) -> float:
-    """Сумма по items.price * quantity, если в ответе нет общего поля."""
     if not items:
         return 0.0
     total = 0.0

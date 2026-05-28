@@ -22,10 +22,9 @@ NIL_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
-from app.db.session import AsyncSessionLocal
 from app.models import AdCampaign, AdStatistics, OzonAccount
 from app.services.ozon_client import OzonAPIError
 from app.services.ozon_perf_client import (
@@ -33,7 +32,11 @@ from app.services.ozon_perf_client import (
     OzonPerfNotConfigured,
 )
 from app.workers.celery_app import celery_app
-from app.workers.tasks._helpers import get_active_accounts, track_sync_log
+from app.workers.tasks._helpers import (
+    get_active_accounts,
+    run_celery_async,
+    track_sync_log,
+)
 
 
 # ============================================================
@@ -44,11 +47,13 @@ from app.workers.tasks._helpers import get_active_accounts, track_sync_log
 @celery_app.task(name="app.workers.tasks.sync_ads.sync_all_ad_campaigns")
 def sync_all_ad_campaigns() -> dict:
     """Список рекламных кампаний по всем активным магазинам с подключённым PA."""
-    return asyncio.run(_sync_all_ad_campaigns_async())
+    return run_celery_async(_sync_all_ad_campaigns_async)
 
 
-async def _sync_all_ad_campaigns_async() -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_all_ad_campaigns_async(
+    SessionLocal: async_sessionmaker[AsyncSession],
+) -> dict:
+    async with SessionLocal() as db:
         accounts = await get_active_accounts(db)
 
     eligible = [a for a in accounts if a.perf_client_id_encrypted]
@@ -58,7 +63,7 @@ async def _sync_all_ad_campaigns_async() -> dict:
         accounts_with_pa=len(eligible),
     )
     results = await asyncio.gather(
-        *[_sync_ad_campaigns_for_account(a.id) for a in eligible],
+        *[_sync_ad_campaigns_for_account(SessionLocal, a.id) for a in eligible],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
@@ -70,8 +75,10 @@ async def _sync_all_ad_campaigns_async() -> dict:
     }
 
 
-async def _sync_ad_campaigns_for_account(account_id: uuid.UUID) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_ad_campaigns_for_account(
+    SessionLocal: async_sessionmaker[AsyncSession], account_id: uuid.UUID
+) -> dict:
+    async with SessionLocal() as db:
         account = (
             await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
         ).scalar_one_or_none()
@@ -142,11 +149,13 @@ async def _upsert_campaign(
 @celery_app.task(name="app.workers.tasks.sync_ads.sync_all_ad_statistics")
 def sync_all_ad_statistics(days_window: int = 3) -> dict:
     """Дневная статистика рекламы по всем активным магазинам с PA."""
-    return asyncio.run(_sync_all_ad_statistics_async(days_window))
+    return run_celery_async(_sync_all_ad_statistics_async, days_window)
 
 
-async def _sync_all_ad_statistics_async(days_window: int) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_all_ad_statistics_async(
+    SessionLocal: async_sessionmaker[AsyncSession], days_window: int
+) -> dict:
+    async with SessionLocal() as db:
         accounts = await get_active_accounts(db)
 
     eligible = [a for a in accounts if a.perf_client_id_encrypted]
@@ -156,7 +165,7 @@ async def _sync_all_ad_statistics_async(days_window: int) -> dict:
         days=days_window,
     )
     results = await asyncio.gather(
-        *[_sync_ad_statistics_for_account(a.id, days_window) for a in eligible],
+        *[_sync_ad_statistics_for_account(SessionLocal, a.id, days_window) for a in eligible],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
@@ -169,9 +178,11 @@ async def _sync_all_ad_statistics_async(days_window: int) -> dict:
 
 
 async def _sync_ad_statistics_for_account(
-    account_id: uuid.UUID, days_window: int
+    SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: uuid.UUID,
+    days_window: int,
 ) -> dict:
-    async with AsyncSessionLocal() as db:
+    async with SessionLocal() as db:
         account = (
             await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
         ).scalar_one_or_none()

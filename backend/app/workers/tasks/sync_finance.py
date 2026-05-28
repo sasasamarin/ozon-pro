@@ -2,7 +2,12 @@
 Синхронизация финансовых транзакций Ozon.
 
 Endpoint: POST /v3/finance/transaction/list
-Идемпотентно: каждая транзакция уникальна по ozon_transaction_id.
+Идемпотентно: каждая транзакция уникальна по (time, ozon_transaction_id).
+
+NB: user_id и поля разнесённых удержаний (delivery_to_customer, …, compensation)
+пока не заполняются — Phase 2 миграция сделала их nullable / с server_default=0.
+Будут заполнены в отдельной задаче после того как user-mapping станет
+устойчивым (один Company → много User'ов).
 """
 from __future__ import annotations
 
@@ -12,14 +17,18 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
 from app.core.security import decrypt_secret
-from app.db.session import AsyncSessionLocal
-from app.models import OzonAccount, Transaction
+from app.models import OzonAccount, OzonAccountStatus, Transaction
 from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
-from app.workers.tasks._helpers import get_active_accounts, track_sync_log
+from app.workers.tasks._helpers import (
+    get_active_accounts,
+    run_celery_async,
+    track_sync_log,
+)
 
 
 _PAGE_SIZE = 1000
@@ -28,16 +37,18 @@ _PAGE_SIZE = 1000
 @celery_app.task(name="app.workers.tasks.sync_finance.sync_all_transactions")
 def sync_all_transactions(days_window: int = 3) -> dict:
     """Тянет последние `days_window` дней транзакций по всем магазинам."""
-    return asyncio.run(_sync_all_transactions_async(days_window))
+    return run_celery_async(_sync_all_transactions_async, days_window)
 
 
-async def _sync_all_transactions_async(days_window: int) -> dict:
-    async with AsyncSessionLocal() as db:
+async def _sync_all_transactions_async(
+    SessionLocal: async_sessionmaker[AsyncSession], days_window: int
+) -> dict:
+    async with SessionLocal() as db:
         accounts = await get_active_accounts(db)
 
     log.info("sync_transactions_started", accounts_count=len(accounts), days=days_window)
     results = await asyncio.gather(
-        *[_sync_transactions_for_account(acc.id, days_window) for acc in accounts],
+        *[_sync_transactions_for_account(SessionLocal, acc.id, days_window) for acc in accounts],
         return_exceptions=True,
     )
     success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
@@ -45,9 +56,11 @@ async def _sync_all_transactions_async(days_window: int) -> dict:
 
 
 async def _sync_transactions_for_account(
-    account_id: uuid.UUID, days_window: int
+    SessionLocal: async_sessionmaker[AsyncSession],
+    account_id: uuid.UUID,
+    days_window: int,
 ) -> dict:
-    async with AsyncSessionLocal() as db:
+    async with SessionLocal() as db:
         account = (
             await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
         ).scalar_one_or_none()
@@ -93,10 +106,13 @@ async def _sync_transactions_for_account(
                                 "ozon_account_id": account_id,
                                 "operation_type": op.get("operation_type", "unknown"),
                                 "operation_type_name": op.get("operation_type_name"),
+                                "operation_date": op_date,
                                 "amount": _safe_float(op.get("amount")) or 0,
-                                "accruals": _safe_float(op.get("accruals_for_sale")),
+                                "accruals_for_sale": _safe_float(op.get("accruals_for_sale")),
+                                "sale_commission": _safe_float(op.get("sale_commission")),
                                 "description": op.get("type") or op.get("operation_type_name"),
                                 "posting_number": posting.get("posting_number"),
+                                "services": op.get("services"),
                                 "raw_data": op,
                             })
                             stats.processed += 1
@@ -115,9 +131,12 @@ async def _sync_transactions_for_account(
                         page += 1
 
                 account.last_sync_at = datetime.now(UTC)
+                account.last_sync_error = None
+                account.status = OzonAccountStatus.ACTIVE.value
             await db.commit()
             return {"status": "success", "rows": stats.created}
         except OzonAPIError as e:
+            account.status = OzonAccountStatus.ERROR.value
             account.last_sync_error = str(e)[:500]
             await db.commit()
             return {"status": "failed", "error": str(e)}

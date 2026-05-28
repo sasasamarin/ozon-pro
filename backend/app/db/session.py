@@ -14,25 +14,41 @@ from app.core.config import settings
 from app.core.logging import log
 
 
-# Async engine для FastAPI
-engine: AsyncEngine = create_async_engine(
-    str(settings.DATABASE_URL),
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_pre_ping=True,  # проверка соединения перед использованием
-    pool_recycle=3600,   # переподключение каждый час
-    echo=settings.DEBUG and not settings.is_production,  # логировать SQL в dev
-)
+def make_engine_and_session(
+    *,
+    pool_size: int | None = None,
+    max_overflow: int | None = None,
+) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
+    """
+    Создать новую пару (engine, AsyncSessionLocal).
+
+    Используется в Celery-тасках, чтобы каждая задача получала engine,
+    привязанный к свежему event loop'у (`asyncio.run()` создаёт новый loop
+    каждый вызов, а asyncpg-engine из предыдущего loop'а ломается с
+    «Task attached to a different loop»).
+
+    Для FastAPI engine создаётся один раз на модуль-импорт (см. ниже).
+    """
+    eng = create_async_engine(
+        str(settings.DATABASE_URL),
+        pool_size=pool_size if pool_size is not None else settings.DB_POOL_SIZE,
+        max_overflow=max_overflow if max_overflow is not None else settings.DB_MAX_OVERFLOW,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        echo=settings.DEBUG and not settings.is_production,
+    )
+    factory = async_sessionmaker(
+        bind=eng,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False,
+        autocommit=False,
+    )
+    return eng, factory
 
 
-# Фабрика сессий
-AsyncSessionLocal = async_sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-    autoflush=False,
-    autocommit=False,
-)
+# Глобальный engine для FastAPI (uvicorn держит один event loop)
+engine, AsyncSessionLocal = make_engine_and_session()
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

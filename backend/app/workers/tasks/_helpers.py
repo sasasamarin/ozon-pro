@@ -2,6 +2,8 @@
 Общие хелперы для Celery-задач синхронизации.
 
 Содержит:
+- run_celery_async() — обёртка для запуска async-кода из Celery-task с фреш
+  engine на каждый вызов (фикс «Task attached to a different loop»)
 - track_sync_log() — async context manager, который оборачивает работу одного
   пайплайна в строку sync_logs (started → success/failed/partial, длительность)
 - load_sku_map() — словарь {ozon_sku: product_id} для конкретного OzonAccount
@@ -9,16 +11,57 @@
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import uuid
 from datetime import UTC, datetime
-from typing import AsyncIterator
+from typing import AsyncIterator, Awaitable, Callable, TypeVar
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
+from app.db.session import make_engine_and_session
 from app.models import OzonAccount, OzonPremiumTier, Product, SyncLog, SyncStatus
+
+T = TypeVar("T")
+
+
+def run_celery_async(
+    coro_factory: Callable[..., Awaitable[T]],
+    *args,
+    **kwargs,
+) -> T:
+    """
+    Запустить async-функцию из Celery-task с фреш engine.
+
+    Каждая Celery-task должна вызывать SQL через async SQLAlchemy. Celery
+    prefork worker переиспользует процесс между task'ами, а `asyncio.run()`
+    создаёт новый event loop при каждом вызове. asyncpg-движок, привязанный
+    к старому loop'у, ломается во втором task'е с
+    «Task attached to a different loop».
+
+    Решение: каждая task получает СВОЙ engine + AsyncSessionLocal, привязанный
+    к текущему loop'у, и диспозит его по завершении.
+
+    Использование:
+        @celery_app.task
+        def sync_all_X():
+            return run_celery_async(_sync_all_X_async)
+
+        async def _sync_all_X_async(SessionLocal):
+            async with SessionLocal() as db:
+                ...
+    """
+    async def _main() -> T:
+        # Меньший пул для Celery — большинство тасок коротко-живущие.
+        engine, session_factory = make_engine_and_session(pool_size=3, max_overflow=2)
+        try:
+            return await coro_factory(session_factory, *args, **kwargs)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_main())
 
 
 class SyncStats:
