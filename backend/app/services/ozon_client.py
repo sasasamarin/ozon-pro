@@ -230,6 +230,20 @@ class OzonSellerClient:
                         retry_after=ra,
                     )
 
+                # 5xx gateway-ошибки от Ozon — transient, ретраим через тот же канал.
+                if response.status_code in (502, 503, 504):
+                    ra = _parse_retry_after(response.headers.get("Retry-After"))
+                    log.warning(
+                        "ozon_api_gateway_error",
+                        endpoint=endpoint,
+                        status=response.status_code,
+                    )
+                    raise OzonRateLimitError(
+                        f"{response.status_code} gateway",
+                        retry_after=ra or 5.0,
+                        status_code=response.status_code,
+                    )
+
                 response.raise_for_status()
                 data = response.json()
 
@@ -504,14 +518,19 @@ class OzonSellerClient:
         offset: int = 0,
         limit: int = 1000,
     ) -> dict:
-        """Возвраты FBO. Endpoint: POST /v3/returns/company/fbo
+        """Возвраты FBO. Endpoint: POST /v1/returns/list
 
-        Filter обязателен (даже пустой).
+        Старые /v2/returns/company/fbo и /v3/returns/company/fbo помечены как
+        obsolete. Текущий рабочий — /v1/returns/list с filter по типу.
         """
         return await self._request(
             "POST",
-            "/v3/returns/company/fbo",
-            json={"filter": {}, "limit": limit, "offset": offset},
+            "/v1/returns/list",
+            json={
+                "filter": {"return_schema": ["FBO"]},
+                "limit": limit,
+                "offset": offset,
+            },
         )
 
     async def get_fbs_returns(
@@ -520,14 +539,15 @@ class OzonSellerClient:
         offset: int = 0,
         limit: int = 1000,
     ) -> dict:
-        """Возвраты FBS. Endpoint: POST /v3/returns/company/fbs
-
-        Filter обязателен (даже пустой).
-        """
+        """Возвраты FBS. Endpoint: POST /v1/returns/list"""
         return await self._request(
             "POST",
-            "/v3/returns/company/fbs",
-            json={"filter": {}, "limit": limit, "offset": offset},
+            "/v1/returns/list",
+            json={
+                "filter": {"return_schema": ["FBS"]},
+                "limit": limit,
+                "offset": offset,
+            },
         )
 
     async def get_realization(self, *, month: int, year: int) -> dict:
@@ -610,19 +630,18 @@ class OzonSellerClient:
         limit: int = 100,
         filter_: dict | None = None,
     ) -> dict:
-        """Список чатов с покупателями.
+        """Список чатов. Endpoint: POST /v3/chat/list
 
-        Endpoint: POST /v3/chat/list
-        Filter требует валидный chat_status (All / Opened / Closed); пустой
-        фильтр ломается с «Cursor value is incorrect».
+        Ozon v3 chat внутренне зовёт устаревший RPC, который требует поле
+        `cursor` всегда (даже пустую строку); без него отдаёт «Cursor value is
+        incorrect». Передаём `cursor` всегда + базовый filter.
         """
         eff_filter = filter_ or {"chat_status": "All"}
         payload: dict[str, Any] = {
             "limit": limit,
             "filter": eff_filter,
+            "cursor": from_id or "",
         }
-        if from_id:
-            payload["cursor"] = from_id
         return await self._request("POST", "/v3/chat/list", json=payload)
 
     async def get_chat_history(
