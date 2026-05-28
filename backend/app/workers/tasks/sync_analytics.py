@@ -108,13 +108,14 @@ async def _sync_analytics_for_account(
         else:
             date_from = date_to - timedelta(days=days_window)
 
-        # Ozon: «cannot get more than one year» → бьём по 365-дневным окнам.
-        # Берём с запасом 350 дней.
+        # Ozon: «cannot get more than one year» + большие объёмы данных →
+        # бьём по 90-дневным окнам, чтобы каждый чанк помещался в Celery
+        # soft-time-limit и не съедал rate-limit за раз.
         from datetime import timedelta as _td
         year_chunks: list[tuple[date_cls, date_cls]] = []
         cur = date_from
         while cur < date_to:
-            end = min(cur + _td(days=350), date_to)
+            end = min(cur + _td(days=90), date_to)
             year_chunks.append((cur, end))
             cur = end
 

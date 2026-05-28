@@ -503,14 +503,23 @@ async def _load_account(db: AsyncSession, account_id: uuid.UUID) -> OzonAccount 
 
 
 def _parse_dt(value) -> datetime | None:
+    """Парсит datetime из любого формата. Гарантирует timezone-aware (UTC).
+
+    Critical: для строки `2025-01-01` (без времени) fromisoformat вернёт
+    naive datetime → сравнение с `datetime.now(UTC)` упадёт с TypeError.
+    """
     if not value:
         return None
     if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return None
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
 
 
 def _safe_float(value) -> float | None:
