@@ -6,6 +6,7 @@ import { Cabinets } from '@/pages/Cabinets'
 import { CabinetNew } from '@/pages/CabinetNew'
 import { CabinetEdit } from '@/pages/CabinetEdit'
 import { Products } from '@/pages/Products'
+import { Orders } from '@/pages/Orders'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -32,10 +33,11 @@ export default function App() {
         <Route path="/cabinets/new" element={<CabinetNew />} />
         <Route path="/cabinets/:id" element={<CabinetEdit />} />
         <Route path="/products" element={<Products />} />
+        <Route path="/orders" element={<Orders />} />
         <Route path="/settings" element={<Settings />} />
 
         {placeholderItems
-          .filter((item) => item.path !== '/products')
+          .filter((item) => item.path !== '/products' && item.path !== '/orders')
           .map((item) => (
             <Route
               key={item.path}
