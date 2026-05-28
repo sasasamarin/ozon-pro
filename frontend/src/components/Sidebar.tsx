@@ -117,9 +117,25 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
             {NAV_GROUPS.map((group, gi) => (
               <li key={gi} className="flex flex-col gap-0.5">
                 {group.header && (
-                  <div className="px-2.5 pt-4 pb-1.5 text-[10px] font-semibold text-fg-subtle uppercase tracking-wider">
-                    {group.header}
-                  </div>
+                  group.headerPath ? (
+                    <NavLink
+                      to={group.headerPath}
+                      onClick={onMobileClose}
+                      end
+                      className={({ isActive }) =>
+                        cn(
+                          'px-2.5 pt-4 pb-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
+                          isActive ? 'text-fg' : 'text-fg-subtle hover:text-fg'
+                        )
+                      }
+                    >
+                      {group.header}
+                    </NavLink>
+                  ) : (
+                    <div className="px-2.5 pt-4 pb-1.5 text-[10px] font-semibold text-fg-subtle uppercase tracking-wider">
+                      {group.header}
+                    </div>
+                  )
                 )}
                 {group.items.map((item) => (
                   <SidebarItem key={item.path} item={item} onNavigate={onMobileClose} />

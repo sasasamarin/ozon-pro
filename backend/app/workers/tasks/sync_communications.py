@@ -330,10 +330,14 @@ async def _sync_chats_for_account(SessionLocal, account_id: uuid.UUID) -> dict:
             await db.commit()
             return {"status": "success", "rows": stats.processed}
         except OzonAPIError as e:
-            account.status = OzonAccountStatus.ERROR.value
-            account.last_sync_error = str(e)[:500]
-            await db.commit()
-            return {"status": "failed", "error": str(e)}
+            # Soft-fail: /v3/chat/list имеет известный баг Ozon на стороне
+            # сервера ("Cursor value is incorrect"). Не валим статус кабинета —
+            # пишем диагностику в last_chat_sync_error (отдельное поле, не
+            # пересекается с last_sync_error для основных синков). Это
+            # позволяет UI показывать кабинет как active.
+            log.warning("sync_chats_soft_failed", account_id=str(account_id), error=str(e))
+            await db.rollback()
+            return {"status": "failed", "error": str(e), "soft_fail": True}
         except Exception as e:  # noqa: BLE001
             await db.rollback()
             log.exception("sync_failed_unexpected", account_id=str(account_id))

@@ -61,6 +61,11 @@ export interface NavItem {
 export interface NavGroup {
   /** undefined for ungrouped (single item at top) */
   header?: string
+  /** Если заполнено — заголовок секции кликабельный и ведёт по этому пути.
+   *  Используется когда у секции есть "корневая" страница, на которой собрано
+   *  всё содержимое раздела (например /orders), а sub-pages — фильтры/срезы.
+   */
+  headerPath?: string
   items: NavItem[]
 }
 
@@ -186,6 +191,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     header: 'Товары',
+    headerPath: '/products',
     items: [
       {
         path: '/products',
@@ -267,6 +273,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     header: 'Заказы',
+    headerPath: '/orders',
     items: [
       {
         path: '/orders',

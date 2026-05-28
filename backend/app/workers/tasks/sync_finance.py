@@ -30,6 +30,7 @@ from app.core.logging import log
 from app.core.security import decrypt_secret
 from app.models import OzonAccount, OzonAccountStatus, Transaction
 from app.services.ozon_client import OzonAPIError, OzonSellerClient
+from app.services.transaction_classifier import aggregate_services
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
@@ -240,6 +241,8 @@ async def _sync_chunk(
                             if not op_date:
                                 continue
                             posting = op.get("posting") or {}
+                            services_raw = op.get("services")
+                            buckets = aggregate_services(services_raw)
                             rows.append({
                                 "time": op_date,
                                 "ozon_transaction_id": tid,
@@ -252,7 +255,16 @@ async def _sync_chunk(
                                 "sale_commission": _safe_float(op.get("sale_commission")),
                                 "description": op.get("type") or op.get("operation_type_name"),
                                 "posting_number": posting.get("posting_number"),
-                                "services": op.get("services"),
+                                "services": services_raw,
+                                # Разнесённые буckets — для honest P&L breakdown
+                                "delivery_to_customer": buckets["delivery_to_customer"],
+                                "return_logistics":     buckets["return_logistics"],
+                                "last_mile":            buckets["last_mile"],
+                                "storage":              buckets["storage"],
+                                "placement":            buckets["placement"],
+                                "acquiring":            buckets["acquiring"],
+                                "advertising":          buckets["advertising"],
+                                "utilization":          buckets["utilization"],
                                 "raw_data": op,
                             })
                             stats.processed += 1
