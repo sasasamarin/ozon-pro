@@ -32,6 +32,7 @@ celery_app = Celery(
         "app.workers.tasks.sync_marketplace",
         "app.workers.tasks.sync_communications",
         "app.workers.tasks.maintenance",
+        "app.workers.tasks.recompute_recommendations",
     ],
 )
 
@@ -121,6 +122,12 @@ celery_app.conf.beat_schedule = {
     "sync-chats-every-30min": {
         "task": "app.workers.tasks.sync_communications.sync_all_chats",
         "schedule": crontab(minute="*/30"),
+    },
+
+    # === FORECASTING ===
+    "recompute-recommendations-nightly": {
+        "task": "app.workers.tasks.recompute_recommendations.recompute_all",
+        "schedule": crontab(hour=3, minute=30),  # после sync-transactions-daily (3:00)
     },
 
     # === ОБСЛУЖИВАНИЕ ===
