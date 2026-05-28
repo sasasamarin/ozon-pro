@@ -222,59 +222,79 @@ async def _sync_products_for_account(
                 client_id = decrypt_secret(account.client_id_encrypted)
                 api_key = decrypt_secret(account.api_key_encrypted)
                 async with OzonSellerClient(client_id, api_key) as client:
-                    # ---- ШАГ 1: /v3/product/list (visibility=ALL → достаём ВСЁ) ----
-                    last_id = ""
+                    # ---- ШАГ 1: /v3/product/list (visibility=ALL + ARCHIVED) ----
+                    # Ozon-quirk: visibility=ALL НЕ возвращает архивные товары
+                    # (проверено: home-кабинет дал 8 на ALL и 59 на ARCHIVED).
+                    # Поэтому делаем ДВА прохода и объединяем.
                     offer_ids_to_enrich: list[str] = []
-                    while True:
-                        response = await client.get_products(
-                            limit=100,
-                            last_id=last_id,
-                            filter_params={"visibility": "ALL"},
-                        )
-                        items = response.get("result", {}).get("items", [])
-                        if not items:
-                            break
+                    seen_skus: set[int] = set()
 
-                        for item in items:
-                            ozon_sku = item.get("product_id")
-                            if not ozon_sku:
-                                continue
-
-                            existing = await db.execute(
-                                select(Product).where(
-                                    Product.ozon_account_id == account.id,
-                                    Product.ozon_sku == ozon_sku,
-                                )
+                    for vis in ("ALL", "ARCHIVED"):
+                        last_id = ""
+                        page = 0
+                        while True:
+                            page += 1
+                            response = await client.get_products(
+                                limit=100,
+                                last_id=last_id,
+                                filter_params={"visibility": vis},
                             )
-                            product = existing.scalar_one_or_none()
+                            items = response.get("result", {}).get("items", [])
+                            log.info(
+                                "products_page",
+                                account=str(account.id),
+                                visibility=vis,
+                                page=page,
+                                items=len(items),
+                            )
+                            if not items:
+                                break
 
-                            offer_id = item.get("offer_id", "")
-                            name_placeholder = f"SKU {ozon_sku}"
-                            is_archived = bool(item.get("archived") or item.get("is_discounted"))
+                            for item in items:
+                                ozon_sku = item.get("product_id")
+                                if not ozon_sku or ozon_sku in seen_skus:
+                                    continue
+                                seen_skus.add(ozon_sku)
 
-                            if product:
-                                product.offer_id = offer_id
-                                product.is_archived = is_archived
-                                stats.updated += 1
-                            else:
-                                product = Product(
-                                    ozon_account_id=account.id,
-                                    ozon_sku=ozon_sku,
-                                    offer_id=offer_id,
-                                    name=name_placeholder,
-                                    is_archived=is_archived,
-                                    raw_data=item,
+                                existing = await db.execute(
+                                    select(Product).where(
+                                        Product.ozon_account_id == account.id,
+                                        Product.ozon_sku == ozon_sku,
+                                    )
                                 )
-                                db.add(product)
-                                stats.created += 1
-                            stats.processed += 1
+                                product = existing.scalar_one_or_none()
 
-                            if offer_id:
-                                offer_ids_to_enrich.append(offer_id)
+                                offer_id = item.get("offer_id", "")
+                                name_placeholder = f"SKU {ozon_sku}"
+                                # ARCHIVED-проход всегда даёт архивные; на ALL
+                                # архивных нет (см. quirk выше).
+                                is_archived = (vis == "ARCHIVED") or bool(
+                                    item.get("archived") or item.get("is_discounted")
+                                )
 
-                        last_id = response.get("result", {}).get("last_id", "")
-                        if not last_id:
-                            break
+                                if product:
+                                    product.offer_id = offer_id
+                                    product.is_archived = is_archived
+                                    stats.updated += 1
+                                else:
+                                    product = Product(
+                                        ozon_account_id=account.id,
+                                        ozon_sku=ozon_sku,
+                                        offer_id=offer_id,
+                                        name=name_placeholder,
+                                        is_archived=is_archived,
+                                        raw_data=item,
+                                    )
+                                    db.add(product)
+                                    stats.created += 1
+                                stats.processed += 1
+
+                                if offer_id:
+                                    offer_ids_to_enrich.append(offer_id)
+
+                            last_id = response.get("result", {}).get("last_id", "")
+                            if not last_id:
+                                break
 
                     # Сохраняем созданные Product, чтобы enrichment мог их найти.
                     await db.flush()
