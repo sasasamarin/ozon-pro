@@ -322,19 +322,20 @@ async def _fetch_analytics_chunk(
             break
 
         for entry in data:
+            # Ozon-quirk: в `dimensions[].name` НЕ имя dimension'а ("sku" /
+            # "day"), а человеческое имя товара ("Кофемолка ..."). Поэтому
+            # порядок берём как запрашивали в request: dim[0] = sku, dim[1] = day.
             dims = entry.get("dimensions") or []
-            sku_dim = next((d for d in dims if d.get("name") == "sku"), None)
-            day_dim = next((d for d in dims if d.get("name") == "day"), None)
-            if not sku_dim or not day_dim:
+            if len(dims) < 2:
                 continue
             try:
-                ozon_sku = int(sku_dim.get("id", 0))
+                ozon_sku = int(dims[0].get("id", 0))
             except (TypeError, ValueError):
                 continue
             product_id = sku_to_id.get(ozon_sku)
             if not product_id:
                 continue
-            day_value = _parse_date(day_dim.get("id"))
+            day_value = _parse_date(dims[1].get("id"))
             if not day_value:
                 continue
             metric_map = dict(zip(_METRICS, entry.get("metrics", []), strict=False))
