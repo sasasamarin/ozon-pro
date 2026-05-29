@@ -130,9 +130,11 @@ _TYPE_MAP = {
     "SKU": "sku",
     "SEARCH_PROMO": "search_promo",
     "BANNER": "banner",
+    "VIDEO_BANNER": "video_banner",
     "BRAND_SHELF": "brand_shelf",
     "PREMIUM": "brand_shelf",
     "REF_VK": "ref_vk",
+    "GLOBAL_PROMO": "global_promo",
 }
 
 # Модель оплаты по advObjectType — нужно для расчёта ROMI и графика «Реклама→Заказы».
@@ -140,9 +142,11 @@ _PAYMENT_MAP = {
     "SKU": "PER_CLICK",          # трафареты CPC
     "SEARCH_PROMO": "PER_ORDER", # «продвижение в поиске» — CPA
     "BANNER": "CPM",             # баннеры за показы
+    "VIDEO_BANNER": "CPM",
     "BRAND_SHELF": "FIXED",      # брендовая полка фикс
     "PREMIUM": "FIXED",
     "REF_VK": "PER_CLICK",
+    "GLOBAL_PROMO": "FIXED",
 }
 
 

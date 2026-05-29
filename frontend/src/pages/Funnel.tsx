@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
+import { FunnelInsights } from '@/components/FunnelInsights'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
@@ -448,6 +449,9 @@ export function Funnel() {
               <p className="text-fg-muted text-sm text-center py-4">Недостаточно данных для топ-5</p>
             )}
           </Card>
+
+          <FunnelInsights days={days} productId={productId || undefined}
+                          cabinetIds={selectedCabinetIds} />
         </>
       )}
     </div>

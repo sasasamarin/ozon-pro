@@ -12,9 +12,11 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from datetime import date as date_cls, datetime, timedelta, timezone
+
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import OzonAccount, Product, Stock, User
+from app.models import AnalyticsDaily, OzonAccount, Product, Stock, User
 
 router = APIRouter()
 
@@ -227,3 +229,201 @@ async def product_stocks(
         )
         for s in rows.scalars().all()
     ]
+
+
+# =====================================================================
+# КОММИТ 3: Остаток ↔ продажи (для графика «стоимость стокаута»)
+# =====================================================================
+
+
+class StockSalesPoint(BaseModel):
+    date: str
+    stock: int          # суммарный остаток по всем складам на конец дня
+    sales: int          # проданных штук в этот день
+    is_stockout: bool   # stock == 0
+    revenue: float
+
+
+class StockoutPeriod(BaseModel):
+    start: str
+    end: str
+    days: int
+    lost_units_estimate: int
+    lost_revenue_estimate: float
+
+
+class StockSalesResp(BaseModel):
+    product_id: str
+    product_name: str | None
+    period_from: str
+    period_to: str
+    history_days_available: int
+    earliest_stock_date: str | None
+    series: list[StockSalesPoint]
+    stockout_periods: list[StockoutPeriod]
+    total_stockout_days: int
+    total_lost_units: int
+    total_lost_revenue: float
+    avg_daily_velocity_units: float
+    avg_unit_price: float
+
+
+@router.get("/{product_id}/stock-sales", response_model=StockSalesResp)
+async def product_stock_sales(
+    product_id: str,
+    days: int = Query(90, ge=14, le=730),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StockSalesResp:
+    """Остаток + продажи по дням → красные зоны стокаута + цена потерь в рублях."""
+    import uuid as _uuid
+    UTC = timezone.utc
+
+    try:
+        pid = _uuid.UUID(product_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Невалидный product_id")
+
+    # Проверка принадлежности и имя
+    pcheck = (await db.execute(
+        select(Product)
+        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+        .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
+    )).scalar_one_or_none()
+    if not pcheck:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+
+    today = datetime.now(UTC).date()
+    date_from = today - timedelta(days=days)
+
+    # === Самая ранняя дата в stocks для этого товара (для «история X дней»)
+    earliest_row = (await db.execute(
+        select(func.min(Stock.time)).where(Stock.product_id == pid)
+    )).scalar_one_or_none()
+    earliest_date = earliest_row.date() if earliest_row else None
+    if earliest_date:
+        history_days_available = (today - earliest_date).days
+    else:
+        history_days_available = 0
+
+    # === stocks: суммарный остаток на день — берём максимум снапшота за день
+    # (если в день было несколько снапшотов — каждый дублирует все склады,
+    #  поэтому SUM(free_to_sell) при равных warehouse_id будет неверным;
+    #  безопаснее — SUM на максимальный момент дня)
+    stocks_rows = (await db.execute(
+        select(
+            func.date_trunc("day", Stock.time).label("d"),
+            func.sum(Stock.free_to_sell).label("stock"),
+        )
+        .where(
+            Stock.product_id == pid,
+            Stock.time >= datetime.combine(date_from, datetime.min.time(), tzinfo=UTC),
+        )
+        .group_by(func.date_trunc("day", Stock.time), Stock.time)
+        .order_by(func.date_trunc("day", Stock.time))
+    )).all()
+
+    # схлопываем дубликаты по дню — берём минимум остатка (худший момент дня)
+    stock_by_day: dict[str, int] = {}
+    for r in stocks_rows:
+        day = r.d.date().isoformat()
+        val = int(r.stock or 0)
+        if day in stock_by_day:
+            stock_by_day[day] = min(stock_by_day[day], val)
+        else:
+            stock_by_day[day] = val
+
+    # === продажи по дням
+    sales_rows = (await db.execute(
+        select(
+            AnalyticsDaily.date.label("d"),
+            func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("sales"),
+            func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
+        )
+        .where(
+            AnalyticsDaily.product_id == pid,
+            AnalyticsDaily.date >= date_from,
+        )
+        .group_by(AnalyticsDaily.date)
+        .order_by(AnalyticsDaily.date)
+    )).all()
+    sales_by_day = {r.d.isoformat(): (int(r.sales or 0), float(r.revenue or 0)) for r in sales_rows}
+
+    # === собираем единый ряд по диапазону days
+    series: list[StockSalesPoint] = []
+    last_known_stock = 0
+    for i in range(days + 1):
+        day = (date_from + timedelta(days=i)).isoformat()
+        if day in stock_by_day:
+            last_known_stock = stock_by_day[day]
+            stock_today = stock_by_day[day]
+            has_stock_snapshot = True
+        else:
+            # forward-fill последнее известное значение
+            stock_today = last_known_stock
+            has_stock_snapshot = False
+        sales, rev = sales_by_day.get(day, (0, 0.0))
+        series.append(StockSalesPoint(
+            date=day, stock=stock_today, sales=sales,
+            is_stockout=(stock_today == 0 and has_stock_snapshot),
+            revenue=round(rev, 2),
+        ))
+
+    # === velocity и средняя цена (на основе дней когда товар БЫЛ в наличии)
+    in_stock_days = [p for p in series if p.stock > 0 and p.sales > 0]
+    if in_stock_days:
+        total_sales_units = sum(p.sales for p in in_stock_days)
+        total_revenue_in_stock = sum(p.revenue for p in in_stock_days)
+        avg_velocity = total_sales_units / len(in_stock_days)
+        avg_price = total_revenue_in_stock / total_sales_units if total_sales_units else 0
+    else:
+        avg_velocity = 0
+        avg_price = 0
+
+    # === зоны стокаута: непрерывные is_stockout=True
+    stockout_periods: list[StockoutPeriod] = []
+    cur_start: str | None = None
+    cur_days = 0
+    for p in series:
+        if p.is_stockout:
+            if cur_start is None:
+                cur_start = p.date
+            cur_days += 1
+        else:
+            if cur_start is not None:
+                lost_u = int(round(cur_days * avg_velocity))
+                lost_r = round(lost_u * avg_price, 2)
+                stockout_periods.append(StockoutPeriod(
+                    start=cur_start,
+                    end=(date_cls.fromisoformat(p.date) - timedelta(days=1)).isoformat(),
+                    days=cur_days, lost_units_estimate=lost_u, lost_revenue_estimate=lost_r,
+                ))
+                cur_start = None
+                cur_days = 0
+    if cur_start is not None:
+        lost_u = int(round(cur_days * avg_velocity))
+        lost_r = round(lost_u * avg_price, 2)
+        stockout_periods.append(StockoutPeriod(
+            start=cur_start, end=series[-1].date,
+            days=cur_days, lost_units_estimate=lost_u, lost_revenue_estimate=lost_r,
+        ))
+
+    total_stockout_days = sum(p.days for p in stockout_periods)
+    total_lost_units = sum(p.lost_units_estimate for p in stockout_periods)
+    total_lost_revenue = round(sum(p.lost_revenue_estimate for p in stockout_periods), 2)
+
+    return StockSalesResp(
+        product_id=str(pid),
+        product_name=pcheck.name,
+        period_from=date_from.isoformat(),
+        period_to=today.isoformat(),
+        history_days_available=history_days_available,
+        earliest_stock_date=earliest_date.isoformat() if earliest_date else None,
+        series=series,
+        stockout_periods=stockout_periods,
+        total_stockout_days=total_stockout_days,
+        total_lost_units=total_lost_units,
+        total_lost_revenue=total_lost_revenue,
+        avg_daily_velocity_units=round(avg_velocity, 2),
+        avg_unit_price=round(avg_price, 2),
+    )

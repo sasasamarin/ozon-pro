@@ -12,6 +12,7 @@ import {
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { StockSalesChart } from '@/components/StockSalesChart'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 
@@ -202,6 +203,8 @@ export function ProductDetail() {
           </div>
         </Card>
       )}
+
+      <StockSalesChart productId={id!} />
     </div>
   )
 }
