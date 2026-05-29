@@ -52,17 +52,26 @@ class FunnelV2Resp(BaseModel):
 class FunnelDailyPoint(BaseModel):
     date: str
     impressions: int
+    impressions_search: int
+    impressions_pdp: int
     to_cart: int
+    to_cart_search: int
+    to_cart_pdp: int
     orders: int
     delivered: int
+    returns: int
+    revenue: float
     overall_conv_pct: float | None
+    cart_conv_pct: float | None
+    order_conv_pct: float | None
+    delivery_conv_pct: float | None
 
 
 class BestWorstDay(BaseModel):
     date: str
-    impressions: int
-    delivered: int
-    overall_conv_pct: float
+    from_value: int
+    to_value: int
+    conv_pct: float
     revenue: float
 
 
@@ -226,10 +235,14 @@ async def get_funnel_daily(
     rows = (await db.execute(
         select(
             AnalyticsDaily.date.label("d"),
-            func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
-            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
+            func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp_s"),
+            func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("imp_p"),
+            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search), 0).label("cart_s"),
+            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart_p"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
             func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
+            func.coalesce(func.sum(AnalyticsDaily.returns), 0).label("returns_"),
+            func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
         )
         .select_from(AnalyticsDaily)
         .join(Product, Product.id == AnalyticsDaily.product_id)
@@ -238,33 +251,65 @@ async def get_funnel_daily(
         .order_by("d")
     )).all()
 
-    return [
-        FunnelDailyPoint(
+    out: list[FunnelDailyPoint] = []
+    for r in rows:
+        imp_s = int(r.imp_s or 0)
+        imp_p = int(r.imp_p or 0)
+        imp = imp_s + imp_p
+        cart_s = int(r.cart_s or 0)
+        cart_p = int(r.cart_p or 0)
+        cart = cart_s + cart_p
+        orders = int(r.orders or 0)
+        deliv = int(r.deliv or 0)
+        out.append(FunnelDailyPoint(
             date=r.d.isoformat(),
-            impressions=int(r.imp or 0),
-            to_cart=int(r.cart or 0),
-            orders=int(r.orders or 0),
-            delivered=int(r.deliv or 0),
-            overall_conv_pct=_safe_pct(int(r.deliv or 0), int(r.imp or 0)),
-        )
-        for r in rows
-    ]
+            impressions=imp,
+            impressions_search=imp_s,
+            impressions_pdp=imp_p,
+            to_cart=cart,
+            to_cart_search=cart_s,
+            to_cart_pdp=cart_p,
+            orders=orders,
+            delivered=deliv,
+            returns=int(r.returns_ or 0),
+            revenue=float(r.revenue or 0),
+            overall_conv_pct=_safe_pct(deliv, imp),
+            cart_conv_pct=_safe_pct(cart, imp),
+            order_conv_pct=_safe_pct(orders, cart),
+            delivery_conv_pct=_safe_pct(deliv, orders),
+        ))
+    return out
 
 
 @router.get("/best-worst-days", response_model=dict)
 async def best_worst_days(
     days: int = Query(90, ge=7, le=365),
+    metric: str = Query("overall", description="overall|cart|order|delivery"),
     product_id: str | None = Query(None),
     cabinet_ids: list[uuid.UUID] | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    """Лучшие/худшие дни. metric:
+      overall  — показ → доставка
+      cart     — показ → корзина
+      order    — корзина → заказ
+      delivery — заказ → выкуп
+    """
     today = datetime.now(UTC).date()
     date_from = today - timedelta(days=days)
 
+    label_map = {
+        "cart":     ("Показы",  "В корзину"),
+        "order":    ("Корзина", "Заказы"),
+        "delivery": ("Заказы",  "Доставлено"),
+        "overall":  ("Показы",  "Доставлено"),
+    }
+    from_label, to_label = label_map.get(metric, label_map["overall"])
+
     accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
     if not accs:
-        return {"best": [], "worst": []}
+        return {"best": [], "worst": [], "metric": metric, "from_label": from_label, "to_label": to_label}
 
     pid: uuid.UUID | None = None
     if product_id:
@@ -280,10 +325,12 @@ async def best_worst_days(
     if pid:
         where.append(AnalyticsDaily.product_id == pid)
 
-    q = (
+    rows = (await db.execute(
         select(
             AnalyticsDaily.date.label("d"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
+            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
+            func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
             func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
             func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
         )
@@ -291,25 +338,44 @@ async def best_worst_days(
         .join(Product, Product.id == AnalyticsDaily.product_id)
         .where(*where)
         .group_by("d")
-        .having(func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0) >= 100)
-    )
-    rows = (await db.execute(q)).all()
+    )).all()
 
-    items = [
-        BestWorstDay(
-            date=r.d.isoformat(),
-            impressions=int(r.imp or 0),
-            delivered=int(r.deliv or 0),
-            overall_conv_pct=_safe_pct(int(r.deliv or 0), int(r.imp or 0)) or 0,
-            revenue=float(r.revenue or 0),
-        )
-        for r in rows
-    ]
-    items.sort(key=lambda x: x.overall_conv_pct, reverse=True)
+    def pick(r) -> BestWorstDay | None:
+        imp = int(r.imp or 0)
+        cart = int(r.cart or 0)
+        orders = int(r.orders or 0)
+        deliv = int(r.deliv or 0)
+        revenue = float(r.revenue or 0)
+        if metric == "cart":
+            if imp < 100:
+                return None
+            return BestWorstDay(date=r.d.isoformat(), from_value=imp, to_value=cart,
+                                conv_pct=_safe_pct(cart, imp) or 0, revenue=revenue)
+        if metric == "order":
+            if cart < 20:
+                return None
+            return BestWorstDay(date=r.d.isoformat(), from_value=cart, to_value=orders,
+                                conv_pct=_safe_pct(orders, cart) or 0, revenue=revenue)
+        if metric == "delivery":
+            if orders < 5:
+                return None
+            return BestWorstDay(date=r.d.isoformat(), from_value=orders, to_value=deliv,
+                                conv_pct=_safe_pct(deliv, orders) or 0, revenue=revenue)
+        # overall
+        if imp < 100:
+            return None
+        return BestWorstDay(date=r.d.isoformat(), from_value=imp, to_value=deliv,
+                            conv_pct=_safe_pct(deliv, imp) or 0, revenue=revenue)
+
+    items = [p for r in rows if (p := pick(r))]
+    items.sort(key=lambda x: x.conv_pct, reverse=True)
     best = items[:5]
-    worst = sorted(items, key=lambda x: x.overall_conv_pct)[:5]
+    worst = sorted(items, key=lambda x: x.conv_pct)[:5]
 
     return {
         "best": [b.dict() for b in best],
         "worst": [w.dict() for w in worst],
+        "metric": metric,
+        "from_label": from_label,
+        "to_label": to_label,
     }

@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Eye, ShoppingCart, ShoppingBag, CheckCircle2,
   ArrowUpRight, ArrowDownRight, Filter, Loader2,
-  Image as ImageIcon, Search, Calendar,
+  Image as ImageIcon, Search,
   TrendingUp, TrendingDown,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
@@ -38,18 +38,35 @@ interface FunnelV2Resp {
 interface FunnelDaily {
   date: string
   impressions: number
+  impressions_search: number
+  impressions_pdp: number
   to_cart: number
+  to_cart_search: number
+  to_cart_pdp: number
   orders: number
   delivered: number
+  returns: number
+  revenue: number
   overall_conv_pct: number | null
+  cart_conv_pct: number | null
+  order_conv_pct: number | null
+  delivery_conv_pct: number | null
 }
 
 interface BestWorstDay {
   date: string
-  impressions: number
-  delivered: number
-  overall_conv_pct: number
+  from_value: number
+  to_value: number
+  conv_pct: number
   revenue: number
+}
+
+interface BestWorstResp {
+  best: BestWorstDay[]
+  worst: BestWorstDay[]
+  metric: string
+  from_label: string
+  to_label: string
 }
 
 interface ProductLite {
@@ -59,8 +76,6 @@ interface ProductLite {
   image_url: string | null
 }
 
-const STEP_ICONS = [Eye, ShoppingCart, ShoppingBag, CheckCircle2]
-
 const PRESETS = [
   { key: '7', label: '7 дней' },
   { key: '30', label: '30 дней' },
@@ -69,7 +84,24 @@ const PRESETS = [
   { key: '514', label: '17 мес' },
 ]
 
-type DrillType = 'impressions' | 'to_cart' | 'orders' | 'delivered' | null
+type DrillStep = 'impressions' | 'to_cart' | 'orders' | 'delivered' | null
+type BWMetric = 'overall' | 'cart' | 'order' | 'delivery'
+
+const DRILL_TITLES: Record<Exclude<DrillStep, null>, string> = {
+  impressions: 'Детализация: Показы по дням',
+  to_cart: 'Детализация: В корзину по дням',
+  orders: 'Детализация: Заказы по дням',
+  delivered: 'Детализация: Доставлено по дням',
+}
+
+const BW_LABELS: Record<BWMetric, string> = {
+  overall: 'Сквозная (Показ → Доставка)',
+  cart: 'В корзину (Показ → Корзина)',
+  order: 'В заказ (Корзина → Заказ)',
+  delivery: 'Выкуп (Заказ → Доставка)',
+}
+
+const formatDate = (s: string) => new Date(s).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
 
 export function Funnel() {
   const { selectedCabinetIds } = useCabinetStore()
@@ -80,7 +112,8 @@ export function Funnel() {
   const productId = params.get('p') || ''
   const compare = (params.get('cmp') || 'prev_period') as 'none' | 'prev_period' | 'year_ago'
   const [productSearch, setProductSearch] = useState('')
-  const [drillStep, setDrillStep] = useState<DrillType>(null)
+  const [drillStep, setDrillStep] = useState<DrillStep>(null)
+  const [bwMetric, setBwMetric] = useState<BWMetric>('overall')
 
   const updateParam = (k: string, v: string | undefined) => {
     const p = new URLSearchParams(params)
@@ -88,30 +121,24 @@ export function Funnel() {
     setParams(p, { replace: true })
   }
 
-  // Список продуктов (для селектора)
   const { data: products } = useQuery<ProductLite[]>({
     queryKey: ['products', 'lite'],
     queryFn: async () => {
-      const all = (await api.get('/products/')).data as Array<{ id: string; name: string; offer_id: string; image_url: string | null }>
-      return all.map((p) => ({ id: p.id, name: p.name, offer_id: p.offer_id, image_url: p.image_url }))
+      const all = (await api.get('/products/')).data as ProductLite[]
+      return all
     },
   })
-
-  const selectedProduct = useMemo(
-    () => (products || []).find((p) => p.id === productId),
-    [products, productId],
-  )
 
   const filteredProducts = useMemo(() => {
     if (!products) return []
     const s = productSearch.trim().toLowerCase()
-    if (!s) return products.slice(0, 20)
-    return products
-      .filter((p) => p.name.toLowerCase().includes(s) || p.offer_id.toLowerCase().includes(s))
-      .slice(0, 20)
+    return (s
+      ? products.filter((p) => p.name.toLowerCase().includes(s) || p.offer_id.toLowerCase().includes(s))
+      : products
+    ).slice(0, 20)
   }, [products, productSearch])
 
-  const { data, isLoading } = useQuery<FunnelV2Resp>({
+  const { data, isLoading, isFetching } = useQuery<FunnelV2Resp>({
     queryKey: ['funnel-v2', selectedCabinetIds, days, productId, compare],
     queryFn: async () => {
       const p = new URLSearchParams({ days: String(days), compare })
@@ -121,7 +148,7 @@ export function Funnel() {
     },
   })
 
-  const { data: daily } = useQuery<FunnelDaily[]>({
+  const { data: daily, isFetching: dailyLoading } = useQuery<FunnelDaily[]>({
     queryKey: ['funnel-v2', 'daily', selectedCabinetIds, days, productId],
     queryFn: async () => {
       const p = new URLSearchParams({ days: String(days) })
@@ -132,10 +159,10 @@ export function Funnel() {
     enabled: drillStep !== null,
   })
 
-  const { data: bestWorst } = useQuery<{ best: BestWorstDay[]; worst: BestWorstDay[] }>({
-    queryKey: ['funnel-v2', 'bw', selectedCabinetIds, days, productId],
+  const { data: bestWorst } = useQuery<BestWorstResp>({
+    queryKey: ['funnel-v2', 'bw', selectedCabinetIds, days, productId, bwMetric],
     queryFn: async () => {
-      const p = new URLSearchParams({ days: String(days) })
+      const p = new URLSearchParams({ days: String(days), metric: bwMetric })
       if (productId) p.append('product_id', productId)
       selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
       return (await api.get(`/analytics/funnel/v2/best-worst-days?${p.toString()}`)).data
@@ -152,10 +179,10 @@ export function Funnel() {
   const steps = useMemo(() => {
     if (!kpi) return []
     return [
-      { key: 'impressions' as const, label: 'Показы', value: kpi.impressions, conv: null },
-      { key: 'to_cart' as const, label: 'В корзину', value: kpi.to_cart, conv: kpi.cart_conv_pct },
-      { key: 'orders' as const, label: 'Заказы', value: kpi.orders, conv: kpi.order_conv_pct },
-      { key: 'delivered' as const, label: 'Доставлено', value: kpi.delivered, conv: kpi.delivery_conv_pct },
+      { key: 'impressions' as const, label: 'Показы', value: kpi.impressions, conv: null,        color: 'bg-indigo-400' },
+      { key: 'to_cart'     as const, label: 'В корзину', value: kpi.to_cart, conv: kpi.cart_conv_pct,     color: 'bg-violet-400' },
+      { key: 'orders'      as const, label: 'Заказы',    value: kpi.orders,  conv: kpi.order_conv_pct,    color: 'bg-emerald-400' },
+      { key: 'delivered'   as const, label: 'Доставлено', value: kpi.delivered, conv: kpi.delivery_conv_pct, color: 'bg-amber-400' },
     ]
   }, [kpi])
 
@@ -168,16 +195,23 @@ export function Funnel() {
         </p>
       </div>
 
-      {/* === TOOLBAR === */}
+      {/* === TOOLBAR с спиннером при загрузке === */}
       <Card className="p-3 flex flex-wrap items-center gap-2">
-        {PRESETS.map((p) => (
-          <button key={p.key} onClick={() => updateParam('days', p.key)} className={cn(
-            'px-3 py-1.5 rounded-md text-xs border transition-colors',
-            String(days) === p.key ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-          )}>
-            {p.label}
-          </button>
-        ))}
+        {PRESETS.map((p) => {
+          const active = String(days) === p.key
+          return (
+            <button key={p.key} onClick={() => updateParam('days', p.key)}
+              disabled={isFetching}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-xs border transition-colors inline-flex items-center gap-1.5',
+                active ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
+                isFetching && 'opacity-60 cursor-wait',
+              )}>
+              {active && isFetching && <Loader2 className="w-3 h-3 animate-spin" />}
+              {p.label}
+            </button>
+          )
+        })}
         <div className="w-px h-5 bg-border-subtle mx-2" />
         <span className="text-xs text-fg-muted">Сравнение:</span>
         {([
@@ -226,9 +260,9 @@ export function Funnel() {
         </div>
       </Card>
 
-      {/* === KPI ROW === */}
+      {/* === KPI + STEPS (skeleton при первой загрузке, dim при перезапросе) === */}
       {isLoading ? (
-        <Card className="py-16 flex justify-center"><Loader2 className="w-5 h-5 animate-spin" /></Card>
+        <FunnelSkeleton />
       ) : !data?.has_data ? (
         <Card className="py-12 flex flex-col items-center text-fg-muted text-sm">
           <Filter className="w-8 h-8 mb-2 text-fg-subtle" />
@@ -236,7 +270,7 @@ export function Funnel() {
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className={cn('grid grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity', isFetching && 'opacity-50')}>
             <ConvCard label="Сквозная" curr={kpi!.overall_conv_pct} prev={prev?.overall_conv_pct} />
             <ConvCard label="В корзину" curr={kpi!.cart_conv_pct} prev={prev?.cart_conv_pct} />
             <ConvCard label="Корзина → заказ" curr={kpi!.order_conv_pct} prev={prev?.order_conv_pct} />
@@ -244,21 +278,20 @@ export function Funnel() {
           </div>
 
           {/* === STEPS === */}
-          <Card className="p-5">
+          <Card className={cn('p-5 transition-opacity', isFetching && 'opacity-50')}>
             <div className="flex justify-between mb-4">
               <h2 className="text-base font-semibold text-fg">Шаги воронки</h2>
-              <p className="text-xs text-fg-muted">кликни на шаг → детализация по дням</p>
+              <p className="text-xs text-fg-muted">кликни на шаг → детализация по дням ниже</p>
             </div>
             <div className="flex flex-col gap-3">
               {steps.map((step, idx) => {
-                const Icon = STEP_ICONS[idx]
+                const Icon = [Eye, ShoppingCart, ShoppingBag, CheckCircle2][idx]
                 const width = Math.max(2, (step.value / maxValue) * 100)
-                const colors = ['bg-indigo-400', 'bg-violet-400', 'bg-emerald-400', 'bg-amber-400']
                 const isActive = drillStep === step.key
                 return (
                   <button key={step.key} onClick={() => setDrillStep(isActive ? null : step.key)}
                     className={cn(
-                      'flex items-center gap-3 group',
+                      'flex items-center gap-3 group text-left',
                       isActive && 'ring-2 ring-fg/20 rounded-lg p-2 -m-2',
                     )}
                   >
@@ -271,10 +304,10 @@ export function Funnel() {
                         <span className="text-lg font-semibold text-fg tabular-nums">{formatNumber(step.value)}</span>
                       </div>
                       <div className="relative h-3 rounded-full bg-bg-subtle overflow-hidden">
-                        <div className={cn('h-full rounded-full transition-all', colors[idx])} style={{ width: `${width}%` }} />
+                        <div className={cn('h-full rounded-full transition-all', step.color)} style={{ width: `${width}%` }} />
                       </div>
                       {step.conv != null && idx > 0 && (
-                        <div className="text-[11px] text-fg-muted mt-1 text-left">
+                        <div className="text-[11px] text-fg-muted mt-1">
                           от предыдущего: <strong className="text-fg">{step.conv}%</strong>
                         </div>
                       )}
@@ -285,82 +318,259 @@ export function Funnel() {
             </div>
           </Card>
 
-          {/* === DRILL-DOWN === */}
-          {drillStep && (daily?.length ?? 0) > 0 && (
+          {/* === DRILL-DOWN: разная таблица для каждого шага === */}
+          {drillStep && (
             <Card className="p-5">
-              <h3 className="text-base font-semibold text-fg mb-3">
-                Drill-down: {drillStep} по дням
-              </h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-bg-subtle/50">
-                    <tr className="text-left text-xs text-fg-muted uppercase">
-                      <th className="py-2 px-3">дата</th>
-                      <th className="py-2 px-3 text-right">показы</th>
-                      <th className="py-2 px-3 text-right">в корзину</th>
-                      <th className="py-2 px-3 text-right">заказы</th>
-                      <th className="py-2 px-3 text-right">доставлено</th>
-                      <th className="py-2 px-3 text-right">сквозная</th>
-                      <th className="py-2 px-3"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-subtle">
-                    {daily!.slice().reverse().slice(0, 30).map((d) => (
-                      <tr key={d.date} className="hover:bg-bg-subtle/40 cursor-pointer"
-                        onClick={() => navigate(`/orders?date_from=${d.date}&date_to=${d.date}`)}
-                      >
-                        <td className="py-2 px-3 font-mono text-xs">{d.date}</td>
-                        <td className="py-2 px-3 text-right tabular-nums">{formatNumber(d.impressions)}</td>
-                        <td className="py-2 px-3 text-right tabular-nums">{formatNumber(d.to_cart)}</td>
-                        <td className="py-2 px-3 text-right tabular-nums">{formatNumber(d.orders)}</td>
-                        <td className="py-2 px-3 text-right tabular-nums">{formatNumber(d.delivered)}</td>
-                        <td className="py-2 px-3 text-right tabular-nums font-semibold">
-                          {d.overall_conv_pct != null ? `${d.overall_conv_pct}%` : '—'}
-                        </td>
-                        <td className="py-2 px-3 text-fg-subtle text-xs">→ заказы</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <h3 className="text-base font-semibold text-fg mb-3">{DRILL_TITLES[drillStep]}</h3>
+              {dailyLoading && (daily?.length ?? 0) === 0 ? (
+                <div className="py-8 flex justify-center"><Loader2 className="w-5 h-5 animate-spin" /></div>
+              ) : (daily?.length ?? 0) === 0 ? (
+                <p className="text-fg-muted text-sm">Нет данных за период</p>
+              ) : (
+                <DrillTable step={drillStep} rows={(daily || []).slice().reverse().slice(0, 60)}
+                  onRowClick={(d) => navigate(`/orders?date_from=${d}&date_to=${d}`)} />
+              )}
             </Card>
           )}
 
-          {/* === BEST/WORST DAYS === */}
-          {bestWorst && (bestWorst.best.length > 0 || bestWorst.worst.length > 0) && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <Card className="p-5">
-                <h3 className="text-base font-semibold text-emerald-700 flex items-center gap-2 mb-3">
-                  <TrendingUp className="w-4 h-4" /> Лучшие дни по конверсии
-                </h3>
-                <ul className="text-sm divide-y divide-border-subtle">
-                  {bestWorst.best.map((d) => (
-                    <li key={d.date} className="py-2 flex justify-between">
-                      <span className="font-mono text-xs">{d.date}</span>
-                      <span className="text-emerald-700 font-semibold tabular-nums">{d.overall_conv_pct}%</span>
-                      <span className="text-fg-muted tabular-nums">{formatNumber(d.impressions)} показов</span>
-                    </li>
-                  ))}
-                </ul>
-              </Card>
-              <Card className="p-5">
-                <h3 className="text-base font-semibold text-rose-700 flex items-center gap-2 mb-3">
-                  <TrendingDown className="w-4 h-4" /> Худшие дни по конверсии
-                </h3>
-                <ul className="text-sm divide-y divide-border-subtle">
-                  {bestWorst.worst.map((d) => (
-                    <li key={d.date} className="py-2 flex justify-between">
-                      <span className="font-mono text-xs">{d.date}</span>
-                      <span className="text-rose-700 font-semibold tabular-nums">{d.overall_conv_pct}%</span>
-                      <span className="text-fg-muted tabular-nums">{formatNumber(d.impressions)} показов</span>
-                    </li>
-                  ))}
-                </ul>
-              </Card>
+          {/* === BEST/WORST DAYS с переключателем метрики === */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-fg">Лучшие и худшие дни</h3>
+                <p className="text-xs text-fg-muted mt-0.5">{BW_LABELS[bwMetric]}</p>
+              </div>
+              <div className="flex gap-1.5">
+                {(['overall', 'cart', 'order', 'delivery'] as const).map((m) => (
+                  <button key={m} onClick={() => setBwMetric(m)} className={cn(
+                    'px-2.5 py-1 rounded text-xs border',
+                    bwMetric === m ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+                  )}>
+                    {m === 'overall' ? 'Сквозная' : m === 'cart' ? 'В корзину' : m === 'order' ? 'В заказ' : 'Выкуп'}
+                  </button>
+                ))}
+              </div>
             </div>
-          )}
+            {bestWorst && (bestWorst.best.length > 0 || bestWorst.worst.length > 0) ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <BWTable title="Лучшие" Icon={TrendingUp} iconColor="text-emerald-700"
+                  rows={bestWorst.best} from_label={bestWorst.from_label} to_label={bestWorst.to_label}
+                  highlightColor="text-emerald-700" />
+                <BWTable title="Худшие" Icon={TrendingDown} iconColor="text-rose-700"
+                  rows={bestWorst.worst} from_label={bestWorst.from_label} to_label={bestWorst.to_label}
+                  highlightColor="text-rose-700" />
+              </div>
+            ) : (
+              <p className="text-fg-muted text-sm text-center py-4">Недостаточно данных для топ-5</p>
+            )}
+          </Card>
         </>
       )}
+    </div>
+  )
+}
+
+function FunnelSkeleton() {
+  return (
+    <>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[1, 2, 3, 4].map((i) => (
+          <Card key={i} className="p-4">
+            <div className="h-3 w-24 bg-bg-subtle rounded animate-pulse mb-2" />
+            <div className="h-6 w-16 bg-bg-subtle rounded animate-pulse" />
+          </Card>
+        ))}
+      </div>
+      <Card className="p-5">
+        <div className="h-4 w-32 bg-bg-subtle rounded animate-pulse mb-4" />
+        <div className="flex flex-col gap-3">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-bg-subtle animate-pulse shrink-0" />
+              <div className="flex-1">
+                <div className="h-4 w-32 bg-bg-subtle rounded animate-pulse mb-2" />
+                <div className="h-3 w-full bg-bg-subtle rounded animate-pulse" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </>
+  )
+}
+
+function DrillTable({
+  step, rows, onRowClick,
+}: {
+  step: Exclude<DrillStep, null>
+  rows: FunnelDaily[]
+  onRowClick: (date: string) => void
+}) {
+  if (step === 'impressions') {
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-bg-subtle/50">
+            <tr className="text-left text-xs text-fg-muted uppercase">
+              <th className="py-2 px-3">дата</th>
+              <th className="py-2 px-3 text-right">всего</th>
+              <th className="py-2 px-3 text-right">поиск</th>
+              <th className="py-2 px-3 text-right">карточка</th>
+              <th className="py-2 px-3 text-right">доля поиска</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border-subtle">
+            {rows.map((r) => {
+              const sharePoisk = r.impressions > 0 ? (r.impressions_search / r.impressions) * 100 : 0
+              return (
+                <tr key={r.date} className="hover:bg-bg-subtle/40 cursor-pointer" onClick={() => onRowClick(r.date)}>
+                  <td className="py-2 px-3 font-mono text-xs">{formatDate(r.date)}</td>
+                  <td className="py-2 px-3 text-right tabular-nums font-semibold">{formatNumber(r.impressions)}</td>
+                  <td className="py-2 px-3 text-right tabular-nums">{formatNumber(r.impressions_search)}</td>
+                  <td className="py-2 px-3 text-right tabular-nums">{formatNumber(r.impressions_pdp)}</td>
+                  <td className="py-2 px-3 text-right tabular-nums text-fg-muted">{sharePoisk.toFixed(1)}%</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+  if (step === 'to_cart') {
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-bg-subtle/50">
+            <tr className="text-left text-xs text-fg-muted uppercase">
+              <th className="py-2 px-3">дата</th>
+              <th className="py-2 px-3 text-right">показы</th>
+              <th className="py-2 px-3 text-right">в корзину</th>
+              <th className="py-2 px-3 text-right">из поиска</th>
+              <th className="py-2 px-3 text-right">с карточки</th>
+              <th className="py-2 px-3 text-right">конверсия в корзину</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border-subtle">
+            {rows.map((r) => (
+              <tr key={r.date} className="hover:bg-bg-subtle/40 cursor-pointer" onClick={() => onRowClick(r.date)}>
+                <td className="py-2 px-3 font-mono text-xs">{formatDate(r.date)}</td>
+                <td className="py-2 px-3 text-right tabular-nums">{formatNumber(r.impressions)}</td>
+                <td className="py-2 px-3 text-right tabular-nums font-semibold">{formatNumber(r.to_cart)}</td>
+                <td className="py-2 px-3 text-right tabular-nums text-fg-muted">{formatNumber(r.to_cart_search)}</td>
+                <td className="py-2 px-3 text-right tabular-nums text-fg-muted">{formatNumber(r.to_cart_pdp)}</td>
+                <td className="py-2 px-3 text-right tabular-nums font-semibold">
+                  {r.cart_conv_pct != null ? `${r.cart_conv_pct}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+  if (step === 'orders') {
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-bg-subtle/50">
+            <tr className="text-left text-xs text-fg-muted uppercase">
+              <th className="py-2 px-3">дата</th>
+              <th className="py-2 px-3 text-right">в корзину</th>
+              <th className="py-2 px-3 text-right">заказы шт</th>
+              <th className="py-2 px-3 text-right">выручка</th>
+              <th className="py-2 px-3 text-right">конверсия в заказ</th>
+              <th className="py-2 px-3 text-right">ср. чек</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border-subtle">
+            {rows.map((r) => {
+              const aov = r.orders > 0 ? r.revenue / r.orders : 0
+              return (
+                <tr key={r.date} className="hover:bg-bg-subtle/40 cursor-pointer" onClick={() => onRowClick(r.date)}>
+                  <td className="py-2 px-3 font-mono text-xs">{formatDate(r.date)}</td>
+                  <td className="py-2 px-3 text-right tabular-nums">{formatNumber(r.to_cart)}</td>
+                  <td className="py-2 px-3 text-right tabular-nums font-semibold">{formatNumber(r.orders)}</td>
+                  <td className="py-2 px-3 text-right tabular-nums">{formatCurrency(r.revenue)}</td>
+                  <td className="py-2 px-3 text-right tabular-nums font-semibold">
+                    {r.order_conv_pct != null ? `${r.order_conv_pct}%` : '—'}
+                  </td>
+                  <td className="py-2 px-3 text-right tabular-nums text-fg-muted">{formatCurrency(aov)}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+  // delivered
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="bg-bg-subtle/50">
+          <tr className="text-left text-xs text-fg-muted uppercase">
+            <th className="py-2 px-3">дата</th>
+            <th className="py-2 px-3 text-right">заказы</th>
+            <th className="py-2 px-3 text-right">доставлено</th>
+            <th className="py-2 px-3 text-right">возвраты</th>
+            <th className="py-2 px-3 text-right">выкуп %</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-subtle">
+          {rows.map((r) => (
+            <tr key={r.date} className="hover:bg-bg-subtle/40 cursor-pointer" onClick={() => onRowClick(r.date)}>
+              <td className="py-2 px-3 font-mono text-xs">{formatDate(r.date)}</td>
+              <td className="py-2 px-3 text-right tabular-nums">{formatNumber(r.orders)}</td>
+              <td className="py-2 px-3 text-right tabular-nums font-semibold">{formatNumber(r.delivered)}</td>
+              <td className="py-2 px-3 text-right tabular-nums text-rose-700">{formatNumber(r.returns)}</td>
+              <td className="py-2 px-3 text-right tabular-nums font-semibold">
+                {r.delivery_conv_pct != null ? `${r.delivery_conv_pct}%` : '—'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function BWTable({
+  title, Icon, iconColor, rows, from_label, to_label, highlightColor,
+}: {
+  title: string
+  Icon: React.ComponentType<{ className?: string }>
+  iconColor: string
+  rows: BestWorstDay[]
+  from_label: string
+  to_label: string
+  highlightColor: string
+}) {
+  return (
+    <div>
+      <h4 className={cn('text-base font-semibold flex items-center gap-2 mb-3', iconColor)}>
+        <Icon className="w-4 h-4" /> {title}
+      </h4>
+      <table className="w-full text-sm">
+        <thead className="bg-bg-subtle/50">
+          <tr className="text-left text-xs text-fg-muted uppercase">
+            <th className="py-2 px-2.5">дата</th>
+            <th className="py-2 px-2.5 text-right">{from_label}</th>
+            <th className="py-2 px-2.5 text-right">{to_label}</th>
+            <th className="py-2 px-2.5 text-right">конверсия</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-subtle">
+          {rows.map((d) => (
+            <tr key={d.date}>
+              <td className="py-2 px-2.5 font-mono text-xs">{formatDate(d.date)}</td>
+              <td className="py-2 px-2.5 text-right tabular-nums">{formatNumber(d.from_value)}</td>
+              <td className="py-2 px-2.5 text-right tabular-nums">{formatNumber(d.to_value)}</td>
+              <td className={cn('py-2 px-2.5 text-right tabular-nums font-semibold', highlightColor)}>{d.conv_pct}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
