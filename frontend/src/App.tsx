@@ -16,6 +16,8 @@ import { Costs } from '@/pages/Costs'
 import { SupplyParams } from '@/pages/SupplyParams'
 import { Cashflow } from '@/pages/Cashflow'
 import { Returns } from '@/pages/Returns'
+import { StockoutsByRegion } from '@/pages/StockoutsByRegion'
+import { ProductDetail } from '@/pages/ProductDetail'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -57,6 +59,8 @@ export default function App() {
         <Route path="/orders/returns" element={<Returns />} />
         <Route path="/orders/cancellations" element={<Returns />} />
         <Route path="/returns" element={<Returns />} />
+        <Route path="/analytics/stockouts-by-region" element={<StockoutsByRegion />} />
+        <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/settings" element={<Settings />} />
 
         {placeholderItems

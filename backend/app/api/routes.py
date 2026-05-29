@@ -19,6 +19,7 @@ from app.api.endpoints import (
     returns,
     supply_params,
     transactions,
+    warehouse_stocks,
 )
 
 api_router = APIRouter()
@@ -42,6 +43,9 @@ api_router.include_router(
     cashflow.router, prefix="/finance/cashflow", tags=["finance"]
 )
 api_router.include_router(returns.router, prefix="/returns", tags=["returns"])
+api_router.include_router(
+    warehouse_stocks.router, prefix="/warehouse-stocks", tags=["warehouses"]
+)
 api_router.include_router(costs.router, prefix="/costs", tags=["costs"])
 api_router.include_router(
     supply_params.router, prefix="/supply-params", tags=["procurement"]
