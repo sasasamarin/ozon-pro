@@ -13,6 +13,7 @@ import { ProcurementForecast } from '@/pages/ProcurementForecast'
 import { Funnel } from '@/pages/Funnel'
 import { FinancePnL } from '@/pages/FinancePnL'
 import { Costs } from '@/pages/Costs'
+import { SupplyParams } from '@/pages/SupplyParams'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -48,6 +49,8 @@ export default function App() {
         <Route path="/finance/pnl" element={<FinancePnL />} />
         <Route path="/products/prices" element={<Costs />} />
         <Route path="/costs" element={<Costs />} />
+        <Route path="/procurement/supply-params" element={<SupplyParams />} />
+        <Route path="/supply-params" element={<SupplyParams />} />
         <Route path="/settings" element={<Settings />} />
 
         {placeholderItems

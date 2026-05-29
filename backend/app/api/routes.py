@@ -15,6 +15,7 @@ from app.api.endpoints import (
     pnl,
     products,
     recommendations,
+    supply_params,
     transactions,
 )
 
@@ -36,6 +37,9 @@ api_router.include_router(
 )
 api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
 api_router.include_router(costs.router, prefix="/costs", tags=["costs"])
+api_router.include_router(
+    supply_params.router, prefix="/supply-params", tags=["procurement"]
+)
 api_router.include_router(
     recommendations.router, prefix="/recommendations", tags=["recommendations"]
 )
