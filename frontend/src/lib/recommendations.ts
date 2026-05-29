@@ -51,6 +51,14 @@ export interface ROIMetric {
   basis: string
 }
 
+export interface WorstCluster {
+  cluster: string
+  free_to_sell: number
+  velocity_per_day: number
+  days_left: number | null
+  signal: 'stockout' | 'reorder_now' | 'ok'
+}
+
 export interface ProductRecommendation {
   product_id: string
   product_name: string
@@ -68,6 +76,7 @@ export interface ProductRecommendation {
   abc_class: string | null
   abc_confidence: 'high' | 'medium' | 'low' | null
   missing_data: string[]
+  worst_cluster: WorstCluster | null
 }
 
 export function useRecommendations() {

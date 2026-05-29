@@ -275,6 +275,25 @@ export function ProcurementForecast() {
                   />
                 </div>
 
+                {/* Worst cluster */}
+                {p.worst_cluster && p.worst_cluster.signal !== 'ok' && (
+                  <div className={cn(
+                    'text-xs rounded px-2 py-1.5 flex items-center justify-between',
+                    p.worst_cluster.signal === 'stockout' && 'bg-rose-50 text-rose-800',
+                    p.worst_cluster.signal === 'reorder_now' && 'bg-amber-50 text-amber-800',
+                  )}>
+                    <span>
+                      {p.worst_cluster.signal === 'stockout' ? '🔴' : '🟡'} {p.worst_cluster.cluster}:
+                      остаток {p.worst_cluster.free_to_sell} шт
+                    </span>
+                    {p.worst_cluster.days_left != null && (
+                      <span className="font-mono tabular-nums">
+                        {p.worst_cluster.days_left.toFixed(0)} дн
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {/* Basis tooltip-text */}
                 {pr.basis && (
                   <details className="text-xs text-fg-muted">

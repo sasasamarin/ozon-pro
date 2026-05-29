@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import AnalyticsDaily, Order, OrderItem, Product, Stock
 from app.models.marketplace import Cancellation, Return
 from app.models.procurement import ProductSupplyParams
+from app.services.warehouse_cluster import parse_warehouse_name
 from app.services.forecasting import ForecastConfidence, ForecastDefaults
 from app.services.forecasting.abc import abc_classify_3axis
 from app.services.forecasting.buyout import BuyoutResult, calc_buyout_rate
@@ -405,6 +406,11 @@ async def compute_product_recommendation(
         )
         roi = asdict(roi_result)
 
+    # --- worst_cluster: где у товара самый горящий регион ---
+    worst_cluster = await _worst_cluster_for_product(
+        db, ozon_account_id=product.ozon_account_id, product_id=product.id
+    )
+
     # --- image_url из products.raw_data (как в /products endpoint) ---
     image_url = None
     raw = product.raw_data if isinstance(product.raw_data, dict) else None
@@ -436,6 +442,103 @@ async def compute_product_recommendation(
         "abc_class": abc_class,
         "abc_confidence": abc_confidence,
         "missing_data": missing_data,
+        "worst_cluster": worst_cluster,
+    }
+
+
+async def _worst_cluster_for_product(
+    db: AsyncSession,
+    *,
+    ozon_account_id: uuid.UUID,
+    product_id: uuid.UUID,
+) -> dict[str, Any] | None:
+    """Для UI: где у товара самый проблемный кластер.
+
+    Берём latest FBO_WH snapshot, считаем velocity по cluster_from из orders 30д.
+    Возвращаем кластер с минимальным days_left (или None если warehouse-данных нет).
+    """
+    latest_time = (await db.execute(
+        select(func.max(Stock.time)).where(
+            Stock.product_id == product_id, Stock.warehouse_type == "FBO_WH"
+        )
+    )).scalar()
+    if not latest_time:
+        return None
+
+    rows = (await db.execute(
+        select(Stock).where(
+            Stock.product_id == product_id,
+            Stock.warehouse_type == "FBO_WH",
+            Stock.time == latest_time,
+        )
+    )).scalars().all()
+
+    if not rows:
+        return None
+
+    # velocity per cluster_from
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    vel_rows = (await db.execute(
+        select(
+            Order.cluster_from,
+            func.coalesce(func.sum(OrderItem.quantity), 0).label("qty"),
+        )
+        .select_from(OrderItem)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            Order.ozon_account_id == ozon_account_id,
+            OrderItem.product_id == product_id,
+            Order.order_created_at >= cutoff,
+            Order.status == "delivered",
+            Order.cluster_from.is_not(None),
+        )
+        .group_by(Order.cluster_from)
+    )).all()
+    vel_map: dict[str, float] = {r.cluster_from: float(r.qty) / 30 for r in vel_rows}
+
+    # Аггрегируем по кластерам (один кластер — несколько складов)
+    cluster_stock: dict[str, int] = {}
+    cluster_velocity: dict[str, float] = {}
+    for s in rows:
+        _, cluster = parse_warehouse_name(s.warehouse_name)
+        if not cluster:
+            continue
+        cluster_stock[cluster] = cluster_stock.get(cluster, 0) + s.free_to_sell
+        cluster_velocity[cluster] = cluster_velocity.get(cluster, 0) + vel_map.get(s.warehouse_name, 0)
+
+    if not cluster_stock:
+        return None
+
+    # Worst = min days_left (или stockout/reorder_now)
+    worst = None
+    worst_days: float | None = None
+    for cluster, stock in cluster_stock.items():
+        v = cluster_velocity.get(cluster, 0.0)
+        if stock <= 0:
+            days_left = 0.0
+        elif v <= 0:
+            days_left = 99999.0  # неизвестно сколько хватит → не "плохой"
+        else:
+            days_left = stock / v
+        if worst is None or (days_left < worst_days):
+            worst_days = days_left
+            worst = (cluster, stock, v, days_left)
+
+    if not worst:
+        return None
+    cluster, stock, v, days_left = worst
+    if stock <= 0:
+        signal = "stockout"
+    elif v > 0 and days_left < 7:
+        signal = "reorder_now"
+    else:
+        signal = "ok"
+    return {
+        "cluster": cluster,
+        "free_to_sell": stock,
+        "velocity_per_day": round(v, 2),
+        "days_left": round(days_left, 1) if days_left < 99999 else None,
+        "signal": signal,
     }
 
 

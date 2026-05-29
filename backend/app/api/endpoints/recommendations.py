@@ -75,6 +75,7 @@ class ProductRecommendation(BaseModel):
     abc_confidence: str | None
 
     missing_data: list[str]
+    worst_cluster: dict[str, Any] | None = None
 
 
 @router.get("/products", response_model=list[ProductRecommendation])
