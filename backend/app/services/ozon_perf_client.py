@@ -257,6 +257,10 @@ class OzonPerformanceClient:
         data = await self._request("GET", "/api/client/campaign")
         return data.get("list", [])
 
+    # Performance API ограничивает число кампаний в одном запросе daily/json.
+    # Эмпирически безопасно ≤ 10 за раз — режем на чанки и сливаем `rows`.
+    DAILY_STATS_CHUNK = 10
+
     async def get_daily_stats(
         self,
         date_from: str,  # YYYY-MM-DD
@@ -266,16 +270,31 @@ class OzonPerformanceClient:
         """
         Ежедневная агрегированная статистика по кампаниям.
 
-        Endpoint: POST /api/client/statistics/daily/json
+        Endpoint: GET /api/client/statistics/daily/json?dateFrom&dateTo&campaignIds=
         Возвращает агрегаты impressions/clicks/orders/revenue/money_spent
         для каждой пары (campaign, date) в указанном диапазоне.
         """
-        payload: dict[str, Any] = {
+        params_base: dict[str, Any] = {
             "dateFrom": date_from,
             "dateTo": date_to,
         }
-        if campaign_ids:
-            payload["campaigns"] = campaign_ids
-        return await self._request(
-            "POST", "/api/client/statistics/daily/json", json=payload
-        )
+
+        if not campaign_ids:
+            return await self._request(
+                "GET", "/api/client/statistics/daily/json", params=params_base
+            )
+
+        merged_rows: list[dict] = []
+        merged_reports: list[dict] = []
+        for i in range(0, len(campaign_ids), self.DAILY_STATS_CHUNK):
+            chunk = campaign_ids[i : i + self.DAILY_STATS_CHUNK]
+            params = dict(params_base)
+            # httpx сериализует list → repeated query param ?campaignIds=A&campaignIds=B
+            params["campaignIds"] = chunk
+            data = await self._request(
+                "GET", "/api/client/statistics/daily/json", params=params
+            )
+            merged_rows.extend(data.get("rows") or [])
+            merged_reports.extend(data.get("reports") or [])
+
+        return {"rows": merged_rows, "reports": merged_reports}
