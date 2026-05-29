@@ -434,19 +434,29 @@ def _parse_date(value) -> date_cls | None:
             return None
 
 
-def _to_int(value) -> int:
-    if value is None or value == "":
-        return 0
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return 0
-
-
 def _to_float(value) -> float:
+    """Ozon Performance отдаёт money-поля в ru-локали ('635,33'). Нормализуем."""
     if value is None or value == "":
         return 0.0
-    try:
+    if isinstance(value, (int, float)):
         return float(value)
+    s = str(value).strip().replace(" ", "").replace(" ", "")
+    # '1.234,56' (rare) → '1234.56'; '635,33' → '635.33'
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _to_int(value) -> int:
+    """Целые тоже могут прийти строкой — поддерживаем дробные через _to_float."""
+    if value is None or value == "":
+        return 0
+    try:
+        return int(float(_to_float(value)))
+    except (TypeError, ValueError):
+        return 0
