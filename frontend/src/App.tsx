@@ -10,6 +10,7 @@ import { Orders } from '@/pages/Orders'
 import { FinanceTransactions } from '@/pages/FinanceTransactions'
 import { Stockouts } from '@/pages/Stockouts'
 import { ProcurementForecast } from '@/pages/ProcurementForecast'
+import { Funnel } from '@/pages/Funnel'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/finance/transactions" element={<FinanceTransactions />} />
         <Route path="/analytics/stockouts" element={<Stockouts />} />
         <Route path="/procurement/forecast" element={<ProcurementForecast />} />
+        <Route path="/analytics/funnel" element={<Funnel />} />
         <Route path="/settings" element={<Settings />} />
 
         {placeholderItems
@@ -49,7 +51,8 @@ export default function App() {
               item.path !== '/orders' &&
               item.path !== '/finance/transactions' &&
               item.path !== '/analytics/stockouts' &&
-              item.path !== '/procurement/forecast',
+              item.path !== '/procurement/forecast' &&
+              item.path !== '/analytics/funnel',
           )
           .map((item) => (
             <Route

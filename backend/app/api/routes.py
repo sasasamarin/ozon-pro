@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from app.api.endpoints import (
     auth,
     dashboard,
+    funnel,
     orders,
     ozon_accounts,
     products,
@@ -27,6 +28,9 @@ api_router.include_router(products.router, prefix="/products", tags=["products"]
 api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
 api_router.include_router(
     transactions.router, prefix="/finance/transactions", tags=["finance"]
+)
+api_router.include_router(
+    funnel.router, prefix="/analytics/funnel", tags=["analytics"]
 )
 api_router.include_router(
     recommendations.router, prefix="/recommendations", tags=["recommendations"]
