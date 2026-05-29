@@ -1,0 +1,263 @@
+"""
+P&L декомпозиция за период.
+
+Шаги (сверху вниз):
+  Выручка
+  − Себестоимость (units_delivered × cost_price)
+  = Валовая прибыль
+  − Комиссия Ozon (sale_commission)
+  − Логистика к клиенту (delivery_to_customer)
+  − Возвратная логистика (return_logistics)
+  − Last mile
+  − Хранение (storage)
+  − Размещение (placement)
+  − Эквайринг (acquiring)
+  − Реклама (advertising)
+  − Утилизация (utilization)
+  = Маржинальная прибыль
+
+GET /api/v1/finance/pnl?days=30&cabinet_ids=...&compare=true
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user
+from app.db.session import get_db
+from app.models import Order, OrderItem, OzonAccount, Product, Transaction, User
+from app.models.cost import CostConfidence, ProductCostHistory
+
+router = APIRouter()
+UTC = timezone.utc
+
+
+class PnLRow(BaseModel):
+    label: str
+    amount: float
+    pct_of_revenue: float | None
+    is_subtotal: bool = False
+    is_negative: bool = False  # для UI расхода
+    # для drill-down: фильтр-параметр на /finance/transactions (опционально)
+    transactions_filter: dict | None = None
+
+
+class PnLResponse(BaseModel):
+    period_from: str
+    period_to: str
+    has_missing_costs: bool
+    missing_costs_count: int
+
+    revenue: float
+    cogs: float
+    gross_profit: float
+    total_ozon_expenses: float
+    marginal_profit: float
+
+    rows: list[PnLRow]
+
+    # сравнение с прошлым
+    prev_revenue: float | None = None
+    prev_marginal_profit: float | None = None
+
+
+_EXPENSE_BUCKETS = [
+    ("Комиссия Ozon",          "sale_commission",       "abs"),
+    ("Логистика к клиенту",    "delivery_to_customer",  "pos"),
+    ("Возвратная логистика",   "return_logistics",      "pos"),
+    ("Last mile",              "last_mile",             "pos"),
+    ("Хранение",               "storage",               "pos"),
+    ("Размещение",             "placement",             "pos"),
+    ("Эквайринг",              "acquiring",             "pos"),
+    ("Реклама",                "advertising",           "pos"),
+    ("Утилизация",             "utilization",           "pos"),
+]
+
+
+async def _account_ids(
+    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+) -> list[uuid.UUID]:
+    q = select(OzonAccount.id).where(
+        OzonAccount.company_id == company_id,
+        OzonAccount.deleted_at.is_(None),
+    )
+    if cabinet_ids:
+        q = q.where(OzonAccount.id.in_(cabinet_ids))
+    return [r[0] for r in (await db.execute(q)).all()]
+
+
+async def _revenue_for_window(
+    db: AsyncSession, *, accs: list[uuid.UUID], dt_from: datetime, dt_to: datetime
+) -> float:
+    if not accs:
+        return 0.0
+    row = await db.execute(
+        select(func.coalesce(func.sum(Order.total_amount), 0))
+        .where(
+            Order.ozon_account_id.in_(accs),
+            Order.order_created_at >= dt_from,
+            Order.order_created_at < dt_to,
+            Order.status == "delivered",
+        )
+    )
+    return float(row.scalar() or 0)
+
+
+async def _cogs_for_window(
+    db: AsyncSession, *, accs: list[uuid.UUID], dt_from: datetime, dt_to: datetime
+) -> float:
+    if not accs:
+        return 0.0
+    row = await db.execute(
+        select(
+            func.coalesce(
+                func.sum(OrderItem.quantity * func.coalesce(Product.cost_price, 0)), 0
+            )
+        )
+        .select_from(OrderItem)
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(Product, Product.id == OrderItem.product_id)
+        .where(
+            Order.ozon_account_id.in_(accs),
+            Order.order_created_at >= dt_from,
+            Order.order_created_at < dt_to,
+            Order.status == "delivered",
+        )
+    )
+    return float(row.scalar() or 0)
+
+
+async def _expenses_for_window(
+    db: AsyncSession, *, accs: list[uuid.UUID], dt_from: datetime, dt_to: datetime
+) -> dict[str, float]:
+    if not accs:
+        return {label: 0.0 for label, _, _ in _EXPENSE_BUCKETS}
+    cols = []
+    for label, field, mode in _EXPENSE_BUCKETS:
+        expr = func.coalesce(func.sum(func.abs(getattr(Transaction, field))), 0)
+        cols.append(expr.label(field))
+    row = (await db.execute(
+        select(*cols).where(
+            Transaction.ozon_account_id.in_(accs),
+            Transaction.time >= dt_from,
+            Transaction.time < dt_to,
+        )
+    )).one()
+    return {label: float(getattr(row, field) or 0) for label, field, _ in _EXPENSE_BUCKETS}
+
+
+async def _missing_costs(db: AsyncSession, *, accs: list[uuid.UUID]) -> tuple[bool, int]:
+    if not accs:
+        return False, 0
+    latest_subq = (
+        select(
+            ProductCostHistory.product_id,
+            func.max(ProductCostHistory.effective_from).label("latest"),
+        )
+        .group_by(ProductCostHistory.product_id)
+        .subquery()
+    )
+    cnt = (await db.execute(
+        select(func.count(Product.id))
+        .select_from(Product)
+        .outerjoin(latest_subq, latest_subq.c.product_id == Product.id)
+        .outerjoin(
+            ProductCostHistory,
+            (ProductCostHistory.product_id == Product.id)
+            & (ProductCostHistory.effective_from == latest_subq.c.latest),
+        )
+        .where(
+            Product.ozon_account_id.in_(accs),
+            Product.deleted_at.is_(None),
+            (Product.cost_price.is_(None))
+            | (ProductCostHistory.confidence == CostConfidence.MISSING.value),
+        )
+    )).scalar() or 0
+    return int(cnt) > 0, int(cnt)
+
+
+@router.get("/", response_model=PnLResponse)
+async def get_pnl(
+    days: int = Query(30, ge=1, le=365),
+    cabinet_ids: list[uuid.UUID] | None = Query(None),
+    compare: bool = Query(True),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PnLResponse:
+    now = datetime.now(UTC)
+    period_to = now
+    period_from = now - timedelta(days=days)
+
+    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+
+    revenue = await _revenue_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    cogs = await _cogs_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    expenses = await _expenses_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+
+    gross_profit = revenue - cogs
+    total_expenses = sum(expenses.values())
+    marginal_profit = gross_profit - total_expenses
+
+    has_missing, missing_n = await _missing_costs(db, accs=accs)
+
+    def pct(v: float) -> float | None:
+        if revenue == 0:
+            return None
+        return round(v / revenue * 100, 2)
+
+    rows: list[PnLRow] = [
+        PnLRow(label="Выручка", amount=round(revenue, 2), pct_of_revenue=100.0 if revenue else None),
+        PnLRow(label="− Себестоимость (COGS)", amount=round(-cogs, 2),
+               pct_of_revenue=pct(-cogs), is_negative=True),
+        PnLRow(label="ВАЛОВАЯ ПРИБЫЛЬ", amount=round(gross_profit, 2),
+               pct_of_revenue=pct(gross_profit), is_subtotal=True),
+    ]
+    # Сортируем расходные бакеты по убыванию суммы
+    for label, amount in sorted(expenses.items(), key=lambda kv: kv[1], reverse=True):
+        # transactions_filter — для drill-down кликом на строку
+        rows.append(PnLRow(
+            label=f"− {label}",
+            amount=round(-amount, 2),
+            pct_of_revenue=pct(-amount),
+            is_negative=True,
+            # фильтр по бакету через operation_type не возможен напрямую (бакет
+            # это услуга в services[], не op_type). Пока без drill, юзер
+            # понимает порядок: сумма из transactions с этим service-name.
+        ))
+    rows.append(PnLRow(
+        label="МАРЖИНАЛЬНАЯ ПРИБЫЛЬ",
+        amount=round(marginal_profit, 2),
+        pct_of_revenue=pct(marginal_profit),
+        is_subtotal=True,
+    ))
+
+    prev_revenue: float | None = None
+    prev_marginal: float | None = None
+    if compare:
+        prev_from = period_from - timedelta(days=days)
+        prev_to = period_from
+        pr_rev = await _revenue_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
+        pr_cogs = await _cogs_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
+        pr_exp = await _expenses_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
+        prev_revenue = pr_rev
+        prev_marginal = pr_rev - pr_cogs - sum(pr_exp.values())
+
+    return PnLResponse(
+        period_from=period_from.date().isoformat(),
+        period_to=period_to.date().isoformat(),
+        has_missing_costs=has_missing,
+        missing_costs_count=missing_n,
+        revenue=round(revenue, 2),
+        cogs=round(cogs, 2),
+        gross_profit=round(gross_profit, 2),
+        total_ozon_expenses=round(total_expenses, 2),
+        marginal_profit=round(marginal_profit, 2),
+        rows=rows,
+        prev_revenue=round(prev_revenue, 2) if prev_revenue is not None else None,
+        prev_marginal_profit=round(prev_marginal, 2) if prev_marginal is not None else None,
+    )

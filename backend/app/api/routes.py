@@ -11,6 +11,7 @@ from app.api.endpoints import (
     funnel,
     orders,
     ozon_accounts,
+    pnl,
     products,
     recommendations,
     transactions,
@@ -32,6 +33,7 @@ api_router.include_router(
 api_router.include_router(
     funnel.router, prefix="/analytics/funnel", tags=["analytics"]
 )
+api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
 api_router.include_router(
     recommendations.router, prefix="/recommendations", tags=["recommendations"]
 )
