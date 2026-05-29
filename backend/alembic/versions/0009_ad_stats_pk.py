@@ -1,13 +1,11 @@
-"""ad_statistics PK должен включать product_id — иначе ON CONFLICT в sync_ads валится.
+"""ad_statistics PK must include product_id (ON CONFLICT fix).
 
-В модели (app.models.ad.AdStatistics) product_id был добавлен в составной PK,
-но в БД он остался индексом без UNIQUE. Из-за этого upsert через
-ON CONFLICT (date, ozon_campaign_id, product_id) падал с
-InvalidColumnReferenceError.
+Модель описывает PK (date, ozon_campaign_id, product_id), но в БД constraint
+остался без product_id — из-за этого ON CONFLICT в sync_ads_statistics валился.
 
-TimescaleDB разрешает менять PK, пока он содержит time-column (date) — ок.
+TimescaleDB разрешает менять PK, пока он содержит time-column (date).
 
-Revision ID: 0009_ad_statistics_pk_with_product
+Revision ID: 0009_ad_stats_pk
 Revises: 0008_widen_ad_campaigns_state
 """
 from __future__ import annotations
@@ -15,15 +13,13 @@ from __future__ import annotations
 from alembic import op
 
 
-revision = "0009_ad_statistics_pk_with_product"
+revision = "0009_ad_stats_pk"
 down_revision = "0008_widen_ad_campaigns_state"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
-    # NULL product_id будут заменены на NIL UUID — на момент миграции таблица пуста,
-    # но защитимся на случай локальных бэкапов.
     op.execute(
         "UPDATE ad_statistics SET product_id = '00000000-0000-0000-0000-000000000000'::uuid "
         "WHERE product_id IS NULL"
