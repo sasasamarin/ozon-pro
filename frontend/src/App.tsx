@@ -27,6 +27,9 @@ import { SupplierOrders } from '@/pages/SupplierOrders'
 import { Reviews } from '@/pages/Reviews'
 import { Questions } from '@/pages/Questions'
 import { Markers } from '@/pages/Markers'
+import { Team } from '@/pages/Team'
+import { AIChat } from '@/pages/AIChat'
+import { ReverseFunnel } from '@/pages/ReverseFunnel'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -80,6 +83,12 @@ export default function App() {
         <Route path="/markers" element={<Markers />} />
         <Route path="/markers/list" element={<Markers />} />
         <Route path="/markers/timeline" element={<Markers />} />
+        <Route path="/team" element={<Team />} />
+        <Route path="/team/members" element={<Team />} />
+        <Route path="/team/invitations" element={<Team />} />
+        <Route path="/ai/chat" element={<AIChat />} />
+        <Route path="/ai" element={<AIChat />} />
+        <Route path="/analytics/reverse-funnel" element={<ReverseFunnel />} />
         <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/settings" element={<Settings />} />
 
@@ -106,7 +115,11 @@ export default function App() {
               item.path !== '/communications/reviews' &&
               item.path !== '/communications/questions' &&
               item.path !== '/markers/list' &&
-              item.path !== '/markers/timeline',
+              item.path !== '/markers/timeline' &&
+              item.path !== '/team/members' &&
+              item.path !== '/team/invitations' &&
+              item.path !== '/ai/chat' &&
+              item.path !== '/analytics/reverse-funnel',
           )
           .map((item) => (
             <Route

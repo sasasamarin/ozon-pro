@@ -24,6 +24,7 @@ from app.api.endpoints import (
     summary,
     supplier_orders,
     supply_params,
+    team,
     transactions,
     warehouse_stocks,
 )
@@ -71,3 +72,4 @@ api_router.include_router(
     communications.router, prefix="/communications", tags=["communications"]
 )
 api_router.include_router(markers.router, prefix="/markers", tags=["markers"])
+api_router.include_router(team.router, prefix="/team", tags=["team"])
