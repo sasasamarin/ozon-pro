@@ -137,7 +137,10 @@ async def _sync_warehouse_stocks_for_account(
                             rows.append({
                                 "time": snapshot_at,
                                 "product_id": product_id,
-                                "warehouse_type": "FBO",  # /v2/analytics/stock_on_warehouses возвращает только FBO-склады
+                                # FBO_WH (per-warehouse) ≠ FBO (aggregate) — иначе
+                                # ON CONFLICT DO NOTHING на PK (time, product_id,
+                                # warehouse_type) блокирует запись.
+                                "warehouse_type": "FBO_WH",
                                 "warehouse_name": it.get("warehouse_name"),
                                 "warehouse_id": int(it["warehouse_id"]) if it.get("warehouse_id") else None,
                                 "free_to_sell": int(it.get("free_to_sell_amount", 0) or 0),
