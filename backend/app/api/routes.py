@@ -9,10 +9,12 @@ from app.api.endpoints import (
     auth,
     cashflow,
     categories,
+    communications,
     costs,
     dashboard,
     expenses,
     funnel,
+    markers,
     orders,
     ozon_accounts,
     pnl,
@@ -65,3 +67,7 @@ api_router.include_router(expenses.router, prefix="/finance/expenses", tags=["fi
 api_router.include_router(
     supplier_orders.router, prefix="/procurement/orders", tags=["procurement"]
 )
+api_router.include_router(
+    communications.router, prefix="/communications", tags=["communications"]
+)
+api_router.include_router(markers.router, prefix="/markers", tags=["markers"])

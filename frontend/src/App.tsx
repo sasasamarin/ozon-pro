@@ -24,6 +24,9 @@ import { Calculator } from '@/pages/Calculator'
 import { Heatmap } from '@/pages/Heatmap'
 import { Expenses } from '@/pages/Expenses'
 import { SupplierOrders } from '@/pages/SupplierOrders'
+import { Reviews } from '@/pages/Reviews'
+import { Questions } from '@/pages/Questions'
+import { Markers } from '@/pages/Markers'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -72,6 +75,11 @@ export default function App() {
         <Route path="/products/calculator" element={<Calculator />} />
         <Route path="/finance/expenses" element={<Expenses />} />
         <Route path="/procurement/orders" element={<SupplierOrders />} />
+        <Route path="/communications/reviews" element={<Reviews />} />
+        <Route path="/communications/questions" element={<Questions />} />
+        <Route path="/markers" element={<Markers />} />
+        <Route path="/markers/list" element={<Markers />} />
+        <Route path="/markers/timeline" element={<Markers />} />
         <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/settings" element={<Settings />} />
 
@@ -94,7 +102,11 @@ export default function App() {
               item.path !== '/products/categories' &&
               item.path !== '/products/calculator' &&
               item.path !== '/finance/expenses' &&
-              item.path !== '/procurement/orders',
+              item.path !== '/procurement/orders' &&
+              item.path !== '/communications/reviews' &&
+              item.path !== '/communications/questions' &&
+              item.path !== '/markers/list' &&
+              item.path !== '/markers/timeline',
           )
           .map((item) => (
             <Route
