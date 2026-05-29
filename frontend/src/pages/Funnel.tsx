@@ -1,20 +1,16 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
-  Eye,
-  ShoppingCart,
-  ShoppingBag,
-  CheckCircle2,
-  ArrowUpRight,
-  ArrowDownRight,
-  Filter,
-  Image as ImageIcon,
-  Loader2,
+  Eye, ShoppingCart, ShoppingBag, CheckCircle2,
+  ArrowUpRight, ArrowDownRight, Filter, Loader2,
+  Image as ImageIcon, Search, Calendar,
+  TrendingUp, TrendingDown,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { Input } from '@/components/ui/Input'
 import { api } from '@/lib/api'
-import { formatNumber, cn } from '@/lib/utils'
+import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
 
 interface FunnelKPI {
@@ -22,305 +18,360 @@ interface FunnelKPI {
   to_cart: number
   orders: number
   delivered: number
+  revenue: number
   cart_conv_pct: number | null
   order_conv_pct: number | null
   delivery_conv_pct: number | null
   overall_conv_pct: number | null
 }
 
-interface FunnelStep {
-  label: string
-  value: number
-  pct_from_previous: number | null
-  pct_from_first: number | null
-}
-
-interface FunnelResp {
+interface FunnelV2Resp {
   period_from: string
   period_to: string
-  cabinet_ids: string[]
+  product_id: string | null
+  product_name: string | null
   has_data: boolean
   kpi: FunnelKPI
   prev_kpi: FunnelKPI | null
-  steps: FunnelStep[]
 }
 
-interface TopProductFunnel {
-  product_id: string
-  name: string
-  offer_id: string
-  image_url: string | null
+interface FunnelDaily {
+  date: string
   impressions: number
   to_cart: number
   orders: number
   delivered: number
-  cart_conv_pct: number | null
-  order_conv_pct: number | null
-  delivery_conv_pct: number | null
   overall_conv_pct: number | null
 }
 
-const STEP_ICONS = [Eye, ShoppingCart, ShoppingBag, CheckCircle2]
-const STEP_COLORS = [
-  'from-indigo-50 to-white text-indigo-600 border-indigo-200',
-  'from-violet-50 to-white text-violet-600 border-violet-200',
-  'from-emerald-50 to-white text-emerald-600 border-emerald-200',
-  'from-amber-50 to-white text-amber-700 border-amber-200',
-]
-const STEP_BAR_COLORS = [
-  'bg-indigo-400',
-  'bg-violet-400',
-  'bg-emerald-400',
-  'bg-amber-400',
-]
-
-type SortKey = 'delivered_desc' | 'impressions_desc' | 'overall_conv_desc' | 'overall_conv_asc'
-
-const SORT_LABELS: Record<SortKey, string> = {
-  delivered_desc: 'По доставленным',
-  impressions_desc: 'По показам',
-  overall_conv_desc: 'Лучшая конверсия',
-  overall_conv_asc: 'Худшая конверсия',
+interface BestWorstDay {
+  date: string
+  impressions: number
+  delivered: number
+  overall_conv_pct: number
+  revenue: number
 }
+
+interface ProductLite {
+  id: string
+  name: string
+  offer_id: string
+  image_url: string | null
+}
+
+const STEP_ICONS = [Eye, ShoppingCart, ShoppingBag, CheckCircle2]
+
+const PRESETS = [
+  { key: '7', label: '7 дней' },
+  { key: '30', label: '30 дней' },
+  { key: '90', label: '90 дней' },
+  { key: '365', label: 'Год' },
+  { key: '514', label: '17 мес' },
+]
+
+type DrillType = 'impressions' | 'to_cart' | 'orders' | 'delivered' | null
 
 export function Funnel() {
   const { selectedCabinetIds } = useCabinetStore()
-  const [days, setDays] = useState(30)
-  const [sort, setSort] = useState<SortKey>('delivered_desc')
+  const [params, setParams] = useSearchParams()
+  const navigate = useNavigate()
 
-  const { data, isLoading } = useQuery<FunnelResp>({
-    queryKey: ['funnel', selectedCabinetIds, days],
+  const days = parseInt(params.get('days') || '30', 10)
+  const productId = params.get('p') || ''
+  const compare = (params.get('cmp') || 'prev_period') as 'none' | 'prev_period' | 'year_ago'
+  const [productSearch, setProductSearch] = useState('')
+  const [drillStep, setDrillStep] = useState<DrillType>(null)
+
+  const updateParam = (k: string, v: string | undefined) => {
+    const p = new URLSearchParams(params)
+    if (v) p.set(k, v); else p.delete(k)
+    setParams(p, { replace: true })
+  }
+
+  // Список продуктов (для селектора)
+  const { data: products } = useQuery<ProductLite[]>({
+    queryKey: ['products', 'lite'],
     queryFn: async () => {
-      const params = new URLSearchParams({ days: String(days), compare: 'true' })
-      selectedCabinetIds.forEach((id) => params.append('cabinet_ids', id))
-      const res = await api.get(`/analytics/funnel/?${params.toString()}`)
-      return res.data
+      const all = (await api.get('/products/')).data as Array<{ id: string; name: string; offer_id: string; image_url: string | null }>
+      return all.map((p) => ({ id: p.id, name: p.name, offer_id: p.offer_id, image_url: p.image_url }))
     },
   })
 
-  const { data: topProducts } = useQuery<TopProductFunnel[]>({
-    queryKey: ['funnel', 'products', selectedCabinetIds, days, sort],
+  const selectedProduct = useMemo(
+    () => (products || []).find((p) => p.id === productId),
+    [products, productId],
+  )
+
+  const filteredProducts = useMemo(() => {
+    if (!products) return []
+    const s = productSearch.trim().toLowerCase()
+    if (!s) return products.slice(0, 20)
+    return products
+      .filter((p) => p.name.toLowerCase().includes(s) || p.offer_id.toLowerCase().includes(s))
+      .slice(0, 20)
+  }, [products, productSearch])
+
+  const { data, isLoading } = useQuery<FunnelV2Resp>({
+    queryKey: ['funnel-v2', selectedCabinetIds, days, productId, compare],
     queryFn: async () => {
-      const params = new URLSearchParams({
-        days: String(days),
-        sort,
-        limit: '20',
-      })
-      selectedCabinetIds.forEach((id) => params.append('cabinet_ids', id))
-      const res = await api.get(`/analytics/funnel/products?${params.toString()}`)
-      return res.data
+      const p = new URLSearchParams({ days: String(days), compare })
+      if (productId) p.append('product_id', productId)
+      selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
+      return (await api.get(`/analytics/funnel/v2/?${p.toString()}`)).data
+    },
+  })
+
+  const { data: daily } = useQuery<FunnelDaily[]>({
+    queryKey: ['funnel-v2', 'daily', selectedCabinetIds, days, productId],
+    queryFn: async () => {
+      const p = new URLSearchParams({ days: String(days) })
+      if (productId) p.append('product_id', productId)
+      selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
+      return (await api.get(`/analytics/funnel/v2/daily?${p.toString()}`)).data
+    },
+    enabled: drillStep !== null,
+  })
+
+  const { data: bestWorst } = useQuery<{ best: BestWorstDay[]; worst: BestWorstDay[] }>({
+    queryKey: ['funnel-v2', 'bw', selectedCabinetIds, days, productId],
+    queryFn: async () => {
+      const p = new URLSearchParams({ days: String(days) })
+      if (productId) p.append('product_id', productId)
+      selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
+      return (await api.get(`/analytics/funnel/v2/best-worst-days?${p.toString()}`)).data
     },
   })
 
   const kpi = data?.kpi
   const prev = data?.prev_kpi
-
   const maxValue = useMemo(() => {
-    if (!data?.steps?.length) return 1
-    return Math.max(1, ...data.steps.map((s) => s.value))
-  }, [data])
+    if (!kpi) return 1
+    return Math.max(1, kpi.impressions, kpi.to_cart, kpi.orders, kpi.delivered)
+  }, [kpi])
+
+  const steps = useMemo(() => {
+    if (!kpi) return []
+    return [
+      { key: 'impressions' as const, label: 'Показы', value: kpi.impressions, conv: null },
+      { key: 'to_cart' as const, label: 'В корзину', value: kpi.to_cart, conv: kpi.cart_conv_pct },
+      { key: 'orders' as const, label: 'Заказы', value: kpi.orders, conv: kpi.order_conv_pct },
+      { key: 'delivered' as const, label: 'Доставлено', value: kpi.delivered, conv: kpi.delivery_conv_pct },
+    ]
+  }, [kpi])
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-end justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-3xl font-semibold text-fg tracking-tight">Воронка конверсии</h1>
-          <p className="text-sm text-fg-muted mt-1.5">
-            Показы → корзина → заказ → выкуп · {data?.period_from} … {data?.period_to}
-          </p>
+    <div className="flex flex-col gap-5">
+      <div>
+        <h1 className="text-3xl font-semibold text-fg tracking-tight">Воронка</h1>
+        <p className="text-sm text-fg-muted mt-1.5">
+          {data?.product_name ? <>SKU: <strong>{data.product_name}</strong></> : 'По всему кабинету'} · {data?.period_from} … {data?.period_to}
+        </p>
+      </div>
+
+      {/* === TOOLBAR === */}
+      <Card className="p-3 flex flex-wrap items-center gap-2">
+        {PRESETS.map((p) => (
+          <button key={p.key} onClick={() => updateParam('days', p.key)} className={cn(
+            'px-3 py-1.5 rounded-md text-xs border transition-colors',
+            String(days) === p.key ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
+          )}>
+            {p.label}
+          </button>
+        ))}
+        <div className="w-px h-5 bg-border-subtle mx-2" />
+        <span className="text-xs text-fg-muted">Сравнение:</span>
+        {([
+          ['none', 'нет'],
+          ['prev_period', 'vs прошлый'],
+          ['year_ago', 'vs год назад'],
+        ] as const).map(([k, l]) => (
+          <button key={k} onClick={() => updateParam('cmp', k)} className={cn(
+            'px-2 py-1 rounded text-xs border',
+            compare === k ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+          )}>
+            {l}
+          </button>
+        ))}
+      </Card>
+
+      {/* === PRODUCT SELECTOR === */}
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-fg">Выберите товар</h3>
+          {productId && (
+            <button onClick={() => updateParam('p', undefined)} className="text-xs text-fg-muted hover:text-fg">
+              × сбросить (показать общую)
+            </button>
+          )}
         </div>
-        <div className="flex gap-2">
-          {[7, 30, 90, 365].map((d) => (
-            <button
-              key={d}
-              onClick={() => setDays(d)}
-              className={cn(
-                'px-3 py-1.5 rounded-md text-sm border transition-colors',
-                days === d
-                  ? 'border-fg bg-fg text-bg'
-                  : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
+        <div className="relative mb-3">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-subtle" />
+          <Input value={productSearch} onChange={(e) => setProductSearch(e.target.value)}
+            placeholder="название или offer_id" className="pl-9" />
+        </div>
+        <div className="flex flex-wrap gap-2 max-h-[180px] overflow-y-auto">
+          {filteredProducts.map((p) => (
+            <button key={p.id} onClick={() => updateParam('p', p.id)} className={cn(
+              'flex items-center gap-2 px-2 py-1.5 rounded-md border text-xs',
+              productId === p.id ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
+            )}>
+              {p.image_url ? (
+                <img src={p.image_url} alt="" className="w-5 h-5 rounded object-cover shrink-0" />
+              ) : (
+                <ImageIcon className="w-4 h-4 shrink-0" />
               )}
-            >
-              {d === 7 && '7 дней'}
-              {d === 30 && '30 дней'}
-              {d === 90 && '90 дней'}
-              {d === 365 && 'Год'}
+              <span className="truncate max-w-[180px]">{p.offer_id}</span>
             </button>
           ))}
         </div>
-      </div>
+      </Card>
 
+      {/* === KPI ROW === */}
       {isLoading ? (
-        <Card className="py-16 flex justify-center items-center text-fg-muted">
-          <Loader2 className="w-5 h-5 animate-spin mr-2" /> Загрузка воронки…
-        </Card>
+        <Card className="py-16 flex justify-center"><Loader2 className="w-5 h-5 animate-spin" /></Card>
       ) : !data?.has_data ? (
         <Card className="py-12 flex flex-col items-center text-fg-muted text-sm">
-          <Filter className="w-8 h-8 mb-3 text-fg-subtle" />
-          <p>Нет данных за выбранный период по выбранным кабинетам.</p>
+          <Filter className="w-8 h-8 mb-2 text-fg-subtle" />
+          <p>Нет данных за период</p>
         </Card>
       ) : (
         <>
-          {/* KPI row */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiTile label="Сквозная конверсия" curr={kpi!.overall_conv_pct} prev={prev?.overall_conv_pct} suffix="%" />
-            <KpiTile label="Конверсия в корзину" curr={kpi!.cart_conv_pct} prev={prev?.cart_conv_pct} suffix="%" />
-            <KpiTile label="Корзина → заказ" curr={kpi!.order_conv_pct} prev={prev?.order_conv_pct} suffix="%" />
-            <KpiTile label="Заказ → выкуп" curr={kpi!.delivery_conv_pct} prev={prev?.delivery_conv_pct} suffix="%" />
+            <ConvCard label="Сквозная" curr={kpi!.overall_conv_pct} prev={prev?.overall_conv_pct} />
+            <ConvCard label="В корзину" curr={kpi!.cart_conv_pct} prev={prev?.cart_conv_pct} />
+            <ConvCard label="Корзина → заказ" curr={kpi!.order_conv_pct} prev={prev?.order_conv_pct} />
+            <ConvCard label="Заказ → выкуп" curr={kpi!.delivery_conv_pct} prev={prev?.delivery_conv_pct} />
           </div>
 
-          {/* Funnel bars */}
-          <Card className="p-6">
-            <h2 className="text-base font-semibold text-fg">Шаги воронки</h2>
-            <p className="text-xs text-fg-muted mt-0.5">
-              Каждая полоса — пропорция от предыдущего шага. Под полосой — % от показов.
-            </p>
-            <div className="mt-6 flex flex-col gap-4">
-              {data.steps.map((step, idx) => {
+          {/* === STEPS === */}
+          <Card className="p-5">
+            <div className="flex justify-between mb-4">
+              <h2 className="text-base font-semibold text-fg">Шаги воронки</h2>
+              <p className="text-xs text-fg-muted">кликни на шаг → детализация по дням</p>
+            </div>
+            <div className="flex flex-col gap-3">
+              {steps.map((step, idx) => {
                 const Icon = STEP_ICONS[idx]
-                const widthPct = Math.max(2, (step.value / maxValue) * 100)
+                const width = Math.max(2, (step.value / maxValue) * 100)
+                const colors = ['bg-indigo-400', 'bg-violet-400', 'bg-emerald-400', 'bg-amber-400']
+                const isActive = drillStep === step.key
                 return (
-                  <div key={step.label} className="flex flex-col gap-1.5">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={cn(
-                          'w-9 h-9 rounded-lg bg-gradient-to-br border shadow-sm flex items-center justify-center shrink-0',
-                          STEP_COLORS[idx],
-                        )}
-                      >
-                        <Icon className="w-4 h-4" strokeWidth={2} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-baseline mb-1">
-                          <span className="text-sm font-medium text-fg">{step.label}</span>
-                          <span className="text-lg font-semibold text-fg tabular-nums">
-                            {formatNumber(step.value)}
-                          </span>
-                        </div>
-                        <div className="relative h-3 rounded-full bg-bg-subtle overflow-hidden">
-                          <div
-                            className={cn('h-full rounded-full transition-all', STEP_BAR_COLORS[idx])}
-                            style={{ width: `${widthPct}%` }}
-                          />
-                        </div>
-                        <div className="flex justify-between items-center mt-1 text-[11px] text-fg-muted">
-                          {step.pct_from_previous != null ? (
-                            <span>от предыдущего: <strong className="text-fg">{step.pct_from_previous}%</strong></span>
-                          ) : <span />}
-                          {step.pct_from_first != null && idx > 0 && (
-                            <span>от показов: <strong className="text-fg">{step.pct_from_first}%</strong></span>
-                          )}
-                        </div>
-                      </div>
+                  <button key={step.key} onClick={() => setDrillStep(isActive ? null : step.key)}
+                    className={cn(
+                      'flex items-center gap-3 group',
+                      isActive && 'ring-2 ring-fg/20 rounded-lg p-2 -m-2',
+                    )}
+                  >
+                    <div className="w-9 h-9 rounded-lg border bg-bg-subtle/30 flex items-center justify-center shrink-0">
+                      <Icon className="w-4 h-4 text-fg-muted" />
                     </div>
-                  </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-baseline mb-1">
+                        <span className="text-sm font-medium text-fg">{step.label}</span>
+                        <span className="text-lg font-semibold text-fg tabular-nums">{formatNumber(step.value)}</span>
+                      </div>
+                      <div className="relative h-3 rounded-full bg-bg-subtle overflow-hidden">
+                        <div className={cn('h-full rounded-full transition-all', colors[idx])} style={{ width: `${width}%` }} />
+                      </div>
+                      {step.conv != null && idx > 0 && (
+                        <div className="text-[11px] text-fg-muted mt-1 text-left">
+                          от предыдущего: <strong className="text-fg">{step.conv}%</strong>
+                        </div>
+                      )}
+                    </div>
+                  </button>
                 )
               })}
             </div>
           </Card>
 
-          {/* Top products */}
-          <Card className="overflow-hidden">
-            <div className="px-6 py-4 border-b border-border-subtle flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <h2 className="text-base font-semibold text-fg">Топ товаров</h2>
-                <p className="text-xs text-fg-muted mt-0.5">за выбранный период · мин. 100 показов</p>
-              </div>
-              <div className="flex gap-2">
-                {(['delivered_desc', 'impressions_desc', 'overall_conv_desc', 'overall_conv_asc'] as SortKey[]).map((k) => (
-                  <button
-                    key={k}
-                    onClick={() => setSort(k)}
-                    className={cn(
-                      'px-3 py-1.5 rounded-md text-xs border transition-colors',
-                      sort === k
-                        ? 'border-fg bg-fg text-bg'
-                        : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-                    )}
-                  >
-                    {SORT_LABELS[k]}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-bg-subtle/50 border-b border-border-subtle">
-                  <tr className="text-left text-xs text-fg-muted uppercase tracking-wider">
-                    <th className="py-2.5 px-4 font-medium">товар</th>
-                    <th className="py-2.5 px-4 font-medium text-right">показы</th>
-                    <th className="py-2.5 px-4 font-medium text-right">в корзину</th>
-                    <th className="py-2.5 px-4 font-medium text-right">заказы</th>
-                    <th className="py-2.5 px-4 font-medium text-right">доставлено</th>
-                    <th className="py-2.5 px-4 font-medium text-right">сквозная</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border-subtle">
-                  {(topProducts || []).map((p) => (
-                    <tr key={p.product_id} className="hover:bg-bg-subtle/50">
-                      <td className="py-2.5 px-4">
-                        <div className="flex items-center gap-3 min-w-0">
-                          {p.image_url ? (
-                            <img src={p.image_url} alt="" className="w-9 h-9 rounded object-cover shrink-0 border border-border-subtle" />
-                          ) : (
-                            <div className="w-9 h-9 rounded bg-bg-subtle flex items-center justify-center shrink-0">
-                              <ImageIcon className="w-4 h-4 text-fg-subtle" />
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <div className="font-medium text-fg truncate max-w-[280px]">{p.name}</div>
-                            <div className="text-xs text-fg-muted font-mono truncate">{p.offer_id}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">{formatNumber(p.impressions)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">
-                        {formatNumber(p.to_cart)}
-                        {p.cart_conv_pct != null && (
-                          <div className="text-[10px] text-fg-subtle">{p.cart_conv_pct}%</div>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">
-                        {formatNumber(p.orders)}
-                        {p.order_conv_pct != null && (
-                          <div className="text-[10px] text-fg-subtle">{p.order_conv_pct}%</div>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">
-                        {formatNumber(p.delivered)}
-                        {p.delivery_conv_pct != null && (
-                          <div className="text-[10px] text-fg-subtle">{p.delivery_conv_pct}%</div>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-semibold">
-                        {p.overall_conv_pct != null ? `${p.overall_conv_pct}%` : '—'}
-                      </td>
+          {/* === DRILL-DOWN === */}
+          {drillStep && (daily?.length ?? 0) > 0 && (
+            <Card className="p-5">
+              <h3 className="text-base font-semibold text-fg mb-3">
+                Drill-down: {drillStep} по дням
+              </h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-bg-subtle/50">
+                    <tr className="text-left text-xs text-fg-muted uppercase">
+                      <th className="py-2 px-3">дата</th>
+                      <th className="py-2 px-3 text-right">показы</th>
+                      <th className="py-2 px-3 text-right">в корзину</th>
+                      <th className="py-2 px-3 text-right">заказы</th>
+                      <th className="py-2 px-3 text-right">доставлено</th>
+                      <th className="py-2 px-3 text-right">сквозная</th>
+                      <th className="py-2 px-3"></th>
                     </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-subtle">
+                    {daily!.slice().reverse().slice(0, 30).map((d) => (
+                      <tr key={d.date} className="hover:bg-bg-subtle/40 cursor-pointer"
+                        onClick={() => navigate(`/orders?date_from=${d.date}&date_to=${d.date}`)}
+                      >
+                        <td className="py-2 px-3 font-mono text-xs">{d.date}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{formatNumber(d.impressions)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{formatNumber(d.to_cart)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{formatNumber(d.orders)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{formatNumber(d.delivered)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums font-semibold">
+                          {d.overall_conv_pct != null ? `${d.overall_conv_pct}%` : '—'}
+                        </td>
+                        <td className="py-2 px-3 text-fg-subtle text-xs">→ заказы</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          {/* === BEST/WORST DAYS === */}
+          {bestWorst && (bestWorst.best.length > 0 || bestWorst.worst.length > 0) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Card className="p-5">
+                <h3 className="text-base font-semibold text-emerald-700 flex items-center gap-2 mb-3">
+                  <TrendingUp className="w-4 h-4" /> Лучшие дни по конверсии
+                </h3>
+                <ul className="text-sm divide-y divide-border-subtle">
+                  {bestWorst.best.map((d) => (
+                    <li key={d.date} className="py-2 flex justify-between">
+                      <span className="font-mono text-xs">{d.date}</span>
+                      <span className="text-emerald-700 font-semibold tabular-nums">{d.overall_conv_pct}%</span>
+                      <span className="text-fg-muted tabular-nums">{formatNumber(d.impressions)} показов</span>
+                    </li>
                   ))}
-                </tbody>
-              </table>
-              {topProducts && topProducts.length === 0 && (
-                <p className="px-6 py-8 text-center text-sm text-fg-muted">
-                  Нет товаров с показами ≥ 100 за период.
-                </p>
-              )}
+                </ul>
+              </Card>
+              <Card className="p-5">
+                <h3 className="text-base font-semibold text-rose-700 flex items-center gap-2 mb-3">
+                  <TrendingDown className="w-4 h-4" /> Худшие дни по конверсии
+                </h3>
+                <ul className="text-sm divide-y divide-border-subtle">
+                  {bestWorst.worst.map((d) => (
+                    <li key={d.date} className="py-2 flex justify-between">
+                      <span className="font-mono text-xs">{d.date}</span>
+                      <span className="text-rose-700 font-semibold tabular-nums">{d.overall_conv_pct}%</span>
+                      <span className="text-fg-muted tabular-nums">{formatNumber(d.impressions)} показов</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
             </div>
-          </Card>
+          )}
         </>
       )}
     </div>
   )
 }
 
-function KpiTile({
-  label, curr, prev, suffix,
-}: { label: string; curr: number | null; prev: number | null | undefined; suffix?: string }) {
+function ConvCard({ label, curr, prev }: { label: string; curr: number | null; prev?: number | null }) {
   const delta = curr != null && prev != null ? curr - prev : null
   return (
     <Card className="p-4">
       <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">{label}</p>
-      <p className="text-[24px] leading-tight font-semibold text-fg mt-1 tabular-nums">
-        {curr != null ? `${curr}${suffix ?? ''}` : '—'}
+      <p className="text-[20px] leading-tight font-semibold text-fg mt-1 tabular-nums">
+        {curr != null ? `${curr}%` : '—'}
       </p>
       {delta != null && (
         <p className={cn(
@@ -328,7 +379,7 @@ function KpiTile({
           delta >= 0 ? 'text-emerald-700' : 'text-rose-700',
         )}>
           {delta >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-          {delta >= 0 ? '+' : ''}{delta.toFixed(2)} п.п. vs прошлый
+          {delta >= 0 ? '+' : ''}{delta.toFixed(2)} п.п.
         </p>
       )}
     </Card>

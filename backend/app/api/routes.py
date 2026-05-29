@@ -15,6 +15,7 @@ from app.api.endpoints import (
     dashboard_v2,
     expenses,
     funnel,
+    funnel_v2,
     markers,
     orders,
     ozon_accounts,
@@ -48,6 +49,9 @@ api_router.include_router(
 )
 api_router.include_router(
     funnel.router, prefix="/analytics/funnel", tags=["analytics"]
+)
+api_router.include_router(
+    funnel_v2.router, prefix="/analytics/funnel/v2", tags=["analytics"]
 )
 api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
 api_router.include_router(
