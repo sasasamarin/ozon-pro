@@ -801,15 +801,17 @@ async def ad_by_type(
     tx_by_op = {r.op: float(r.spend or 0) for r in tx_rows}
 
     # === Известные advObjectType из ad_campaigns (для подсветки unknown)
+    # raw_data — JSON (не JSONB) → .astext не работает; вытаскиваем в Python
     unk_rows = (await db.execute(
-        select(AdCampaign.raw_data["advObjectType"].astext)
-        .where(
+        select(AdCampaign.raw_data).where(
             AdCampaign.ozon_account_id.in_(accs),
             AdCampaign.campaign_type == "unknown",
         )
-        .distinct()
     )).all()
-    unknown_obj_types = sorted({r[0] for r in unk_rows if r[0]})
+    unknown_obj_types = sorted({
+        (r[0] or {}).get("advObjectType")
+        for r in unk_rows if (r[0] or {}).get("advObjectType")
+    })
 
     rows_out: list[AdTypeRow] = []
 
