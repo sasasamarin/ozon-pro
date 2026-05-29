@@ -614,9 +614,11 @@ async def funnel_correlations(
     beta = _log_elasticity(imps, ords)
 
     # Лаг-корреляция: импрессии (i) ↔ заказы (i+lag). Если лаг=1 — заказы завтра.
+    # Best_lag: лучшая ПОЛОЖИТЕЛЬНАЯ корреляция (отрицательная не означает «эффект»,
+    # это шум или обратная связь — не интерпретируем как лаг).
     lags: list[LagCorr] = []
-    best_lag = 0
-    best_abs = abs(r0) if r0 is not None else -1.0
+    best_lag = 0 if (r0 is not None and r0 > 0) else None
+    best_pos = r0 if (r0 is not None and r0 > 0) else -1.0
     for lag in (0, 1, 2, 3):
         if lag == 0:
             r_lag = r0
@@ -628,8 +630,8 @@ async def funnel_correlations(
                 ys = ords[lag:]
                 r_lag = _pearson(xs, ys)
         lags.append(LagCorr(lag_days=lag, r=round(r_lag, 4) if r_lag is not None else None))
-        if r_lag is not None and abs(r_lag) > best_abs:
-            best_abs = abs(r_lag)
+        if r_lag is not None and r_lag > best_pos and r_lag >= 0.3:
+            best_pos = r_lag
             best_lag = lag
 
     headline = _strength_label_ru(r0)
@@ -639,12 +641,13 @@ async def funnel_correlations(
         parts: list[str] = []
         if r0 is not None:
             parts.append(f"Коэффициент Пирсона r = {r0:.2f}")
-        if beta is not None:
-            sign = "+" if beta > 0 else ""
-            parts.append(f"эластичность β = {beta:.2f} (рост показов на 10% → заказы {sign}{beta * 10:.1f}%)")
-        if best_lag > 0:
+        if beta is not None and beta > 0:
+            parts.append(f"эластичность β = {beta:.2f} (рост показов на 10% → заказы +{beta * 10:.1f}%)")
+        elif beta is not None and beta < 0:
+            parts.append(f"эластичность β = {beta:.2f} (обратная зависимость)")
+        if best_lag is not None and best_lag > 0:
             parts.append(f"эффект сильнее всего проявляется через {best_lag} дн.")
-        elif r0 is not None and abs(r0) >= 0.4:
+        elif r0 is not None and r0 >= 0.4:
             parts.append("эффект мгновенный (тот же день)")
         explanation = "; ".join(parts) + "."
 
