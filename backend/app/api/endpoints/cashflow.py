@@ -1,0 +1,147 @@
+"""
+Cashflow — денежный поток по периодам.
+
+GET /api/v1/finance/cashflow?days=90&granularity=week
+  granularity: day | week | month
+  cabinet_ids: фильтр
+
+Группируем transactions.amount по периоду:
+  inflow (>0)  — приход (продажи, компенсации)
+  outflow (<0) — расход (комиссии, услуги, реклама, штрафы)
+  net          — sum amount = inflow - |outflow|
+  cumulative   — накопительный баланс по периодам
+
+Возвращаем KPI: total_in, total_out, net, end_balance.
+"""
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
+from sqlalchemy import case, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_current_user
+from app.db.session import get_db
+from app.models import OzonAccount, Transaction, User
+
+router = APIRouter()
+UTC = timezone.utc
+
+_GRANULARITY_MAP = {"day": "day", "week": "week", "month": "month"}
+
+
+class CashflowPoint(BaseModel):
+    period_start: str
+    inflow: float
+    outflow: float       # положительное число (=|sum negative|)
+    net: float           # inflow - outflow
+    cumulative: float    # накопительный с начала окна
+
+
+class CashflowKPI(BaseModel):
+    total_inflow: float
+    total_outflow: float
+    net: float
+    end_balance: float
+
+
+class CashflowResponse(BaseModel):
+    period_from: str
+    period_to: str
+    granularity: str
+    kpi: CashflowKPI
+    series: list[CashflowPoint]
+
+
+async def _account_ids(
+    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+) -> list[uuid.UUID]:
+    q = select(OzonAccount.id).where(
+        OzonAccount.company_id == company_id,
+        OzonAccount.deleted_at.is_(None),
+    )
+    if cabinet_ids:
+        q = q.where(OzonAccount.id.in_(cabinet_ids))
+    return [r[0] for r in (await db.execute(q)).all()]
+
+
+@router.get("/", response_model=CashflowResponse)
+async def get_cashflow(
+    days: int = Query(90, ge=1, le=730),
+    granularity: str = Query("week"),
+    cabinet_ids: list[uuid.UUID] | None = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CashflowResponse:
+    if granularity not in _GRANULARITY_MAP:
+        granularity = "week"
+    trunc_unit = _GRANULARITY_MAP[granularity]
+
+    now = datetime.now(UTC)
+    period_to = now
+    period_from = now - timedelta(days=days)
+
+    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    if not accs:
+        return CashflowResponse(
+            period_from=period_from.date().isoformat(),
+            period_to=period_to.date().isoformat(),
+            granularity=granularity,
+            kpi=CashflowKPI(total_inflow=0, total_outflow=0, net=0, end_balance=0),
+            series=[],
+        )
+
+    bucket = func.date_trunc(trunc_unit, Transaction.time).label("bucket")
+    # inflow = sum of positive amounts; outflow = sum of |negative amounts|
+    inflow_expr = func.coalesce(
+        func.sum(case((Transaction.amount > 0, Transaction.amount), else_=0)), 0
+    ).label("inflow")
+    outflow_expr = func.coalesce(
+        func.sum(case((Transaction.amount < 0, -Transaction.amount), else_=0)), 0
+    ).label("outflow")
+
+    rows = (await db.execute(
+        select(bucket, inflow_expr, outflow_expr)
+        .where(
+            Transaction.ozon_account_id.in_(accs),
+            Transaction.time >= period_from,
+            Transaction.time < period_to,
+        )
+        .group_by(bucket)
+        .order_by(bucket)
+    )).all()
+
+    series: list[CashflowPoint] = []
+    cum = 0.0
+    total_in = 0.0
+    total_out = 0.0
+    for r in rows:
+        inflow = float(r.inflow or 0)
+        outflow = float(r.outflow or 0)
+        net = inflow - outflow
+        cum += net
+        total_in += inflow
+        total_out += outflow
+        series.append(CashflowPoint(
+            period_start=r.bucket.date().isoformat(),
+            inflow=round(inflow, 2),
+            outflow=round(outflow, 2),
+            net=round(net, 2),
+            cumulative=round(cum, 2),
+        ))
+
+    return CashflowResponse(
+        period_from=period_from.date().isoformat(),
+        period_to=period_to.date().isoformat(),
+        granularity=granularity,
+        kpi=CashflowKPI(
+            total_inflow=round(total_in, 2),
+            total_outflow=round(total_out, 2),
+            net=round(total_in - total_out, 2),
+            end_balance=round(cum, 2),
+        ),
+        series=series,
+    )

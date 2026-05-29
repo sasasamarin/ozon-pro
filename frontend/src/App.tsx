@@ -14,6 +14,7 @@ import { Funnel } from '@/pages/Funnel'
 import { FinancePnL } from '@/pages/FinancePnL'
 import { Costs } from '@/pages/Costs'
 import { SupplyParams } from '@/pages/SupplyParams'
+import { Cashflow } from '@/pages/Cashflow'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/costs" element={<Costs />} />
         <Route path="/procurement/supply-params" element={<SupplyParams />} />
         <Route path="/supply-params" element={<SupplyParams />} />
+        <Route path="/finance/cashflow" element={<Cashflow />} />
         <Route path="/settings" element={<Settings />} />
 
         {placeholderItems
@@ -63,7 +65,8 @@ export default function App() {
               item.path !== '/procurement/forecast' &&
               item.path !== '/analytics/funnel' &&
               item.path !== '/finance/p-and-l' &&
-              item.path !== '/products/prices',
+              item.path !== '/products/prices' &&
+              item.path !== '/finance/cashflow',
           )
           .map((item) => (
             <Route
