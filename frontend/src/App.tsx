@@ -30,6 +30,10 @@ import { Markers } from '@/pages/Markers'
 import { Team } from '@/pages/Team'
 import { AIChat } from '@/pages/AIChat'
 import { ReverseFunnel } from '@/pages/ReverseFunnel'
+import { PlanVsFact } from '@/pages/PlanVsFact'
+import { AccountBalance } from '@/pages/AccountBalance'
+import { Credit } from '@/pages/Credit'
+import { Email } from '@/pages/Email'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -89,6 +93,13 @@ export default function App() {
         <Route path="/ai/chat" element={<AIChat />} />
         <Route path="/ai" element={<AIChat />} />
         <Route path="/analytics/reverse-funnel" element={<ReverseFunnel />} />
+        <Route path="/analytics/plan-vs-fact" element={<PlanVsFact />} />
+        <Route path="/finance/account-balance" element={<AccountBalance />} />
+        <Route path="/credit" element={<Credit />} />
+        <Route path="/credit/list" element={<Credit />} />
+        <Route path="/email" element={<Email />} />
+        <Route path="/email/templates" element={<Email />} />
+        <Route path="/email/log" element={<Email />} />
         <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/settings" element={<Settings />} />
 
@@ -119,7 +130,12 @@ export default function App() {
               item.path !== '/team/members' &&
               item.path !== '/team/invitations' &&
               item.path !== '/ai/chat' &&
-              item.path !== '/analytics/reverse-funnel',
+              item.path !== '/analytics/reverse-funnel' &&
+              item.path !== '/analytics/plan-vs-fact' &&
+              item.path !== '/finance/account-balance' &&
+              item.path !== '/credit/list' &&
+              item.path !== '/email/templates' &&
+              item.path !== '/email/log',
           )
           .map((item) => (
             <Route

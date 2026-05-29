@@ -6,19 +6,23 @@
 from fastapi import APIRouter
 
 from app.api.endpoints import (
+    account_balance,
     auth,
     cashflow,
     categories,
     communications,
     costs,
+    credit,
     dashboard,
     dashboard_v2,
+    email_logs,
     expenses,
     funnel,
     funnel_v2,
     markers,
     orders,
     ozon_accounts,
+    plan_vs_fact,
     pnl,
     products,
     recommendations,
@@ -81,3 +85,11 @@ api_router.include_router(
 )
 api_router.include_router(markers.router, prefix="/markers", tags=["markers"])
 api_router.include_router(team.router, prefix="/team", tags=["team"])
+api_router.include_router(
+    plan_vs_fact.router, prefix="/analytics/plan-vs-fact", tags=["analytics"]
+)
+api_router.include_router(
+    account_balance.router, prefix="/finance/account-balance", tags=["finance"]
+)
+api_router.include_router(credit.router, prefix="/credit", tags=["credit"])
+api_router.include_router(email_logs.router, prefix="/email", tags=["email"])
