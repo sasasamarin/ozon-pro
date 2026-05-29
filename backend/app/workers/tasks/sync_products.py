@@ -36,6 +36,8 @@ from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
+    load_extended_sku_map,
+    load_offer_id_map,
     load_sku_map,
     run_celery_async,
     track_sync_log,
@@ -105,7 +107,10 @@ async def _sync_warehouse_stocks_for_account(
 
         try:
             async with track_sync_log(db, account.id, "sync_warehouse_stocks") as stats:
-                sku_to_id = await load_sku_map(db, account.id)
+                # extended-map покрывает SKU вариантов складов (Ozon в analytics-
+                # и warehouse-endpoint'ах возвращает variant SKU, не primary).
+                sku_to_id = await load_extended_sku_map(db, account.id)
+                offer_to_id = await load_offer_id_map(db, account.id)
                 snapshot_at = datetime.now(UTC)
 
                 client_id = decrypt_secret(account.client_id_encrypted)
@@ -131,7 +136,12 @@ async def _sync_warehouse_stocks_for_account(
 
                         for it in items:
                             sku = it.get("sku") or it.get("product_id")
-                            product_id = sku_to_id.get(int(sku)) if sku else None
+                            offer = it.get("item_code")
+                            product_id = None
+                            if sku is not None:
+                                product_id = sku_to_id.get(int(sku))
+                            if product_id is None and offer:
+                                product_id = offer_to_id.get(offer)
                             if not product_id:
                                 continue
                             rows.append({
