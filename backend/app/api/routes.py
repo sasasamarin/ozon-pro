@@ -11,6 +11,7 @@ from app.api.endpoints import (
     categories,
     costs,
     dashboard,
+    expenses,
     funnel,
     orders,
     ozon_accounts,
@@ -19,6 +20,7 @@ from app.api.endpoints import (
     recommendations,
     returns,
     summary,
+    supplier_orders,
     supply_params,
     transactions,
     warehouse_stocks,
@@ -58,4 +60,8 @@ api_router.include_router(
 )
 api_router.include_router(
     recommendations.router, prefix="/recommendations", tags=["recommendations"]
+)
+api_router.include_router(expenses.router, prefix="/finance/expenses", tags=["finance"])
+api_router.include_router(
+    supplier_orders.router, prefix="/procurement/orders", tags=["procurement"]
 )

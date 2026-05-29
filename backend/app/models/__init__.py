@@ -66,6 +66,7 @@ from app.models.cost import (  # noqa: F401
     SupplierOrderStatus,
 )
 from app.models.email import EmailLog, EmailStatus, EmailTemplate  # noqa: F401
+from app.models.expense import ExpenseCategory, ExternalExpense  # noqa: F401
 from app.models.financing import (  # noqa: F401
     FinancingMovementType,
     FinancingProductType,
@@ -154,6 +155,8 @@ __all__ = [
     "ProductCostHistory",
     "CostImportLog",
     "PendingCost",
+    "ExternalExpense",
+    "ExpenseCategory",
     "CostSource",
     "CostConfidence",
     # Phase 2 — финансовые продукты Ozon

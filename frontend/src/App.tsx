@@ -22,6 +22,8 @@ import { Summary } from '@/pages/Summary'
 import { Categories } from '@/pages/Categories'
 import { Calculator } from '@/pages/Calculator'
 import { Heatmap } from '@/pages/Heatmap'
+import { Expenses } from '@/pages/Expenses'
+import { SupplierOrders } from '@/pages/SupplierOrders'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -68,6 +70,8 @@ export default function App() {
         <Route path="/analytics/heatmap" element={<Heatmap />} />
         <Route path="/products/categories" element={<Categories />} />
         <Route path="/products/calculator" element={<Calculator />} />
+        <Route path="/finance/expenses" element={<Expenses />} />
+        <Route path="/procurement/orders" element={<SupplierOrders />} />
         <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/settings" element={<Settings />} />
 
@@ -88,7 +92,9 @@ export default function App() {
               item.path !== '/analytics/summary' &&
               item.path !== '/analytics/heatmap' &&
               item.path !== '/products/categories' &&
-              item.path !== '/products/calculator',
+              item.path !== '/products/calculator' &&
+              item.path !== '/finance/expenses' &&
+              item.path !== '/procurement/orders',
           )
           .map((item) => (
             <Route
