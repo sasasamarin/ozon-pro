@@ -315,7 +315,15 @@ async def _upsert_cancellation(db: AsyncSession, *, account_id: uuid.UUID, raw: 
         "quantity": int(first_product.get("quantity") or 1),
         "cancel_reason_id": cancellation.get("cancel_reason_id") or raw.get("cancel_reason_id"),
         "cancel_reason_text": cancellation.get("cancel_reason") or raw.get("cancel_reason"),
-        "cancelled_at": _parse_dt(cancellation.get("cancelled_at") or raw.get("cancelled_at")),
+        # Ozon /v3/posting/fbo|fbs/list для cancelled-постингов не отдаёт
+        # отдельного cancelled_at — используем созданное время заказа как
+        # лучший approximation эффективной даты события.
+        "cancelled_at": _parse_dt(
+            cancellation.get("cancelled_at")
+            or raw.get("cancelled_at")
+            or raw.get("in_process_at")
+            or raw.get("created_at")
+        ),
         "initiator": cancellation.get("cancellation_initiator") or raw.get("cancellation_initiator"),
         "raw_data": raw,
     }
