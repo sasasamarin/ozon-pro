@@ -116,6 +116,51 @@ async def _sync_ad_campaigns_for_account(
             return {"status": "failed", "error": str(e)}
 
 
+_STATE_MAP = {
+    "CAMPAIGN_STATE_RUNNING": "running",
+    "CAMPAIGN_STATE_PLANNED": "planned",
+    "CAMPAIGN_STATE_INACTIVE": "paused",
+    "CAMPAIGN_STATE_PAUSED": "paused",
+    "CAMPAIGN_STATE_STOPPED": "paused",
+    "CAMPAIGN_STATE_FINISHED": "finished",
+    "CAMPAIGN_STATE_ARCHIVED": "archived",
+}
+
+_TYPE_MAP = {
+    "SKU": "sku",
+    "SEARCH_PROMO": "search_promo",
+    "BANNER": "banner",
+    "BRAND_SHELF": "brand_shelf",
+    "PREMIUM": "brand_shelf",
+    "REF_VK": "ref_vk",
+}
+
+# Модель оплаты по advObjectType — нужно для расчёта ROMI и графика «Реклама→Заказы».
+_PAYMENT_MAP = {
+    "SKU": "PER_CLICK",          # трафареты CPC
+    "SEARCH_PROMO": "PER_ORDER", # «продвижение в поиске» — CPA
+    "BANNER": "CPM",             # баннеры за показы
+    "BRAND_SHELF": "FIXED",      # брендовая полка фикс
+    "PREMIUM": "FIXED",
+    "REF_VK": "PER_CLICK",
+}
+
+
+def _norm_state(raw_state: str | None) -> str:
+    s = (raw_state or "").upper()
+    return _STATE_MAP.get(s, "unknown")
+
+
+def _norm_type(raw_type: str | None) -> str:
+    t = (raw_type or "").upper()
+    return _TYPE_MAP.get(t, "unknown")
+
+
+def _payment_model(raw_type: str | None) -> str:
+    t = (raw_type or "").upper()
+    return _PAYMENT_MAP.get(t, "PER_CLICK")
+
+
 async def _upsert_campaign(
     db: AsyncSession, *, account_id: uuid.UUID, raw: dict
 ) -> None:
@@ -123,18 +168,22 @@ async def _upsert_campaign(
     if not ozon_campaign_id:
         return
 
+    raw_type = raw.get("advObjectType") or raw.get("type")
+    enriched_raw = dict(raw)
+    enriched_raw["__payment_model"] = _payment_model(raw_type)
+
     payload: dict[str, Any] = {
         "ozon_account_id": account_id,
         "ozon_campaign_id": ozon_campaign_id,
-        "title": raw.get("title") or raw.get("name") or f"Кампания {ozon_campaign_id}",
-        "campaign_type": str(raw.get("advObjectType") or raw.get("type") or "unknown").lower(),
-        "state": str(raw.get("state") or "unknown").lower(),
+        "title": (raw.get("title") or raw.get("name") or f"Кампания {ozon_campaign_id}")[:255],
+        "campaign_type": _norm_type(raw_type),
+        "state": _norm_state(raw.get("state")),
         "from_date": _parse_date(raw.get("fromDate")),
         "to_date": _parse_date(raw.get("toDate")),
         "daily_budget": _to_float(raw.get("dailyBudget")),
         "weekly_budget": _to_float(raw.get("weeklyBudget")),
         "budget": _to_float(raw.get("budget")),
-        "raw_data": raw,
+        "raw_data": enriched_raw,
     }
 
     existing = await db.execute(

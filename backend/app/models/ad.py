@@ -76,10 +76,10 @@ class AdCampaign(BaseModel):
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     campaign_type: Mapped[str] = mapped_column(
-        String(30), default=AdCampaignType.UNKNOWN.value, nullable=False
+        String(64), default=AdCampaignType.UNKNOWN.value, nullable=False
     )
     state: Mapped[str] = mapped_column(
-        String(20), default=AdCampaignState.UNKNOWN.value, nullable=False
+        String(64), default=AdCampaignState.UNKNOWN.value, nullable=False
     )
 
     # from_date/to_date оставляем для обратной совместимости; start_date/end_date — каноничные.
