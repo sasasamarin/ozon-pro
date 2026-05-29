@@ -1,13 +1,5 @@
 """
-Funnel v2 — drill-down + per-product + comparison.
-
-GET /api/v1/analytics/funnel/v2
-  ?date_from / date_to / days
-  &product_id (опц)
-  &compare=none|prev_period|year_ago
-
-GET /api/v1/analytics/funnel/v2/daily — daily breakdown воронки
-GET /api/v1/analytics/funnel/v2/best-worst-days — топ-5 лучших и худших дней по конверсии
+Funnel v2 — 5 шагов + рекламная колонка + ДРР + drill-down + comparison.
 """
 from __future__ import annotations
 
@@ -21,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import AnalyticsDaily, OzonAccount, Product, User
+from app.models import AnalyticsDaily, OzonAccount, Product, Transaction, User
 
 router = APIRouter()
 UTC = timezone.utc
@@ -29,6 +21,7 @@ UTC = timezone.utc
 
 class FunnelKPI(BaseModel):
     impressions: int
+    clicks: int
     to_cart: int
     orders: int
     delivered: int
@@ -37,6 +30,23 @@ class FunnelKPI(BaseModel):
     order_conv_pct: float | None
     delivery_conv_pct: float | None
     overall_conv_pct: float | None
+    ctr_pct: float | None
+    click_to_cart_pct: float | None
+
+
+class AdBreakdownRow(BaseModel):
+    op_type: str
+    label: str
+    amount: float
+    pct_of_total: float
+    model: str  # CPC / CPA / FIXED
+
+
+class AdBlock(BaseModel):
+    total_spend: float
+    drr_pct: float | None
+    breakdown: list[AdBreakdownRow]
+    has_data: bool
 
 
 class FunnelV2Resp(BaseModel):
@@ -47,6 +57,7 @@ class FunnelV2Resp(BaseModel):
     has_data: bool
     kpi: FunnelKPI
     prev_kpi: FunnelKPI | None
+    ad: AdBlock
 
 
 class FunnelDailyPoint(BaseModel):
@@ -54,6 +65,7 @@ class FunnelDailyPoint(BaseModel):
     impressions: int
     impressions_search: int
     impressions_pdp: int
+    clicks: int
     to_cart: int
     to_cart_search: int
     to_cart_pdp: int
@@ -62,6 +74,7 @@ class FunnelDailyPoint(BaseModel):
     returns: int
     revenue: float
     overall_conv_pct: float | None
+    ctr_pct: float | None
     cart_conv_pct: float | None
     order_conv_pct: float | None
     delivery_conv_pct: float | None
@@ -73,6 +86,20 @@ class BestWorstDay(BaseModel):
     to_value: int
     conv_pct: float
     revenue: float
+
+
+# === AD types Ozon ===
+AD_OP_TYPES = [
+    ("OperationMarketplaceCostPerClick",            "Трафареты (за клик)",      "CPC"),
+    ("OperationPromotionWithCostPerOrder",          "Продвижение за заказ",     "CPA"),
+    ("OperationElectronicServicesPromotionInS",     "Продвижение в поиске",     "CPC"),
+    ("OperationGettingToTheTop",                    "Вывод в топ",              "FIXED"),
+    ("OperationElectronicServiceStencil",           "Трафареты (классические)", "CPC"),
+    ("OperationMarketPlaceItemPinReview",           "Закрепление отзыва",       "FIXED"),
+    ("OperationLabelOriginal",                      "Бейдж Оригинал",           "FIXED"),
+    ("MarketplaceMarketingActionCostOperation",     "Маркетинговые акции",      "CPA"),
+    ("OperationOtherElectronicServices",            "Прочие услуги",            "FIXED"),
+]
 
 
 async def _account_ids(
@@ -93,16 +120,19 @@ def _safe_pct(num: int | float, denom: int | float) -> float | None:
 
 def _kpi(row) -> FunnelKPI:
     imp = int(row.imp or 0)
+    clicks = int(row.clicks or 0)
     cart = int(row.cart or 0)
     orders = int(row.orders or 0)
     deliv = int(row.deliv or 0)
     return FunnelKPI(
-        impressions=imp, to_cart=cart, orders=orders, delivered=deliv,
+        impressions=imp, clicks=clicks, to_cart=cart, orders=orders, delivered=deliv,
         revenue=float(row.revenue or 0),
         cart_conv_pct=_safe_pct(cart, imp),
         order_conv_pct=_safe_pct(orders, cart),
         delivery_conv_pct=_safe_pct(deliv, orders),
         overall_conv_pct=_safe_pct(deliv, imp),
+        ctr_pct=_safe_pct(clicks, imp),
+        click_to_cart_pct=_safe_pct(cart, clicks),
     )
 
 
@@ -123,12 +153,65 @@ async def _aggregate(
         where.append(AnalyticsDaily.product_id == product_id)
     q = select(
         func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
+        func.coalesce(func.sum(AnalyticsDaily.session_view_search + AnalyticsDaily.session_view_pdp), 0).label("clicks"),
         func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
         func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
         func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
         func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
     ).select_from(AnalyticsDaily).join(Product, Product.id == AnalyticsDaily.product_id).where(*where)
     return (await db.execute(q)).one()
+
+
+async def _ad_breakdown(
+    db: AsyncSession,
+    *,
+    accs: list[uuid.UUID],
+    date_from: date_cls,
+    date_to: date_cls,
+    revenue: float,
+) -> AdBlock:
+    if not accs:
+        return AdBlock(total_spend=0, drr_pct=None, breakdown=[], has_data=False)
+    dt_from = datetime.combine(date_from, datetime.min.time(), tzinfo=UTC)
+    dt_to = datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
+
+    op_keys = [op for op, _, _ in AD_OP_TYPES]
+    rows = (await db.execute(
+        select(
+            Transaction.operation_type,
+            func.coalesce(func.sum(func.abs(Transaction.amount)), 0).label("amount"),
+        )
+        .where(
+            Transaction.ozon_account_id.in_(accs),
+            Transaction.time >= dt_from,
+            Transaction.time < dt_to,
+            Transaction.operation_type.in_(op_keys),
+        )
+        .group_by(Transaction.operation_type)
+    )).all()
+
+    total = sum(float(r.amount or 0) for r in rows)
+    by_op = {r.operation_type: float(r.amount or 0) for r in rows}
+
+    breakdown: list[AdBreakdownRow] = []
+    for op, label, model in AD_OP_TYPES:
+        amount = by_op.get(op, 0)
+        if amount > 0:
+            breakdown.append(AdBreakdownRow(
+                op_type=op,
+                label=label,
+                amount=round(amount, 2),
+                pct_of_total=round(amount / total * 100, 1) if total else 0,
+                model=model,
+            ))
+    breakdown.sort(key=lambda x: x.amount, reverse=True)
+    drr = (total / revenue * 100) if revenue else None
+    return AdBlock(
+        total_spend=round(total, 2),
+        drr_pct=round(drr, 2) if drr is not None else None,
+        breakdown=breakdown,
+        has_data=total > 0,
+    )
 
 
 @router.get("/", response_model=FunnelV2Resp)
@@ -163,14 +246,16 @@ async def get_funnel_v2(
 
     if not accs:
         empty_kpi = FunnelKPI(
-            impressions=0, to_cart=0, orders=0, delivered=0, revenue=0,
+            impressions=0, clicks=0, to_cart=0, orders=0, delivered=0, revenue=0,
             cart_conv_pct=None, order_conv_pct=None,
             delivery_conv_pct=None, overall_conv_pct=None,
+            ctr_pct=None, click_to_cart_pct=None,
         )
+        empty_ad = AdBlock(total_spend=0, drr_pct=None, breakdown=[], has_data=False)
         return FunnelV2Resp(
             period_from=date_from.isoformat(), period_to=date_to.isoformat(),
             product_id=product_id, product_name=prod_name,
-            has_data=False, kpi=empty_kpi, prev_kpi=None,
+            has_data=False, kpi=empty_kpi, prev_kpi=None, ad=empty_ad,
         )
 
     row = await _aggregate(db, accs=accs, product_id=pid, date_from=date_from, date_to=date_to)
@@ -188,12 +273,14 @@ async def get_funnel_v2(
         prev_row = await _aggregate(db, accs=accs, product_id=pid, date_from=prev_from, date_to=prev_to)
         prev_kpi = _kpi(prev_row)
 
+    ad = await _ad_breakdown(db, accs=accs, date_from=date_from, date_to=date_to, revenue=kpi.revenue)
+
     return FunnelV2Resp(
         period_from=date_from.isoformat(),
         period_to=date_to.isoformat(),
         product_id=product_id, product_name=prod_name,
         has_data=kpi.impressions > 0 or kpi.orders > 0,
-        kpi=kpi, prev_kpi=prev_kpi,
+        kpi=kpi, prev_kpi=prev_kpi, ad=ad,
     )
 
 
@@ -237,6 +324,7 @@ async def get_funnel_daily(
             AnalyticsDaily.date.label("d"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp_s"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("imp_p"),
+            func.coalesce(func.sum(AnalyticsDaily.session_view_search + AnalyticsDaily.session_view_pdp), 0).label("clicks"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search), 0).label("cart_s"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart_p"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
@@ -256,6 +344,7 @@ async def get_funnel_daily(
         imp_s = int(r.imp_s or 0)
         imp_p = int(r.imp_p or 0)
         imp = imp_s + imp_p
+        clicks = int(r.clicks or 0)
         cart_s = int(r.cart_s or 0)
         cart_p = int(r.cart_p or 0)
         cart = cart_s + cart_p
@@ -266,6 +355,7 @@ async def get_funnel_daily(
             impressions=imp,
             impressions_search=imp_s,
             impressions_pdp=imp_p,
+            clicks=clicks,
             to_cart=cart,
             to_cart_search=cart_s,
             to_cart_pdp=cart_p,
@@ -274,6 +364,7 @@ async def get_funnel_daily(
             returns=int(r.returns_ or 0),
             revenue=float(r.revenue or 0),
             overall_conv_pct=_safe_pct(deliv, imp),
+            ctr_pct=_safe_pct(clicks, imp),
             cart_conv_pct=_safe_pct(cart, imp),
             order_conv_pct=_safe_pct(orders, cart),
             delivery_conv_pct=_safe_pct(deliv, orders),
@@ -290,12 +381,6 @@ async def best_worst_days(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Лучшие/худшие дни. metric:
-      overall  — показ → доставка
-      cart     — показ → корзина
-      order    — корзина → заказ
-      delivery — заказ → выкуп
-    """
     today = datetime.now(UTC).date()
     date_from = today - timedelta(days=days)
 
@@ -361,7 +446,6 @@ async def best_worst_days(
                 return None
             return BestWorstDay(date=r.d.isoformat(), from_value=orders, to_value=deliv,
                                 conv_pct=_safe_pct(deliv, orders) or 0, revenue=revenue)
-        # overall
         if imp < 100:
             return None
         return BestWorstDay(date=r.d.isoformat(), from_value=imp, to_value=deliv,
