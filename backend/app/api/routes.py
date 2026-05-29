@@ -12,6 +12,7 @@ from app.api.endpoints import (
     communications,
     costs,
     dashboard,
+    dashboard_v2,
     expenses,
     funnel,
     markers,
@@ -37,6 +38,9 @@ api_router.include_router(
     ozon_accounts.router, prefix="/ozon-accounts", tags=["ozon-accounts"]
 )
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+api_router.include_router(
+    dashboard_v2.router, prefix="/dashboard/v2", tags=["dashboard"]
+)
 api_router.include_router(products.router, prefix="/products", tags=["products"])
 api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
 api_router.include_router(

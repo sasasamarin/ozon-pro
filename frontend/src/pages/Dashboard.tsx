@@ -1,15 +1,14 @@
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams, useNavigate } from 'react-router-dom'
 import {
-  TrendingUp,
-  ShoppingBag,
-  Wallet,
-  Package,
-  ArrowUpRight,
-  ArrowDownRight,
-  Sparkles,
+  TrendingUp, ShoppingBag, Wallet, Package,
+  ArrowUpRight, ArrowDownRight, Sparkles, MapPin,
+  Image as ImageIcon, Loader2, Calendar,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
 import { CostWarningBanner } from '@/components/ui/CostWarningBanner'
 import { Sparkline } from '@/components/ui/Sparkline'
 import { api } from '@/lib/api'
@@ -19,227 +18,403 @@ import { useCabinetStore } from '@/stores/cabinet'
 interface KPI {
   revenue: number
   revenue_change_pct: number | null
-  ozon_expenses: number
-  ozon_expenses_pct_of_revenue: number | null
   gross_profit: number
   gross_profit_change_pct: number | null
   orders_count: number
   orders_change_pct: number | null
-  avg_order_value: number
+  aov: number
+  aov_change_pct: number | null
+  ozon_expenses: number
+  expense_share_pct: number | null
+  sparkline: number[]
 }
 
-interface ExpenseRow {
-  category: string
-  amount: number
-  pct_of_expenses: number
-}
-
-interface DailyPoint {
-  date: string
+interface TimePoint {
+  bucket: string
   revenue: number
   expenses: number
+  cogs: number
   profit: number
+  orders: number
+}
+
+interface ExpenseSegment {
+  category: string
+  amount: number
+  pct: number
+  op_type_filter: string | null
 }
 
 interface TopProduct {
   product_id: string
   name: string
   offer_id: string
+  image_url: string | null
   revenue: number
+  orders: number
   units: number
-  share_pct: number
+  margin: number | null
+  margin_pct: number | null
 }
 
-interface DashboardData {
+interface ClusterSegment {
+  cluster: string
+  revenue: number
+  orders: number
+  pct: number
+}
+
+interface DashboardV2 {
   period_from: string
   period_to: string
-  cabinet_ids: string[]
+  granularity: string
+  compare: string
   has_missing_costs: boolean
   missing_costs_count: number
   kpi: KPI
-  expense_breakdown: ExpenseRow[]
-  daily_series: DailyPoint[]
+  series: TimePoint[]
+  expense_breakdown: ExpenseSegment[]
   top_products: TopProduct[]
+  clusters: ClusterSegment[]
 }
 
-export function Dashboard() {
-  const { selectedCabinetIds } = useCabinetStore()
+const DONUT_COLORS = [
+  'fill-rose-500', 'fill-amber-500', 'fill-emerald-500',
+  'fill-blue-500', 'fill-violet-500', 'fill-indigo-500',
+  'fill-pink-500', 'fill-orange-500', 'fill-teal-500',
+]
 
-  const { data, isLoading } = useQuery<DashboardData>({
-    queryKey: ['dashboard', selectedCabinetIds, 30],
+const PRESETS: Array<{ key: string; label: string; days: number }> = [
+  { key: '7', label: '7 дней', days: 7 },
+  { key: '30', label: '30 дней', days: 30 },
+  { key: '90', label: '90 дней', days: 90 },
+  { key: '365', label: 'Год', days: 365 },
+  { key: '730', label: '17 месяцев', days: 514 },
+]
+
+export function Dashboard() {
+  const { selectedCabinetIds, setSelectedCabinetIds } = useCabinetStore()
+  const [params, setParams] = useSearchParams()
+  const navigate = useNavigate()
+
+  // URL state
+  const days = parseInt(params.get('days') || '30', 10)
+  const granularity = (params.get('g') || 'day') as 'day' | 'week' | 'month'
+  const compare = (params.get('cmp') || 'prev_period') as 'none' | 'prev_period' | 'year_ago'
+  const dateFrom = params.get('from') || ''
+  const dateTo = params.get('to') || ''
+  const [customRange, setCustomRange] = useState(Boolean(dateFrom || dateTo))
+
+  // Сохранение выбранных кабинетов в URL
+  useEffect(() => {
+    const cab = params.get('cab')
+    if (cab && cab !== selectedCabinetIds.join(',')) {
+      setSelectedCabinetIds(cab.split(',').filter(Boolean))
+    }
+  }, [])
+
+  const updateParam = (k: string, v: string | undefined) => {
+    const p = new URLSearchParams(params)
+    if (v) p.set(k, v); else p.delete(k)
+    setParams(p, { replace: true })
+  }
+
+  const { data, isLoading } = useQuery<DashboardV2>({
+    queryKey: ['dashboard-v2', selectedCabinetIds, days, granularity, compare, dateFrom, dateTo],
     queryFn: async () => {
-      const params = new URLSearchParams({ days: '30' })
-      selectedCabinetIds.forEach((id) => params.append('cabinet_ids', id))
-      const res = await api.get(`/dashboard/?${params.toString()}`)
+      const p = new URLSearchParams({ granularity, compare })
+      if (dateFrom) p.append('date_from', dateFrom)
+      if (dateTo) p.append('date_to', dateTo)
+      if (!dateFrom && !dateTo) p.append('days', String(days))
+      selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
+      const res = await api.get(`/dashboard/v2/?${p.toString()}`)
       return res.data
     },
   })
 
   const kpi = data?.kpi
-  const revSeries = (data?.daily_series || []).map((d) => d.revenue)
-  const profitSeries = (data?.daily_series || []).map((d) => d.profit)
-  const expensesSeries = (data?.daily_series || []).map((d) => d.expenses)
+  const series = data?.series || []
+  const maxRev = Math.max(1, ...series.map((s) => s.revenue))
 
   return (
     <div className="relative">
-      <div
-        aria-hidden
-        className="absolute -top-20 -right-20 w-[520px] h-[520px] rounded-full bg-aurora-soft blur-3xl pointer-events-none -z-0"
-      />
-
-      <div className="relative flex flex-col gap-6">
-        {/* Header */}
-        <div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-bg-subtle/60 backdrop-blur-sm px-2.5 py-1 text-xs font-medium text-fg-muted">
-            <Sparkles className="w-3 h-3" />
-            Сводка · 30 дней
+      <div className="relative flex flex-col gap-5">
+        {/* === HEADER === */}
+        <div className="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-border-subtle bg-bg-subtle/60 px-2.5 py-1 text-xs font-medium text-fg-muted">
+              <Sparkles className="w-3 h-3" />
+              {data?.period_from} … {data?.period_to}
+            </div>
+            <h1 className="text-3xl font-semibold text-fg tracking-tight mt-3">Дашборд</h1>
           </div>
-          <h1 className="text-3xl font-semibold text-fg tracking-tight mt-3">Дашборд</h1>
-          <p className="text-sm text-fg-muted mt-1.5">
-            Выручка, расходы Ozon и прибыль по выбранным кабинетам.
-          </p>
         </div>
 
-        {/* Cost warning */}
+        {/* === TOOLBAR === */}
+        <Card className="p-3 flex flex-wrap items-center gap-2">
+          {PRESETS.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => {
+                setCustomRange(false)
+                updateParam('from', undefined)
+                updateParam('to', undefined)
+                updateParam('days', p.key)
+              }}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-xs border transition-colors',
+                String(days) === p.key && !customRange
+                  ? 'border-fg bg-fg text-bg'
+                  : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+          <button
+            onClick={() => setCustomRange((v) => !v)}
+            className={cn(
+              'px-3 py-1.5 rounded-md text-xs border transition-colors inline-flex items-center gap-1',
+              customRange
+                ? 'border-fg bg-fg text-bg'
+                : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
+            )}
+          >
+            <Calendar className="w-3 h-3" /> Произвольно
+          </button>
+
+          {customRange && (
+            <>
+              <Input type="date" value={dateFrom}
+                onChange={(e) => updateParam('from', e.target.value)} className="h-8 w-[140px] text-xs" />
+              <Input type="date" value={dateTo}
+                onChange={(e) => updateParam('to', e.target.value)} className="h-8 w-[140px] text-xs" />
+            </>
+          )}
+
+          <div className="w-px h-5 bg-border-subtle mx-2" />
+
+          <span className="text-xs text-fg-muted">Гранулярность:</span>
+          {(['day', 'week', 'month'] as const).map((g) => (
+            <button key={g} onClick={() => updateParam('g', g)} className={cn(
+              'px-2 py-1 rounded text-xs border',
+              granularity === g ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+            )}>
+              {g === 'day' ? 'День' : g === 'week' ? 'Неделя' : 'Месяц'}
+            </button>
+          ))}
+
+          <div className="w-px h-5 bg-border-subtle mx-2" />
+
+          <span className="text-xs text-fg-muted">Сравнение:</span>
+          {([
+            ['none', 'нет'],
+            ['prev_period', 'vs прошлый'],
+            ['year_ago', 'vs год назад'],
+          ] as const).map(([k, l]) => (
+            <button key={k} onClick={() => updateParam('cmp', k)} className={cn(
+              'px-2 py-1 rounded text-xs border',
+              compare === k ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+            )}>
+              {l}
+            </button>
+          ))}
+        </Card>
+
         {data?.has_missing_costs && (
           <CostWarningBanner count={data.missing_costs_count} context="profit" />
         )}
 
-        {/* KPI cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <KpiCard
-            label="Выручка"
-            value={kpi?.revenue ?? 0}
-            change={kpi?.revenue_change_pct ?? null}
-            icon={TrendingUp}
-            iconColor="text-emerald-600"
-            iconBg="from-emerald-50 to-white"
-            sparkPoints={revSeries}
-            sparkColor="text-emerald-500"
-            formatter={formatCurrency}
-            isLoading={isLoading}
-          />
-          <KpiCard
-            label="Расходы Ozon"
-            value={kpi?.ozon_expenses ?? 0}
-            change={null}
-            subtitle={
-              kpi?.ozon_expenses_pct_of_revenue != null
-                ? `${kpi.ozon_expenses_pct_of_revenue}% от выручки`
-                : null
-            }
-            icon={Wallet}
-            iconColor="text-rose-600"
-            iconBg="from-rose-50 to-white"
-            sparkPoints={expensesSeries}
-            sparkColor="text-rose-500"
-            formatter={formatCurrency}
-            isLoading={isLoading}
-          />
-          <KpiCard
-            label="Валовая прибыль"
-            value={kpi?.gross_profit ?? 0}
-            change={kpi?.gross_profit_change_pct ?? null}
-            subtitle="выручка − себестоимость − Ozon"
-            icon={Package}
-            iconColor="text-indigo-600"
-            iconBg="from-indigo-50 to-white"
-            sparkPoints={profitSeries}
-            sparkColor="text-indigo-500"
-            formatter={formatCurrency}
-            isLoading={isLoading}
-          />
-          <KpiCard
-            label="Заказы"
-            value={kpi?.orders_count ?? 0}
-            change={kpi?.orders_change_pct ?? null}
-            subtitle={kpi ? `средний чек ${formatCurrency(kpi.avg_order_value)}` : null}
-            icon={ShoppingBag}
-            iconColor="text-amber-700"
-            iconBg="from-amber-50 to-white"
-            sparkPoints={revSeries}
-            sparkColor="text-amber-600"
-            formatter={formatNumber}
-            isLoading={isLoading}
-          />
-        </div>
+        {/* === KPI ROW === */}
+        {isLoading ? (
+          <Card className="py-16 flex justify-center text-fg-muted">
+            <Loader2 className="w-5 h-5 animate-spin" />
+          </Card>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <KpiCard
+              label="Выручка"
+              value={formatCurrency(kpi?.revenue ?? 0)}
+              change={kpi?.revenue_change_pct}
+              spark={kpi?.sparkline || []}
+              icon={TrendingUp}
+              iconBg="from-emerald-50 to-white text-emerald-600"
+              clickTo={`/finance/transactions?date_from=${data!.period_from}&date_to=${data!.period_to}`}
+            />
+            <KpiCard
+              label="Прибыль валовая"
+              value={formatCurrency(kpi?.gross_profit ?? 0)}
+              change={kpi?.gross_profit_change_pct}
+              spark={kpi?.sparkline || []}
+              icon={Package}
+              iconBg="from-indigo-50 to-white text-indigo-600"
+              clickTo="/finance/pnl"
+            />
+            <KpiCard
+              label="Заказы"
+              value={formatNumber(kpi?.orders_count ?? 0)}
+              change={kpi?.orders_change_pct}
+              spark={kpi?.sparkline || []}
+              icon={ShoppingBag}
+              iconBg="from-amber-50 to-white text-amber-700"
+              clickTo={`/orders?date_from=${data!.period_from}&date_to=${data!.period_to}`}
+            />
+            <KpiCard
+              label="Средний чек"
+              value={formatCurrency(kpi?.aov ?? 0)}
+              change={kpi?.aov_change_pct}
+              spark={[]}
+              icon={Wallet}
+              iconBg="from-violet-50 to-white text-violet-600"
+            />
+            <KpiCard
+              label="Расходы Ozon"
+              value={formatCurrency(kpi?.ozon_expenses ?? 0)}
+              change={null}
+              subtitle={kpi?.expense_share_pct != null ? `${kpi.expense_share_pct}% от выручки` : undefined}
+              spark={[]}
+              icon={Wallet}
+              iconBg="from-rose-50 to-white text-rose-600"
+              clickTo="/finance/transactions"
+            />
+          </div>
+        )}
 
-        {/* Daily chart + top products */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <Card className="lg:col-span-2 p-6">
-            <h2 className="text-base font-semibold text-fg">Динамика по дням</h2>
-            <p className="text-xs text-fg-muted mt-0.5">
-              Выручка (зелёный) · Расходы (красный) · Прибыль (фиолетовый)
+        {/* === MAIN CHART === */}
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold text-fg">Динамика</h2>
+            <p className="text-xs text-fg-muted">
+              {series.length} точек · кликни на bar чтобы увидеть детали дня
             </p>
-            <div className="mt-5 flex flex-col gap-2">
-              <ChartRow label="Выручка" series={revSeries} color="text-emerald-500" />
-              <ChartRow label="Расходы" series={expensesSeries} color="text-rose-500" />
-              <ChartRow label="Прибыль" series={profitSeries} color="text-indigo-500" />
+          </div>
+
+          {series.length === 0 ? (
+            <p className="text-sm text-fg-muted text-center py-8">Нет данных за период</p>
+          ) : (
+            <div className="overflow-x-auto pb-2">
+              <div className="flex items-end gap-1 min-w-[600px] h-[180px]">
+                {series.map((s) => {
+                  const h = Math.max(2, (s.revenue / maxRev) * 160)
+                  const profitH = Math.max(2, (Math.max(0, s.profit) / maxRev) * 160)
+                  return (
+                    <button
+                      key={s.bucket}
+                      onClick={() => navigate(`/orders?date_from=${s.bucket}&date_to=${s.bucket}`)}
+                      className="flex-1 min-w-[8px] flex flex-col items-center gap-1 group"
+                      title={`${s.bucket}: выручка ${formatCurrency(s.revenue)}, прибыль ${formatCurrency(s.profit)}, ${s.orders} заказов`}
+                    >
+                      <div className="relative w-full flex flex-col items-center justify-end" style={{ height: 160 }}>
+                        <div
+                          className="w-full bg-emerald-300 group-hover:bg-emerald-500 transition-colors rounded-t-sm"
+                          style={{ height: h }}
+                        />
+                        <div
+                          className="absolute bottom-0 w-full bg-indigo-400 group-hover:bg-indigo-600 transition-colors rounded-t-sm"
+                          style={{ height: profitH, width: '50%' }}
+                        />
+                      </div>
+                      <span className="text-[9px] text-fg-subtle opacity-0 group-hover:opacity-100 whitespace-nowrap tabular-nums">
+                        {new Date(s.bucket).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex items-center gap-4 mt-3 text-xs text-fg-muted">
+                <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 bg-emerald-300 rounded" /> Выручка</span>
+                <span className="inline-flex items-center gap-1.5"><span className="w-2.5 h-2.5 bg-indigo-400 rounded" /> Прибыль</span>
+              </div>
             </div>
-            <div className="mt-4 flex justify-between text-xs text-fg-subtle font-mono">
-              <span>{data?.period_from}</span>
-              <span>{data?.period_to}</span>
+          )}
+        </Card>
+
+        {/* === 3 WIDGETS === */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Expense donut */}
+          <Card className="p-5">
+            <h2 className="text-base font-semibold text-fg">Расходы Ozon</h2>
+            <p className="text-xs text-fg-muted mt-0.5">кликай по категории → /finance/transactions</p>
+            <div className="mt-4 flex flex-col gap-2">
+              {(data?.expense_breakdown || []).slice(0, 8).map((e, idx) => (
+                <button
+                  key={e.category}
+                  onClick={() => {
+                    const q = new URLSearchParams()
+                    if (e.op_type_filter) q.set('operation_type', e.op_type_filter)
+                    navigate(`/finance/transactions?${q.toString()}`)
+                  }}
+                  className="flex items-center gap-2 text-left hover:bg-bg-subtle/50 rounded px-1.5 py-1 -mx-1.5"
+                >
+                  <span className={cn('w-2.5 h-2.5 rounded-sm shrink-0', DONUT_COLORS[idx]?.replace('fill-', 'bg-'))} />
+                  <span className="text-xs text-fg-muted flex-1 truncate">{e.category}</span>
+                  <span className="text-xs tabular-nums text-fg">{formatCurrency(e.amount)}</span>
+                  <span className="text-[10px] tabular-nums text-fg-subtle w-10 text-right">{e.pct}%</span>
+                </button>
+              ))}
+              {(data?.expense_breakdown || []).length === 0 && (
+                <p className="text-sm text-fg-muted text-center py-4">Нет расходов</p>
+              )}
             </div>
           </Card>
 
-          <Card className="p-6">
-            <h2 className="text-base font-semibold text-fg">Топ товаров</h2>
-            <p className="text-xs text-fg-muted mt-0.5">по выручке за 30 дней</p>
-            <div className="mt-4 flex flex-col gap-3">
-              {(data?.top_products || []).map((p, idx) => (
+          {/* Top products */}
+          <Card className="p-5">
+            <h2 className="text-base font-semibold text-fg">Топ-10 товаров</h2>
+            <p className="text-xs text-fg-muted mt-0.5">кликай → карточка товара</p>
+            <div className="mt-4 flex flex-col gap-2">
+              {(data?.top_products || []).slice(0, 10).map((p, idx) => (
                 <Link
-                  to={`/products`}
                   key={p.product_id}
-                  className="flex items-center gap-3 -mx-2 px-2 py-1.5 rounded-md hover:bg-bg-subtle transition-colors"
+                  to={`/products/${p.product_id}`}
+                  className="flex items-center gap-2 hover:bg-bg-subtle/50 rounded -mx-1.5 px-1.5 py-1"
                 >
-                  <span className="w-5 text-xs font-mono text-fg-subtle tabular-nums">
-                    {idx + 1}.
-                  </span>
+                  <span className="w-4 text-[10px] font-mono text-fg-subtle">{idx + 1}.</span>
+                  {p.image_url ? (
+                    <img src={p.image_url} alt="" className="w-7 h-7 rounded object-cover shrink-0 border border-border-subtle" />
+                  ) : (
+                    <div className="w-7 h-7 rounded bg-bg-subtle flex items-center justify-center shrink-0">
+                      <ImageIcon className="w-3 h-3 text-fg-subtle" />
+                    </div>
+                  )}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-fg truncate">{p.name}</p>
-                    <p className="text-xs text-fg-muted">
-                      {formatNumber(p.units)} шт · {p.share_pct}%
-                    </p>
+                    <div className="text-xs font-medium text-fg truncate">{p.name}</div>
+                    <div className="text-[10px] text-fg-subtle">{p.orders} зак · {p.units} шт{p.margin_pct != null ? ` · ${p.margin_pct}% маржа` : ''}</div>
                   </div>
-                  <span className="text-sm font-semibold text-fg tabular-nums shrink-0">
+                  <span className="text-xs font-mono tabular-nums text-fg shrink-0">
                     {formatCurrency(p.revenue)}
                   </span>
                 </Link>
               ))}
-              {!isLoading && (data?.top_products || []).length === 0 && (
-                <p className="text-sm text-fg-muted text-center py-6">Нет данных за период</p>
+            </div>
+          </Card>
+
+          {/* Clusters */}
+          <Card className="p-5">
+            <h2 className="text-base font-semibold text-fg flex items-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5 text-fg-muted" />
+              По кластерам
+            </h2>
+            <p className="text-xs text-fg-muted mt-0.5">откуда отгружают</p>
+            <div className="mt-4 flex flex-col gap-1.5">
+              {(data?.clusters || []).slice(0, 12).map((c, idx) => (
+                <div key={c.cluster} className="flex items-center gap-2 text-xs">
+                  <span className="text-fg-muted truncate flex-1" title={c.cluster}>
+                    {c.cluster.length > 22 ? c.cluster.substring(0, 22) + '…' : c.cluster}
+                  </span>
+                  <div className="w-12 h-1.5 bg-bg-subtle rounded-full overflow-hidden">
+                    <div className={cn('h-full rounded-full', DONUT_COLORS[idx % DONUT_COLORS.length]?.replace('fill-', 'bg-'))}
+                      style={{ width: `${Math.min(100, c.pct * 2)}%` }} />
+                  </div>
+                  <span className="text-fg tabular-nums w-10 text-right">{c.pct}%</span>
+                </div>
+              ))}
+              {(data?.clusters || []).length === 0 && (
+                <p className="text-fg-muted text-center py-4">Нет данных</p>
               )}
             </div>
           </Card>
         </div>
-
-        {/* Expense breakdown */}
-        <Card className="p-6">
-          <h2 className="text-base font-semibold text-fg">Структура расходов Ozon</h2>
-          <p className="text-xs text-fg-muted mt-0.5">из транзакций за 30 дней</p>
-          <div className="mt-4 flex flex-col gap-2">
-            {(data?.expense_breakdown || []).map((row) => (
-              <div key={row.category} className="flex items-center gap-3">
-                <span className="w-44 text-sm text-fg-muted shrink-0">{row.category}</span>
-                <div className="flex-1 h-2 bg-bg-subtle rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-rose-400 rounded-full"
-                    style={{ width: `${Math.min(100, row.pct_of_expenses)}%` }}
-                  />
-                </div>
-                <span className="text-sm font-semibold text-fg tabular-nums w-28 text-right shrink-0">
-                  {formatCurrency(row.amount)}
-                </span>
-                <span className="text-xs text-fg-muted tabular-nums w-12 text-right shrink-0">
-                  {row.pct_of_expenses}%
-                </span>
-              </div>
-            ))}
-            {!isLoading && (data?.expense_breakdown || []).length === 0 && (
-              <p className="text-sm text-fg-muted text-center py-6">Нет расходов за период</p>
-            )}
-          </div>
-        </Card>
       </div>
     </div>
   )
@@ -247,87 +422,52 @@ export function Dashboard() {
 
 interface KpiCardProps {
   label: string
-  value: number
-  change: number | null
-  subtitle?: string | null
+  value: string
+  change: number | null | undefined
+  spark: number[]
   icon: React.ComponentType<{ className?: string }>
-  iconColor: string
   iconBg: string
-  sparkPoints: number[]
-  sparkColor: string
-  formatter: (v: number) => string
-  isLoading: boolean
+  subtitle?: string
+  clickTo?: string
 }
 
-function KpiCard({
-  label,
-  value,
-  change,
-  subtitle,
-  icon: Icon,
-  iconColor,
-  iconBg,
-  sparkPoints,
-  sparkColor,
-  formatter,
-  isLoading,
-}: KpiCardProps) {
-  return (
-    <Card className="p-5 hover:shadow-elev hover:border-border transition-all duration-200">
-      <div className="flex items-center justify-between mb-4">
-        <div
-          className={cn(
-            'w-9 h-9 rounded-lg bg-gradient-to-br border border-white shadow-sm flex items-center justify-center',
-            iconBg
-          )}
-        >
-          <Icon className={cn('w-4 h-4', iconColor)} />
+function KpiCard({ label, value, change, spark, icon: Icon, iconBg, subtitle, clickTo }: KpiCardProps) {
+  const navigate = useNavigate()
+  const body = (
+    <>
+      <div className="flex items-center justify-between mb-3">
+        <div className={cn('w-8 h-8 rounded-lg bg-gradient-to-br border border-white shadow-sm flex items-center justify-center', iconBg)}>
+          <Icon className="w-4 h-4" />
         </div>
         {change != null && (
-          <span
-            className={cn(
-              'inline-flex items-center gap-0.5 text-[11px] font-semibold px-2 py-0.5 rounded-full tabular-nums',
-              change >= 0 ? 'text-success bg-green-50' : 'text-error bg-red-50'
-            )}
-          >
-            {change >= 0 ? (
-              <ArrowUpRight className="w-3 h-3" />
-            ) : (
-              <ArrowDownRight className="w-3 h-3" />
-            )}
-            {change >= 0 ? '+' : ''}
-            {change}%
+          <span className={cn(
+            'inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full tabular-nums',
+            change >= 0 ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50',
+          )}>
+            {change >= 0 ? <ArrowUpRight className="w-2.5 h-2.5" /> : <ArrowDownRight className="w-2.5 h-2.5" />}
+            {change >= 0 ? '+' : ''}{change}%
           </span>
         )}
       </div>
-      <p className="text-xs font-medium text-fg-muted uppercase tracking-wider">{label}</p>
-      <p className="text-[26px] leading-tight font-semibold text-fg mt-1 tabular-nums">
-        {isLoading ? (
-          <span className="inline-block w-24 h-7 bg-bg-subtle rounded animate-pulse" />
-        ) : (
-          formatter(value)
-        )}
-      </p>
-      {subtitle && <p className="text-xs text-fg-muted mt-1">{subtitle}</p>}
-      {sparkPoints.length > 0 && (
-        <div className={cn('mt-3 -mx-1', sparkColor)}>
-          <Sparkline points={sparkPoints} />
+      <p className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">{label}</p>
+      <p className="text-[22px] leading-tight font-semibold text-fg mt-0.5 tabular-nums">{value}</p>
+      {subtitle && <p className="text-[10px] text-fg-muted mt-0.5">{subtitle}</p>}
+      {spark.length > 0 && (
+        <div className="mt-2 -mx-1 text-emerald-500">
+          <Sparkline points={spark} />
         </div>
       )}
-    </Card>
+    </>
   )
-}
-
-function ChartRow({ label, series, color }: { label: string; series: number[]; color: string }) {
-  return (
-    <div className="flex items-center gap-3">
-      <span className="w-20 text-xs text-fg-muted shrink-0">{label}</span>
-      <div className={cn('flex-1 -my-1', color)}>
-        <Sparkline points={series.length > 0 ? series : [0]} />
-      </div>
-      <span className="text-sm font-semibold text-fg tabular-nums w-28 text-right shrink-0">
-        {formatCurrency(series.reduce((s, v) => s + v, 0))}
-      </span>
-    </div>
-  )
+  if (clickTo) {
+    return (
+      <Card
+        onClick={() => navigate(clickTo)}
+        className="p-3 cursor-pointer hover:shadow-elev hover:border-border transition-all duration-200"
+      >
+        {body}
+      </Card>
+    )
+  }
+  return <Card className="p-3">{body}</Card>
 }
