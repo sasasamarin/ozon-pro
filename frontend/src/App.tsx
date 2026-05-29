@@ -18,6 +18,10 @@ import { Cashflow } from '@/pages/Cashflow'
 import { Returns } from '@/pages/Returns'
 import { StockoutsByRegion } from '@/pages/StockoutsByRegion'
 import { ProductDetail } from '@/pages/ProductDetail'
+import { Summary } from '@/pages/Summary'
+import { Categories } from '@/pages/Categories'
+import { Calculator } from '@/pages/Calculator'
+import { Heatmap } from '@/pages/Heatmap'
 import { Settings } from '@/pages/Settings'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
@@ -60,6 +64,10 @@ export default function App() {
         <Route path="/orders/cancellations" element={<Returns />} />
         <Route path="/returns" element={<Returns />} />
         <Route path="/analytics/stockouts-by-region" element={<StockoutsByRegion />} />
+        <Route path="/analytics/summary" element={<Summary />} />
+        <Route path="/analytics/heatmap" element={<Heatmap />} />
+        <Route path="/products/categories" element={<Categories />} />
+        <Route path="/products/calculator" element={<Calculator />} />
         <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/settings" element={<Settings />} />
 
@@ -76,7 +84,11 @@ export default function App() {
               item.path !== '/products/prices' &&
               item.path !== '/finance/cashflow' &&
               item.path !== '/orders/returns' &&
-              item.path !== '/orders/cancellations',
+              item.path !== '/orders/cancellations' &&
+              item.path !== '/analytics/summary' &&
+              item.path !== '/analytics/heatmap' &&
+              item.path !== '/products/categories' &&
+              item.path !== '/products/calculator',
           )
           .map((item) => (
             <Route

@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from app.api.endpoints import (
     auth,
     cashflow,
+    categories,
     costs,
     dashboard,
     funnel,
@@ -17,6 +18,7 @@ from app.api.endpoints import (
     products,
     recommendations,
     returns,
+    summary,
     supply_params,
     transactions,
     warehouse_stocks,
@@ -45,6 +47,10 @@ api_router.include_router(
 api_router.include_router(returns.router, prefix="/returns", tags=["returns"])
 api_router.include_router(
     warehouse_stocks.router, prefix="/warehouse-stocks", tags=["warehouses"]
+)
+api_router.include_router(summary.router, prefix="/analytics/summary", tags=["analytics"])
+api_router.include_router(
+    categories.router, prefix="/products/categories", tags=["products"]
 )
 api_router.include_router(costs.router, prefix="/costs", tags=["costs"])
 api_router.include_router(
