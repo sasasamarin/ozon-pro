@@ -250,13 +250,14 @@ async def funnel_top_products(
     orders_expr = func.sum(AnalyticsDaily.ordered_units)
     deliv_expr = func.sum(AnalyticsDaily.delivered_units)
 
+    # Постгрес не умеет GROUP BY по json, поэтому НЕ кладём raw_data в SELECT
+    # вместе с агрегатами. raw_data достаём отдельным запросом и мерджим.
     rows = (
         await db.execute(
             select(
                 Product.id.label("pid"),
                 Product.name.label("name"),
                 Product.offer_id.label("offer_id"),
-                Product.raw_data.label("raw_data"),
                 func.coalesce(imp_expr, 0).label("impressions"),
                 func.coalesce(cart_expr, 0).label("to_cart"),
                 func.coalesce(orders_expr, 0).label("orders"),
@@ -269,10 +270,20 @@ async def funnel_top_products(
                 AnalyticsDaily.date >= period_from,
                 AnalyticsDaily.date <= today,
             )
-            .group_by(Product.id, Product.name, Product.offer_id, Product.raw_data)
+            .group_by(Product.id, Product.name, Product.offer_id)
             .having(func.coalesce(imp_expr, 0) >= min_impressions)
         )
     ).all()
+
+    # raw_data одним запросом по pid'ам
+    pids = [r.pid for r in rows]
+    image_map: dict[uuid.UUID, str | None] = {}
+    if pids:
+        img_rows = await db.execute(
+            select(Product.id, Product.raw_data).where(Product.id.in_(pids))
+        )
+        for pid, raw in img_rows.all():
+            image_map[pid] = _extract_image(raw)
 
     result: list[TopProductFunnel] = []
     for r in rows:
@@ -284,7 +295,7 @@ async def funnel_top_products(
             product_id=str(r.pid),
             name=r.name,
             offer_id=r.offer_id,
-            image_url=_extract_image(r.raw_data),
+            image_url=image_map.get(r.pid),
             impressions=imp,
             to_cart=cart,
             orders=orders,
