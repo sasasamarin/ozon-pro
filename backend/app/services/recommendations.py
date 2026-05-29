@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AnalyticsDaily, Order, OrderItem, Product, Stock
 from app.models.marketplace import Cancellation, Return
+from app.models.procurement import ProductSupplyParams
 from app.services.forecasting import ForecastConfidence, ForecastDefaults
 from app.services.forecasting.abc import abc_classify_3axis
 from app.services.forecasting.buyout import BuyoutResult, calc_buyout_rate
@@ -330,15 +331,18 @@ async def compute_product_recommendation(
         db, ozon_account_id=product.ozon_account_id, product_id=product.id
     )
 
-    # --- procurement: всегда считаем с дефолтами, флаг supply_params_set отдельно ---
-    # ProductSupplyParams (lead_time, MOQ, safety) — TODO: дочитывать из БД,
-    # пока берём дефолты (14 / 7 / 1).
-    supply_params_set = False
-    lead_time = _DEFAULT_LEAD_TIME
-    safety = _DEFAULT_SAFETY_STOCK
-    moq = _DEFAULT_MOQ
-    batch_step = _DEFAULT_BATCH_STEP
-    batch_strict = _DEFAULT_BATCH_STRICT
+    # --- procurement: читаем supply_params из БД, fallback на дефолты ---
+    sp_row = await db.execute(
+        select(ProductSupplyParams).where(ProductSupplyParams.product_id == product.id)
+        .order_by(ProductSupplyParams.created_at.desc()).limit(1)
+    )
+    sp = sp_row.scalar_one_or_none()
+    supply_params_set = sp is not None
+    lead_time = sp.lead_time_total_days if sp else _DEFAULT_LEAD_TIME
+    safety = sp.safety_stock_days if sp else _DEFAULT_SAFETY_STOCK
+    moq = sp.moq if sp else _DEFAULT_MOQ
+    batch_step = sp.batch_step if sp else _DEFAULT_BATCH_STEP
+    batch_strict = sp.batch_strict if sp else _DEFAULT_BATCH_STRICT
     if not supply_params_set:
         missing_data.append(
             "Параметры поставки не заполнены — точка заказа использует дефолты "
