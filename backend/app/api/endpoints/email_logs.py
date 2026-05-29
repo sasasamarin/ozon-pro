@@ -66,7 +66,12 @@ async def list_email_log(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[EmailLogRow]:
-    q = select(EmailLog).where(EmailLog.company_id == current_user.company_id)
+    # EmailLog не имеет company_id — фильтр через user_id юзеров компании
+    from app.models import User as U
+    user_ids = (await db.execute(
+        select(U.id).where(U.company_id == current_user.company_id)
+    )).scalars().all()
+    q = select(EmailLog).where(EmailLog.user_id.in_(user_ids))
     if status:
         q = q.where(EmailLog.status == status)
     q = q.order_by(desc(EmailLog.created_at)).limit(limit)
@@ -78,7 +83,7 @@ async def list_email_log(
             subject=e.subject,
             template=e.template,
             status=e.status,
-            error_message=e.error_message,
+            error_message=e.error,
             sent_at=e.sent_at.isoformat() if e.sent_at else None,
             created_at=e.created_at.isoformat(),
         )
