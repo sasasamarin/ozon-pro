@@ -15,6 +15,7 @@ from datetime import date as date_cls, datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import case, desc, func, literal, or_, select, union_all
+from sqlalchemy import String as sa_str
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -332,9 +333,15 @@ async def returns_stats(
         select(func.count())
         .where(Cancellation.ozon_account_id.in_(accs), Cancellation.cancelled_at >= period_from)
     )).scalar()
+    # cancel_reason_text у Ozon почти всегда NULL, есть только cancel_reason_id.
+    # Используем id как label, если text не задан.
     can_reasons = (await db.execute(
         select(
-            func.coalesce(Cancellation.cancel_reason_text, "(не указано)").label("reason"),
+            func.coalesce(
+                Cancellation.cancel_reason_text,
+                func.concat("причина #", func.cast(Cancellation.cancel_reason_id, sa_str)),
+                literal("(не указано)"),
+            ).label("reason"),
             func.count().label("cnt"),
         )
         .where(Cancellation.ozon_account_id.in_(accs), Cancellation.cancelled_at >= period_from)
