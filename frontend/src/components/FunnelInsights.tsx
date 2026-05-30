@@ -11,10 +11,10 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   ComposedChart,
   Legend,
   Line,
+  ReferenceArea,
   ResponsiveContainer,
   Sankey,
   Scatter,
@@ -28,8 +28,22 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 
-interface CorrPoint { date: string; impressions: number; orders: number }
+interface CorrPoint {
+  date: string
+  impressions: number
+  orders: number
+  price?: number | null
+  marketing_price?: number | null
+  is_stockout?: boolean
+}
 interface LagCorr { lag_days: number; r: number | null }
+interface AnomalyPoint {
+  date: string
+  impressions: number
+  orders: number
+  reason: string
+  severity: 'high' | 'medium' | 'low'
+}
 interface CorrelationsResp {
   period_from: string; period_to: string
   series: CorrPoint[]
@@ -39,6 +53,9 @@ interface CorrelationsResp {
   best_lag_days: number | null
   headline: string
   explanation: string
+  anomalies?: AnomalyPoint[]
+  has_price_overlay?: boolean
+  product_name?: string | null
 }
 
 interface AdTypeDaily { date: string; spend: number; orders: number; revenue: number }
@@ -137,8 +154,12 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
 
   const chartData = data.series.map((p) => ({
     date: RU_DATE(p.date),
+    rawDate: p.date,
     impressions: p.impressions,
     orders: p.orders,
+    price: p.price ?? null,
+    spp: p.marketing_price ?? null,
+    is_stockout: p.is_stockout || false,
   }))
 
   const r = data.r
@@ -148,6 +169,20 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
     : Math.abs(r) >= 0.4 ? 'text-amber-700'
     : 'text-rose-700'
 
+  // Зоны стокаута для ReferenceArea
+  const stockoutSpans: Array<{ x1: string; x2: string }> = []
+  let span: { x1: string; x2: string } | null = null
+  chartData.forEach((p, i) => {
+    if (p.is_stockout) {
+      if (!span) span = { x1: p.date, x2: p.date }
+      else span.x2 = p.date
+      if (i === chartData.length - 1 && span) stockoutSpans.push(span)
+    } else if (span) {
+      stockoutSpans.push(span)
+      span = null
+    }
+  })
+
   return (
     <Card className="p-5">
       <div className="flex items-start justify-between mb-4 flex-wrap gap-2">
@@ -155,6 +190,11 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
           <h2 className="text-lg font-semibold text-fg flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-indigo-600" />
             Показы → Заказы
+            {data.product_name && (
+              <span className="text-sm font-normal text-fg-muted truncate max-w-[280px]">
+                · {data.product_name}
+              </span>
+            )}
           </h2>
           <p className="text-xs text-fg-muted mt-0.5">Как показы влияют на количество заказов</p>
         </div>
@@ -164,12 +204,12 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
         </div>
       </div>
 
-      <div className="text-sm text-fg bg-bg-subtle/40 border border-border-subtle rounded-md px-3 py-2 mb-4 flex gap-2 items-start">
+      <div className="text-sm text-fg bg-bg-subtle/40 border border-border-subtle rounded-md px-3 py-2 mb-3 flex gap-2 items-start">
         <Info className="w-4 h-4 mt-0.5 shrink-0 text-fg-muted" />
         <span>{data.explanation}</span>
       </div>
 
-      <div className="h-[280px]">
+      <div className="h-[300px]">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={chartData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
@@ -177,35 +217,90 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
             <YAxis yAxisId="left" tick={{ fontSize: 11, fill: '#6b7280' }}
                    tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v} />
             <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: '#dc2626' }} />
+            {data.has_price_overlay && (
+              <YAxis yAxisId="price" orientation="right" hide />
+            )}
             <Tooltip
-              formatter={(v: number, name) =>
-                [formatNumber(v), name === 'impressions' ? 'Показы' : 'Заказы']
-              }
+              formatter={(v: number, name: string) => {
+                if (name === 'spp')  return [v ? `${formatNumber(v)} ₽` : '—', 'СПП']
+                if (name === 'price') return [v ? `${formatNumber(v)} ₽` : '—', 'Цена']
+                if (name === 'orders') return [formatNumber(v), 'Заказы']
+                if (name === 'impressions') return [formatNumber(v), 'Показы']
+                return [formatNumber(v), name]
+              }}
             />
             <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
-                    formatter={(v) => (v === 'impressions' ? 'Показы' : 'Заказы')} />
+                    formatter={(v: string) => (
+                      v === 'impressions' ? 'Показы' :
+                      v === 'orders' ? 'Заказы' :
+                      v === 'spp' ? 'СПП' :
+                      v === 'price' ? 'Цена' : v
+                    )} />
+            {/* Красные зоны стокаута поверх */}
+            {stockoutSpans.map((s, i) => (
+              <ReferenceArea key={i} yAxisId="left" x1={s.x1} x2={s.x2}
+                             fill="#fecaca" fillOpacity={0.4} ifOverflow="visible" />
+            ))}
             <Bar yAxisId="left" dataKey="impressions" fill="#cbd5e1" name="impressions" />
             <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#dc2626"
                   strokeWidth={2} dot={false} name="orders" />
+            {data.has_price_overlay && (
+              <>
+                <Line yAxisId="price" type="monotone" dataKey="price" stroke="#10b981"
+                      strokeWidth={1.5} strokeDasharray="4 3" dot={false} name="price" />
+                <Line yAxisId="price" type="monotone" dataKey="spp" stroke="#a855f7"
+                      strokeWidth={2} dot={false} name="spp" />
+              </>
+            )}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
+      {/* Аномалии-подсказки */}
+      {data.anomalies && data.anomalies.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-sm font-medium text-fg mb-2 flex items-center gap-1.5">
+            <AlertCircle className="w-4 h-4 text-amber-600" />
+            Аномалии: «много показов, мало заказов»
+          </h3>
+          <div className="space-y-1.5">
+            {data.anomalies.slice(0, 6).map((a) => (
+              <div key={a.date} className={cn(
+                'text-xs rounded-md px-3 py-1.5 border flex items-start gap-2',
+                a.severity === 'high'
+                  ? 'border-rose-300 bg-rose-50/60 text-rose-900'
+                  : 'border-amber-300 bg-amber-50/60 text-amber-900',
+              )}>
+                <span className="font-mono shrink-0">{new Date(a.date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}</span>
+                <span className="text-fg-muted tabular-nums shrink-0">
+                  показов {formatNumber(a.impressions)} · заказов {a.orders}
+                </span>
+                <span className="ml-auto text-right">{a.reason}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
         <div>
-          <h3 className="text-sm font-medium text-fg mb-2">Точечный график (показы × заказы)</h3>
+          <h3 className="text-sm font-medium text-fg mb-1">Точечный график</h3>
+          <p className="text-[11px] text-fg-muted mb-2">
+            Каждая точка = один день. Правее — больше показов, выше — больше заказов.
+            Точки в линию ↗ = показы хорошо конвертятся. Разброс = заказы зависят не только от показов.
+          </p>
           <div className="h-[180px]">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                 <XAxis type="number" dataKey="impressions" name="Показы"
                        tick={{ fontSize: 10, fill: '#6b7280' }}
-                       tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v} />
+                       tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${v}`} />
                 <YAxis type="number" dataKey="orders" name="Заказы"
                        tick={{ fontSize: 10, fill: '#6b7280' }} />
                 <ZAxis range={[40, 40]} />
                 <Tooltip cursor={{ strokeDasharray: '3 3' }}
-                         formatter={(v: number, name) =>
+                         formatter={(v: number, name: string) =>
                            [formatNumber(v), name === 'impressions' ? 'Показы' : 'Заказы']} />
                 <Scatter data={data.series} fill="#6366f1" />
               </ScatterChart>
@@ -214,27 +309,27 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
         </div>
 
         <div>
-          <h3 className="text-sm font-medium text-fg mb-2">Лаг-анализ корреляции</h3>
+          <h3 className="text-sm font-medium text-fg mb-2">Лаг-анализ (до 14 дней)</h3>
           <p className="text-[11px] text-fg-muted mb-2">
-            r показывает связь «показы сегодня → заказы через N дней»
+            r = связь «показы сегодня → заказы через N дней». Зелёный = лучший положительный лаг.
           </p>
-          <div className="space-y-2">
+          <div className="space-y-1">
             {data.lags.map((l) => {
               const v = l.r ?? 0
               const isBest = l.lag_days === data.best_lag_days && (l.r ?? 0) > 0
               const w = Math.min(100, Math.abs(v) * 100)
               return (
                 <div key={l.lag_days} className="flex items-center gap-2 text-xs">
-                  <span className="w-14 text-fg-muted">
-                    {l.lag_days === 0 ? 'тот же день' : `через ${l.lag_days} дн`}
+                  <span className="w-16 text-fg-muted">
+                    {l.lag_days === 0 ? 'тот же день' : `+${l.lag_days} дн`}
                   </span>
-                  <div className="flex-1 h-4 bg-bg-subtle rounded overflow-hidden relative">
+                  <div className="flex-1 h-3.5 bg-bg-subtle rounded overflow-hidden relative">
                     <div className={cn(
                       'h-full rounded',
                       isBest ? 'bg-emerald-500' : v >= 0 ? 'bg-indigo-400' : 'bg-rose-400',
                     )} style={{ width: `${w}%` }} />
                   </div>
-                  <span className={cn('w-14 text-right tabular-nums',
+                  <span className={cn('w-12 text-right tabular-nums',
                     isBest ? 'text-emerald-700 font-semibold' : 'text-fg')}>
                     {l.r === null ? '—' : l.r.toFixed(2)}
                   </span>

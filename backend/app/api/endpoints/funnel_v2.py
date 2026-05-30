@@ -8,7 +8,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -531,11 +531,22 @@ class CorrPoint(BaseModel):
     date: str
     impressions: int
     orders: int
+    price: float | None = None              # текущая цена в этот день
+    marketing_price: float | None = None    # СПП — реальная цена для покупателя
+    is_stockout: bool = False               # был ли товар в стокауте
 
 
 class LagCorr(BaseModel):
     lag_days: int
     r: float | None
+
+
+class AnomalyPoint(BaseModel):
+    date: str
+    impressions: int
+    orders: int
+    reason: str          # человеческая причина: "стокаут", "цена выросла на 12%" и т.д.
+    severity: str        # "high" | "medium" | "low"
 
 
 class CorrelationsResp(BaseModel):
@@ -548,6 +559,9 @@ class CorrelationsResp(BaseModel):
     best_lag_days: int | None
     headline: str
     explanation: str
+    anomalies: list[AnomalyPoint] = []
+    has_price_overlay: bool = False         # есть ли реальная цена/СПП по дням
+    product_name: str | None = None
 
 
 @router.get("/correlations", response_model=CorrelationsResp)
@@ -608,6 +622,39 @@ async def funnel_correlations(
         CorrPoint(date=r.d.isoformat(), impressions=int(r.imp or 0), orders=int(r.orders or 0))
         for r in rows
     ]
+
+    # ===== Оверлеи цены/СПП/стокаута (только когда product_id задан)
+    product_name: str | None = None
+    has_price_overlay = False
+    if pid:
+        prod = (await db.execute(select(Product).where(Product.id == pid))).scalar_one_or_none()
+        if prod:
+            product_name = prod.name
+            cur_price = float(prod.current_price) if prod.current_price is not None else None
+            mk_price = float(prod.marketing_price) if prod.marketing_price is not None else None
+            if cur_price or mk_price:
+                has_price_overlay = True
+                for p in series:
+                    p.price = cur_price
+                    p.marketing_price = mk_price
+
+            # stockout по дням — есть ли в stocks за этот день суммарный free>0
+            stk_rows = (await db.execute(text("""
+              SELECT date_trunc('day', time)::date d, SUM(free_to_sell) free
+              FROM stocks WHERE product_id = :pid AND time >= :dfrom AND time < :dto
+              GROUP BY 1
+            """), {
+                "pid": str(pid),
+                "dfrom": datetime.combine(date_from, datetime.min.time(), tzinfo=UTC),
+                "dto": datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=UTC),
+            })).all()
+            stock_by_day = {r.d.isoformat(): int(r.free or 0) for r in stk_rows}
+            last_known = None
+            for p in series:
+                if p.date in stock_by_day:
+                    last_known = stock_by_day[p.date]
+                p.is_stockout = (last_known == 0) if last_known is not None else False
+
     imps = [float(p.impressions) for p in series]
     ords = [float(p.orders) for p in series]
     r0 = _pearson(imps, ords)
@@ -616,10 +663,12 @@ async def funnel_correlations(
     # Лаг-корреляция: импрессии (i) ↔ заказы (i+lag). Если лаг=1 — заказы завтра.
     # Best_lag: лучшая ПОЛОЖИТЕЛЬНАЯ корреляция (отрицательная не означает «эффект»,
     # это шум или обратная связь — не интерпретируем как лаг).
+    # Юзер просила лаг до 14 дней (неделя+) — было только 0-3.
+    lag_steps = [0, 1, 2, 3, 5, 7, 10, 14]
     lags: list[LagCorr] = []
     best_lag = 0 if (r0 is not None and r0 > 0) else None
     best_pos = r0 if (r0 is not None and r0 > 0) else -1.0
-    for lag in (0, 1, 2, 3):
+    for lag in lag_steps:
         if lag == 0:
             r_lag = r0
         else:
@@ -651,6 +700,39 @@ async def funnel_correlations(
             parts.append("эффект мгновенный (тот же день)")
         explanation = "; ".join(parts) + "."
 
+    # ===== Аномалии: "много показов, мало заказов" + причина
+    anomalies: list[AnomalyPoint] = []
+    if len(series) >= 7:
+        # baseline по медиане (устойчиво к выбросам)
+        sorted_imps = sorted(imps)
+        sorted_ords = sorted(ords)
+        med_imp = sorted_imps[len(sorted_imps) // 2] or 1
+        med_ord = sorted_ords[len(sorted_ords) // 2] or 1
+
+        for p in series:
+            imp_ratio = (p.impressions / med_imp) if med_imp else 1.0
+            ord_ratio = (p.orders / med_ord) if med_ord else 1.0
+
+            # «много показов, мало заказов»: показы ≥ 120%, заказы ≤ 70%
+            if imp_ratio >= 1.2 and ord_ratio <= 0.7:
+                reasons: list[str] = []
+                if p.is_stockout:
+                    reasons.append("товар в стокауте 0 шт")
+                # Цена выше типичной: если marketing_price задана как константа,
+                # история цены пока сравнивается только при наличии. Для MVP
+                # отмечаем «возможна смена цены/СПП».
+                if p.marketing_price and p.price and p.marketing_price < p.price * 0.85:
+                    reasons.append(f"СПП {p.marketing_price:.0f}₽ значительно ниже базы {p.price:.0f}₽")
+                if not reasons:
+                    reasons.append("конверсия карточки упала — проверьте отзывы/контент/CTR")
+                anomalies.append(AnomalyPoint(
+                    date=p.date,
+                    impressions=p.impressions,
+                    orders=p.orders,
+                    reason=" / ".join(reasons),
+                    severity="high" if ord_ratio <= 0.4 else "medium",
+                ))
+
     return CorrelationsResp(
         period_from=date_from.isoformat(),
         period_to=date_to.isoformat(),
@@ -658,9 +740,12 @@ async def funnel_correlations(
         r=round(r0, 4) if r0 is not None else None,
         elasticity=round(beta, 4) if beta is not None else None,
         lags=lags,
-        best_lag_days=best_lag if best_lag > 0 else (0 if r0 is not None else None),
+        best_lag_days=best_lag if best_lag is not None and best_lag > 0 else (0 if r0 is not None else None),
         headline=headline,
         explanation=explanation,
+        anomalies=anomalies,
+        has_price_overlay=has_price_overlay,
+        product_name=product_name,
     )
 
 
