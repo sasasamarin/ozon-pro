@@ -28,7 +28,7 @@ from app.core.security import decrypt_secret
 from app.db.session import AsyncSessionLocal
 from app.models import OrderItem, OzonAccount
 from app.services.ozon_client import OzonSellerClient
-from app.workers.utils import run_celery_async
+from app.workers.tasks._helpers import run_celery_async
 
 log = structlog.get_logger()
 UTC = timezone.utc
