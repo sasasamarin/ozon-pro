@@ -153,8 +153,13 @@ class Stock(Base):
     # Тип склада и название
     warehouse_type: Mapped[str] = mapped_column(
         String(20), primary_key=True, nullable=False
-    )  # "FBO" | "FBS"
-    warehouse_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    )  # "FBO" | "FBS" | "FBO_WH"
+    # warehouse_name входит в PK с alembic 0010, иначе ORM identity-map склеивает
+    # все per-warehouse строки в одну (визуально 7 копий одного склада).
+    # NULL → '<aggregate>' (для AGG/FBO/FBS/RFBS строк без конкретного склада).
+    warehouse_name: Mapped[str] = mapped_column(
+        String(255), primary_key=True, nullable=False, server_default="<aggregate>"
+    )
     warehouse_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Остатки
