@@ -50,6 +50,12 @@ interface AdTypeRow {
   spend: number
   revenue: number
   orders: number
+  impressions: number
+  clicks: number
+  ctr_pct: number | null
+  cpc: number | null
+  cpa: number | null
+  romi_pct: number | null
   drr_pct: number | null
   daily: AdTypeDaily[]
   unknown_ozon_types: string[]
@@ -65,7 +71,13 @@ interface AdByTypeResp {
 interface SankeyResp {
   period_from: string; period_to: string
   nodes: { name: string }[]
-  links: { source: number; target: number; value: number }[]
+  links: {
+    source: number; target: number; value: number
+    conv_pct: number | null
+    label: string
+    is_bottleneck: boolean
+  }[]
+  bottleneck_step: string | null
 }
 
 // Палитра типов рекламы для stacked bar
@@ -314,61 +326,76 @@ function AdByTypeChart({ qs }: { qs: string }) {
         <table className="w-full text-sm">
           <thead className="bg-bg-subtle/40 border-y border-border-subtle">
             <tr className="text-left text-xs text-fg-muted uppercase tracking-wider">
-              <th className="py-2 px-3 font-medium">Тип</th>
-              <th className="py-2 px-3 font-medium">Оплата</th>
-              <th className="py-2 px-3 font-medium">Источник</th>
-              <th className="py-2 px-3 font-medium text-right">Расход</th>
-              <th className="py-2 px-3 font-medium text-right">Заказов</th>
-              <th className="py-2 px-3 font-medium text-right">Выручка</th>
-              <th className="py-2 px-3 font-medium text-right">ДРР</th>
+              <th className="py-2 px-2 font-medium">Тип</th>
+              <th className="py-2 px-2 font-medium text-right">Показы</th>
+              <th className="py-2 px-2 font-medium text-right">Клики</th>
+              <th className="py-2 px-2 font-medium text-right">CTR</th>
+              <th className="py-2 px-2 font-medium text-right">Заказы</th>
+              <th className="py-2 px-2 font-medium text-right">Расход</th>
+              <th className="py-2 px-2 font-medium text-right">Выручка</th>
+              <th className="py-2 px-2 font-medium text-right">CPC</th>
+              <th className="py-2 px-2 font-medium text-right">CPA</th>
+              <th className="py-2 px-2 font-medium text-right">ДРР</th>
+              <th className="py-2 px-2 font-medium text-right">ROMI</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border-subtle">
             {data.rows.map((r) => {
               const isUnknown = r.type_key === 'unknown' && r.unknown_ozon_types.length > 0
+              const romiCls =
+                r.romi_pct === null ? 'text-fg-muted' :
+                r.romi_pct >= 100 ? 'text-emerald-700' :
+                r.romi_pct >= 0   ? 'text-amber-700' :
+                'text-rose-700'
               return (
                 <tr key={r.type_key} className="hover:bg-bg-subtle/30 align-middle">
-                  <td className="py-2 px-3">
-                    <span className="inline-flex items-center gap-2">
+                  <td className="py-2 px-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
                       <span className="w-2.5 h-2.5 rounded-sm shrink-0"
                             style={{ backgroundColor: TYPE_COLOR[r.type_key] || '#94a3b8' }} />
-                      <span className="text-fg">{r.label}</span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="text-fg truncate" title={r.label}>{r.label}</span>
+                        <span className="text-[10px] text-fg-muted">
+                          {r.payment_model}
+                          {' · '}
+                          <span className={cn(
+                            r.source === 'PA-daily' ? 'text-indigo-700' : 'text-slate-500'
+                          )}>
+                            {r.source === 'PA-daily' ? 'PA daily' : 'tx only'}
+                          </span>
+                        </span>
+                      </div>
                       {isUnknown && (
                         <span
-                          className="text-[10px] px-1 py-0.5 rounded bg-slate-100 text-slate-600 cursor-help"
+                          className="text-[10px] px-1 py-0.5 rounded bg-slate-100 text-slate-600 cursor-help shrink-0"
                           onMouseEnter={() => setHoverUnknown(true)}
                           onMouseLeave={() => setHoverUnknown(false)}
                           title={r.unknown_ozon_types.join(', ')}
                         >
-                          {r.unknown_ozon_types.length} новых типа Ozon
+                          {r.unknown_ozon_types.length} новых
                         </span>
                       )}
-                    </span>
+                    </div>
                   </td>
-                  <td className="py-2 px-3 text-fg-muted">{r.payment_model}</td>
-                  <td className="py-2 px-3">
-                    <span className={cn(
-                      'text-[10px] px-1.5 py-0.5 rounded',
-                      r.source === 'PA-daily'
-                        ? 'bg-indigo-50 text-indigo-700'
-                        : 'bg-slate-100 text-slate-600',
-                    )}>
-                      {r.source === 'PA-daily' ? 'PA (по дням)' : 'Транзакции (только итог)'}
-                    </span>
-                  </td>
-                  <td className="py-2 px-3 text-right tabular-nums">{formatCurrency(r.spend)}</td>
-                  <td className="py-2 px-3 text-right tabular-nums">{r.orders ? formatNumber(r.orders) : '—'}</td>
-                  <td className="py-2 px-3 text-right tabular-nums">
-                    {r.revenue ? formatCurrency(r.revenue) : '—'}
-                  </td>
-                  <td className="py-2 px-3 text-right">
+                  <td className="py-2 px-2 text-right tabular-nums">{r.impressions ? formatNumber(r.impressions) : '—'}</td>
+                  <td className="py-2 px-2 text-right tabular-nums">{r.clicks ? formatNumber(r.clicks) : '—'}</td>
+                  <td className="py-2 px-2 text-right tabular-nums text-fg-muted">{r.ctr_pct === null ? '—' : `${r.ctr_pct.toFixed(2)}%`}</td>
+                  <td className="py-2 px-2 text-right tabular-nums">{r.orders ? formatNumber(r.orders) : '—'}</td>
+                  <td className="py-2 px-2 text-right tabular-nums">{formatCurrency(r.spend)}</td>
+                  <td className="py-2 px-2 text-right tabular-nums">{r.revenue ? formatCurrency(r.revenue) : '—'}</td>
+                  <td className="py-2 px-2 text-right tabular-nums text-fg-muted">{r.cpc === null ? '—' : `${r.cpc.toFixed(0)}₽`}</td>
+                  <td className="py-2 px-2 text-right tabular-nums text-fg-muted">{r.cpa === null ? '—' : `${r.cpa.toFixed(0)}₽`}</td>
+                  <td className="py-2 px-2 text-right">
                     {r.drr_pct === null ? (
                       <span className="text-fg-muted">—</span>
                     ) : (
-                      <span className={cn('text-xs font-medium px-2 py-0.5 rounded tabular-nums', colorByDRR(r.drr_pct))}>
+                      <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded tabular-nums', colorByDRR(r.drr_pct))}>
                         {fmtPct(r.drr_pct)}
                       </span>
                     )}
+                  </td>
+                  <td className={cn("py-2 px-2 text-right tabular-nums font-semibold", romiCls)}>
+                    {r.romi_pct === null ? '—' : `${r.romi_pct.toFixed(0)}%`}
                   </td>
                 </tr>
               )
@@ -415,28 +442,45 @@ function SankeyChart({ qs }: { qs: string }) {
   if (!data || data.links.length === 0)
     return <EmptyCard title="Воронка влияний" hint="Нет данных" />
 
-  // Sankey recharts ожидает {nodes, links} (links уже с source/target index).
+  // Sankey recharts ожидает {nodes, links} с source/target index.
+  // Дополнительно прокидываем conv_pct/is_bottleneck через link, чтобы рендерить.
   const sankeyData = {
     nodes: data.nodes.map((n) => ({ name: n.name })),
-    links: data.links.map((l) => ({ source: l.source, target: l.target, value: Math.max(l.value, 1) })),
+    links: data.links.map((l) => ({
+      source: l.source,
+      target: l.target,
+      value: Math.max(l.value, 1),
+      __conv: l.conv_pct,
+      __label: l.label,
+      __bottleneck: l.is_bottleneck,
+    })),
   }
 
   return (
     <Card className="p-5">
-      <h2 className="text-lg font-semibold text-fg">Воронка влияний</h2>
-      <p className="text-xs text-fg-muted mt-0.5 mb-3">
-        Толщина потока = количество единиц. Видно, где сужается «горлышко».
-      </p>
+      <div className="flex items-start justify-between mb-3 flex-wrap gap-2">
+        <div>
+          <h2 className="text-lg font-semibold text-fg">Воронка влияний</h2>
+          <p className="text-xs text-fg-muted mt-0.5">
+            Толщина потока = число единиц. % на каждом переходе. Красный = узкое горлышко.
+          </p>
+        </div>
+        {data.bottleneck_step && (
+          <div className="text-xs px-2.5 py-1 rounded-md bg-rose-50 text-rose-700 font-medium">
+            🚨 Узкое горлышко: {data.bottleneck_step}
+          </div>
+        )}
+      </div>
 
-      <div className="h-[280px]">
+      <div className="h-[320px]">
         <ResponsiveContainer width="100%" height="100%">
           <Sankey
             data={sankeyData}
-            node={({ x, y, width, height, index, payload }: any) => (
+            node={({ x, y, width, height, payload }: any) => (
               <g>
                 <rect x={x} y={y} width={width} height={height} fill="#6366f1" rx={2} />
                 <text x={x + width + 6} y={y + height / 2} textAnchor="start"
-                      alignmentBaseline="middle" fontSize={12} fill="#111827">
+                      alignmentBaseline="middle" fontSize={12} fill="#111827" fontWeight={500}>
                   {payload.name}
                 </text>
                 <text x={x + width + 6} y={y + height / 2 + 14} textAnchor="start"
@@ -445,9 +489,32 @@ function SankeyChart({ qs }: { qs: string }) {
                 </text>
               </g>
             )}
-            link={{ stroke: '#cbd5e1' }}
-            nodePadding={28}
-            margin={{ top: 10, right: 110, bottom: 10, left: 10 }}
+            link={(linkProps: any) => {
+              const { sourceX, targetX, sourceY, targetY, sourceControlX, targetControlX,
+                      linkWidth, payload } = linkProps
+              const isBottleneck = payload?.__bottleneck
+              const stroke = isBottleneck ? '#fda4af' : '#cbd5e1'
+              const path = `
+                M${sourceX},${sourceY}
+                C${sourceControlX},${sourceY} ${targetControlX},${targetY} ${targetX},${targetY}
+              `
+              const midX = (sourceX + targetX) / 2
+              const midY = (sourceY + targetY) / 2
+              return (
+                <g>
+                  <path d={path} fill="none" stroke={stroke}
+                        strokeWidth={Math.max(linkWidth, 1)}
+                        strokeOpacity={isBottleneck ? 0.7 : 0.45} />
+                  <text x={midX} y={midY - 4} textAnchor="middle" fontSize={11}
+                        fontWeight={isBottleneck ? 600 : 500}
+                        fill={isBottleneck ? '#be123c' : '#374151'}>
+                    {payload?.__label || `${(payload?.__conv || 0).toFixed(1)}%`}
+                  </text>
+                </g>
+              )
+            }}
+            nodePadding={32}
+            margin={{ top: 14, right: 110, bottom: 14, left: 10 }}
           >
             <Tooltip formatter={(v: number) => formatNumber(v)} />
           </Sankey>

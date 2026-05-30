@@ -707,6 +707,12 @@ class AdTypeRow(BaseModel):
     spend: float
     revenue: float
     orders: int
+    impressions: int        # показы рекламы (PA only)
+    clicks: int             # клики/переходы из рекламы (PA only)
+    ctr_pct: float | None   # clicks/impressions × 100
+    cpc: float | None       # spend / clicks
+    cpa: float | None       # spend / orders
+    romi_pct: float | None  # (revenue - spend) / spend × 100
     drr_pct: float | None
     daily: list[AdTypeDaily]
     unknown_ozon_types: list[str]   # реальные advObjectType если source 'unknown'
@@ -748,7 +754,7 @@ async def ad_by_type(
             note="Нет подключённых кабинетов",
         )
 
-    # === PA daily через ad_statistics ↔ ad_campaigns
+    # === PA daily через ad_statistics ↔ ad_campaigns (+ показы и клики)
     pa_rows = (await db.execute(
         select(
             AdCampaign.campaign_type.label("ct"),
@@ -756,6 +762,8 @@ async def ad_by_type(
             func.coalesce(func.sum(AdStatistics.spend), 0).label("spend"),
             func.coalesce(func.sum(AdStatistics.revenue), 0).label("rev"),
             func.coalesce(func.sum(AdStatistics.orders), 0).label("ord"),
+            func.coalesce(func.sum(AdStatistics.impressions), 0).label("imp"),
+            func.coalesce(func.sum(AdStatistics.clicks), 0).label("clk"),
         )
         .select_from(AdStatistics)
         .join(AdCampaign, AdCampaign.ozon_campaign_id == AdStatistics.ozon_campaign_id)
@@ -772,14 +780,18 @@ async def ad_by_type(
     for r in pa_rows:
         ct = r.ct
         bucket = pa_by_type.setdefault(ct, {
-            "spend": 0.0, "rev": 0.0, "ord": 0, "daily": []
+            "spend": 0.0, "rev": 0.0, "ord": 0, "imp": 0, "clk": 0, "daily": []
         })
         spend_d = float(r.spend or 0)
         rev_d = float(r.rev or 0)
         ord_d = int(r.ord or 0)
+        imp_d = int(r.imp or 0)
+        clk_d = int(r.clk or 0)
         bucket["spend"] += spend_d
         bucket["rev"] += rev_d
         bucket["ord"] += ord_d
+        bucket["imp"] += imp_d
+        bucket["clk"] += clk_d
         bucket["daily"].append(AdTypeDaily(
             date=r.d.isoformat(), spend=round(spend_d, 2),
             orders=ord_d, revenue=round(rev_d, 2),
@@ -818,15 +830,33 @@ async def ad_by_type(
 
     rows_out: list[AdTypeRow] = []
 
+    def _mk_metrics(spend: float, revenue: float, orders: int, imp: int, clk: int):
+        drr = (spend / revenue * 100) if revenue else None
+        ctr = (clk / imp * 100) if imp else None
+        cpc = (spend / clk) if clk else None
+        cpa = (spend / orders) if orders else None
+        romi = ((revenue - spend) / spend * 100) if spend else None
+        return (
+            round(drr, 2) if drr is not None else None,
+            round(ctr, 2) if ctr is not None else None,
+            round(cpc, 2) if cpc is not None else None,
+            round(cpa, 2) if cpa is not None else None,
+            round(romi, 1) if romi is not None else None,
+        )
+
     # PA-rows: dump as-is per campaign_type
     for ct, b in pa_by_type.items():
         label, pay = _CAMPAIGN_TYPE_LABEL.get(ct, (ct, "?"))
-        drr = (b["spend"] / b["rev"] * 100) if b["rev"] else None
+        drr, ctr, cpc, cpa, romi = _mk_metrics(
+            b["spend"], b["rev"], b["ord"], b["imp"], b["clk"]
+        )
         rows_out.append(AdTypeRow(
             type_key=ct, label=label, payment_model=pay,
             source="PA-daily",
             spend=round(b["spend"], 2), revenue=round(b["rev"], 2), orders=b["ord"],
-            drr_pct=round(drr, 2) if drr is not None else None,
+            impressions=b["imp"], clicks=b["clk"],
+            ctr_pct=ctr, cpc=cpc, cpa=cpa, romi_pct=romi,
+            drr_pct=drr,
             daily=b["daily"],
             unknown_ozon_types=unknown_obj_types if ct == "unknown" else [],
         ))
@@ -856,13 +886,13 @@ async def ad_by_type(
             rows_out.append(AdTypeRow(
                 type_key=f"tx:{label}", label=label, payment_model="FIXED",
                 source="transactions-only",
-                spend=round(sp, 2), revenue=0, orders=0, drr_pct=None, daily=[],
+                spend=round(sp, 2), revenue=0, orders=0,
+                impressions=0, clicks=0,
+                ctr_pct=None, cpc=None, cpa=None, romi_pct=None,
+                drr_pct=None, daily=[],
                 unknown_ozon_types=[],
             ))
 
-    # CPC/PER_ORDER в transactions может быть БОЛЬШЕ чем в PA (доп. услуги, маркетинг)
-    # — но не показываем дублирующие строки, оставляем общий итог. Юзер видит PA в основном.
-    # Если разница > 5% — добавляем «прочие списания» от модели для прозрачности.
     def _residual(pa_sum: float, group: str, label_suffix: str) -> AdTypeRow | None:
         tx_sum = tx_groups.get(group, {}).get("spend", 0)
         diff = tx_sum - pa_sum
@@ -872,7 +902,10 @@ async def ad_by_type(
                 label=f"Списания {group} (бух) − PA {label_suffix}",
                 payment_model=group,
                 source="transactions-only",
-                spend=round(diff, 2), revenue=0, orders=0, drr_pct=None, daily=[],
+                spend=round(diff, 2), revenue=0, orders=0,
+                impressions=0, clicks=0,
+                ctr_pct=None, cpc=None, cpa=None, romi_pct=None,
+                drr_pct=None, daily=[],
                 unknown_ozon_types=[],
             )
         return None
@@ -914,6 +947,9 @@ class SankeyLink(BaseModel):
     source: int
     target: int
     value: int
+    conv_pct: float | None     # конверсия source→target, %
+    label: str                  # подпись: "CTR 86.9%"
+    is_bottleneck: bool         # узкое горлышко (наименьшая конверсия)
 
 
 class SankeyResp(BaseModel):
@@ -921,6 +957,7 @@ class SankeyResp(BaseModel):
     period_to: str
     nodes: list[SankeyNode]
     links: list[SankeyLink]
+    bottleneck_step: str | None  # имя ноды-горлышка
 
 
 @router.get("/sankey", response_model=SankeyResp)
@@ -969,11 +1006,37 @@ async def funnel_sankey(
     orders = min(orders, cart if cart else clicks)
     deliv = min(deliv, orders if orders else cart)
 
-    links = [
-        SankeyLink(source=0, target=1, value=clicks),
-        SankeyLink(source=1, target=2, value=cart),
-        SankeyLink(source=2, target=3, value=orders),
-        SankeyLink(source=3, target=4, value=deliv),
+    steps = [
+        ("Показы", imp, "Клики", clicks, "CTR"),
+        ("Клики", clicks, "Корзина", cart, "% в корзину"),
+        ("Корзина", cart, "Заказы", orders, "% в заказ"),
+        ("Заказы", orders, "Доставлено", deliv, "выкуп"),
     ]
+    raw_links: list[dict] = []
+    for src_name, src_v, tgt_name, tgt_v, metric_name in steps:
+        conv = (tgt_v / src_v * 100) if src_v else None
+        raw_links.append({
+            "src_name": src_name, "tgt_name": tgt_name,
+            "value": tgt_v, "conv": conv, "metric": metric_name,
+        })
+
+    # Узкое горлышко — переход с минимальной конверсией (но > 0)
+    valid = [(i, l["conv"]) for i, l in enumerate(raw_links) if l["conv"] and l["conv"] > 0]
+    bottleneck_idx = min(valid, key=lambda x: x[1])[0] if valid else None
+    bottleneck_step = (
+        f"{raw_links[bottleneck_idx]['src_name']} → {raw_links[bottleneck_idx]['tgt_name']}"
+        if bottleneck_idx is not None else None
+    )
+
+    links: list[SankeyLink] = []
+    for i, l in enumerate(raw_links):
+        pct_str = f"{l['conv']:.2f}%" if l['conv'] is not None else "—"
+        links.append(SankeyLink(
+            source=i, target=i + 1, value=l["value"],
+            conv_pct=round(l["conv"], 2) if l["conv"] is not None else None,
+            label=f"{l['metric']} {pct_str}",
+            is_bottleneck=(i == bottleneck_idx),
+        ))
+
     return SankeyResp(period_from=date_from.isoformat(), period_to=date_to.isoformat(),
-                      nodes=nodes, links=links)
+                      nodes=nodes, links=links, bottleneck_step=bottleneck_step)

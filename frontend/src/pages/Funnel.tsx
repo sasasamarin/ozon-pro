@@ -128,10 +128,11 @@ const DRILL_TITLES: Record<Exclude<DrillStep, null>, string> = {
 }
 
 const BW_LABELS: Record<BWMetric, string> = {
-  overall: 'Сквозная (Показ → Доставка)',
-  cart: 'В корзину (Показ → Корзина)',
-  order: 'В заказ (Корзина → Заказ)',
-  delivery: 'Выкуп (Заказ → Доставка)',
+  // Дефолт = order, т.к. заказ происходит в день показа.
+  order: 'Показ → Заказ (день в день)',
+  cart: 'Показ → Корзина',
+  delivery: 'Заказ → Доставка (когорта, может быть лаг)',
+  overall: 'Сквозная Показ → Доставка (с лагом доставки — искажает)',
 }
 
 const formatDate = (s: string) => new Date(s).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })
@@ -146,7 +147,9 @@ export function Funnel() {
   const compare = (params.get('cmp') || 'prev_period') as 'none' | 'prev_period' | 'year_ago'
   const [productSearch, setProductSearch] = useState('')
   const [drillStep, setDrillStep] = useState<DrillStep>(null)
-  const [bwMetric, setBwMetric] = useState<BWMetric>('overall')
+  // Дефолт = order (Показ→Заказ), а не delivery: доставка может быть через
+  // месяц после показа, привязка к дню показа искажает корреляцию.
+  const [bwMetric, setBwMetric] = useState<BWMetric>('order')
 
   const updateParam = (k: string, v: string | undefined) => {
     const p = new URLSearchParams(params)
