@@ -672,13 +672,13 @@ async def funnel_correlations(
     beta = _log_elasticity(imps, ords)
 
     # Лаг-корреляция: импрессии (i) ↔ заказы (i+lag). Если лаг=1 — заказы завтра.
-    # Best_lag: лучшая ПОЛОЖИТЕЛЬНАЯ корреляция (отрицательная не означает «эффект»,
-    # это шум или обратная связь — не интерпретируем как лаг).
-    # Юзер просила лаг до 14 дней (неделя+) — было только 0-3.
+    # Best_lag: МИНИМАЛЬНЫЙ лаг с r ≥ 70% от лучшего положительного r.
+    # Юзер: если r(0)=0.37 (макс среди положительных), а r(10)=0.42 — это
+    # шум на коротком ряду, не "эффект через 10 дней". Берём наименьший лаг
+    # где сила связи близка к максимальной — это самое честное соответствие.
     lag_steps = [0, 1, 2, 3, 5, 7, 10, 14]
     lags: list[LagCorr] = []
-    best_lag = 0 if (r0 is not None and r0 > 0) else None
-    best_pos = r0 if (r0 is not None and r0 > 0) else -1.0
+    lag_values: list[tuple[int, float]] = []  # только положительные r ≥ 0.3
     for lag in lag_steps:
         if lag == 0:
             r_lag = r0
@@ -690,9 +690,16 @@ async def funnel_correlations(
                 ys = ords[lag:]
                 r_lag = _pearson(xs, ys)
         lags.append(LagCorr(lag_days=lag, r=round(r_lag, 4) if r_lag is not None else None))
-        if r_lag is not None and r_lag > best_pos and r_lag >= 0.3:
-            best_pos = r_lag
-            best_lag = lag
+        if r_lag is not None and r_lag >= 0.3:
+            lag_values.append((lag, r_lag))
+
+    if lag_values:
+        max_r = max(v for _, v in lag_values)
+        # Берём минимальный лаг где r ≥ 70% от максимума (приоритет малых лагов)
+        candidates = [lag for lag, v in lag_values if v >= max_r * 0.7]
+        best_lag: int | None = min(candidates) if candidates else None
+    else:
+        best_lag = None
 
     headline = _strength_label_ru(r0)
     if not imps or not ords or len(imps) < 3:
@@ -705,10 +712,10 @@ async def funnel_correlations(
             parts.append(f"эластичность β = {beta:.2f} (рост показов на 10% → заказы +{beta * 10:.1f}%)")
         elif beta is not None and beta < 0:
             parts.append(f"эластичность β = {beta:.2f} (обратная зависимость)")
-        if best_lag is not None and best_lag > 0:
+        if best_lag is not None and best_lag == 0:
+            parts.append("эффект в тот же день")
+        elif best_lag is not None and best_lag > 0:
             parts.append(f"эффект сильнее всего проявляется через {best_lag} дн.")
-        elif r0 is not None and r0 >= 0.4:
-            parts.append("эффект мгновенный (тот же день)")
         explanation = "; ".join(parts) + "."
 
     # ===== Аномалии: "много показов, мало заказов" + причина
@@ -751,7 +758,7 @@ async def funnel_correlations(
         r=round(r0, 4) if r0 is not None else None,
         elasticity=round(beta, 4) if beta is not None else None,
         lags=lags,
-        best_lag_days=best_lag if best_lag is not None and best_lag > 0 else (0 if r0 is not None else None),
+        best_lag_days=best_lag,
         headline=headline,
         explanation=explanation,
         anomalies=anomalies,
