@@ -10,6 +10,7 @@ import {
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { FunnelInsights } from '@/components/FunnelInsights'
+import { DayExplanationDrawer } from '@/components/DayExplanationDrawer'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
@@ -171,6 +172,7 @@ export function Funnel() {
   const [productSearch, setProductSearch] = useState('')
   const [drillStep, setDrillStep] = useState<DrillStep>(null)
   const [bwMetric, setBwMetric] = useState<BWMetric>('order')
+  const [explainDate, setExplainDate] = useState<string | null>(null)
 
   const updateParam = (k: string, v: string | undefined) => {
     const p = new URLSearchParams(params)
@@ -630,11 +632,13 @@ export function Funnel() {
                   <BWTable title="Лучшие" Icon={TrendingUp} iconColor="text-emerald-700"
                     rows={bestWorst.best} from_label={bestWorst.from_label} to_label={bestWorst.to_label}
                     highlightColor="text-emerald-700"
-                    avgConv={bestWorst.average?.conv_pct ?? null} />
+                    avgConv={bestWorst.average?.conv_pct ?? null}
+                    onExplain={setExplainDate} />
                   <BWTable title="Худшие" Icon={TrendingDown} iconColor="text-rose-700"
                     rows={bestWorst.worst} from_label={bestWorst.from_label} to_label={bestWorst.to_label}
                     highlightColor="text-rose-700"
-                    avgConv={bestWorst.average?.conv_pct ?? null} />
+                    avgConv={bestWorst.average?.conv_pct ?? null}
+                    onExplain={setExplainDate} />
                 </div>
               </>
             ) : (
@@ -646,6 +650,15 @@ export function Funnel() {
                           cabinetIds={selectedCabinetIds} />
         </>
       )}
+
+      {/* «Объяснение дня» drawer — открывается при клике на день в best/worst таблицах */}
+      <DayExplanationDrawer
+        productId={productIds[0] || null}
+        date={explainDate}
+        cabinetIds={selectedCabinetIds}
+        open={!!explainDate}
+        onClose={() => setExplainDate(null)}
+      />
     </div>
   )
 }
@@ -849,7 +862,7 @@ function DrillTable({
 }
 
 function BWTable({
-  title, Icon, iconColor, rows, from_label, to_label, highlightColor, avgConv,
+  title, Icon, iconColor, rows, from_label, to_label, highlightColor, avgConv, onExplain,
 }: {
   title: string
   Icon: React.ComponentType<{ className?: string }>
@@ -859,11 +872,15 @@ function BWTable({
   to_label: string
   highlightColor: string
   avgConv: number | null
+  onExplain?: (date: string) => void
 }) {
   return (
     <div>
       <h4 className={cn('text-base font-semibold flex items-center gap-2 mb-3', iconColor)}>
         <Icon className="w-4 h-4" /> {title}
+        {onExplain && (
+          <span className="text-[10px] text-fg-subtle font-normal ml-auto">тык в день → объяснение</span>
+        )}
       </h4>
       <table className="w-full text-sm">
         <thead className="bg-bg-subtle/50">
@@ -879,7 +896,12 @@ function BWTable({
           {rows.map((d) => {
             const delta = avgConv !== null ? d.conv_pct - avgConv : null
             return (
-              <tr key={d.date}>
+              <tr
+                key={d.date}
+                className={cn(onExplain && 'hover:bg-bg-subtle/60 cursor-pointer')}
+                onClick={onExplain ? () => onExplain(d.date) : undefined}
+                title={onExplain ? 'Открыть объяснение дня' : undefined}
+              >
                 <td className="py-2 px-2.5 font-mono text-xs">{formatDate(d.date)}</td>
                 <td className="py-2 px-2.5 text-right tabular-nums">{formatNumber(d.from_value)}</td>
                 <td className="py-2 px-2.5 text-right tabular-nums">{formatNumber(d.to_value)}</td>

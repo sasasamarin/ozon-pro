@@ -15,6 +15,7 @@ from app.api.endpoints import (
     credit,
     dashboard,
     dashboard_v2,
+    day_explanation,
     email_logs,
     expenses,
     funnel,
@@ -57,6 +58,9 @@ api_router.include_router(
 )
 api_router.include_router(
     funnel_v2.router, prefix="/analytics/funnel/v2", tags=["analytics"]
+)
+api_router.include_router(
+    day_explanation.router, prefix="/analytics/day-explanation", tags=["analytics"]
 )
 api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
 api_router.include_router(
