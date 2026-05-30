@@ -61,7 +61,10 @@ class ProductRecommendation(BaseModel):
     product_name: str
     offer_id: str
     ozon_sku: int
-    current_price: float | None
+    current_price: float | None        # Ozon `price` (зачёркнутая 33000), ТОЛЬКО UI
+    marketing_price: float | None      # Ozon `marketing_seller_price` (рабочая цена)
+    selling_price: float | None        # canonical: marketing_price ?? current_price
+    sales_percent_fbo: float | None    # реальная %-комиссия Ozon
     cost_price: float | None
     is_archived: bool = False
     image_url: str | None = None

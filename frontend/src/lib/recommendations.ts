@@ -64,7 +64,10 @@ export interface ProductRecommendation {
   product_name: string
   offer_id: string
   ozon_sku: number
-  current_price: number | null
+  current_price: number | null         // Ozon `price` (зачёркнутая 33000), ТОЛЬКО UI
+  marketing_price?: number | null      // Ozon `marketing_seller_price` (рабочая)
+  selling_price?: number | null        // canonical: marketing_price ?? current_price
+  sales_percent_fbo?: number | null    // реальная %-комиссия Ozon
   cost_price: number | null
   is_archived?: boolean
   image_url: string | null

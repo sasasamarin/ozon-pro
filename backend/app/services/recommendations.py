@@ -438,6 +438,15 @@ async def compute_product_recommendation(
         "offer_id": product.offer_id,
         "ozon_sku": product.ozon_sku,
         "current_price": float(product.current_price) if product.current_price is not None else None,
+        "marketing_price": float(product.marketing_price) if product.marketing_price is not None else None,
+        # selling_price = canonical "рабочая цена продавца", база финансов.
+        # Берём marketing_seller_price (Ozon API → Product.marketing_price), а current_price (= Ozon `price`,
+        # зачёркнутая 33000) — только fallback если СПП не синкнули.
+        "selling_price": (
+            float(product.marketing_price) if product.marketing_price is not None
+            else (float(product.current_price) if product.current_price is not None else None)
+        ),
+        "sales_percent_fbo": float(product.sales_percent_fbo) if product.sales_percent_fbo is not None else None,
         "cost_price": float(product.cost_price) if product.cost_price is not None else None,
         "is_archived": bool(product.is_archived),
         "image_url": image_url,

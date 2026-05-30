@@ -23,7 +23,7 @@ from app.services.forecasting.unit_economics import calc_gross_margin_unit
 
 @dataclass
 class WhatIfPriceResult:
-    current_price: float
+    selling_price: float              # рабочая цена продавца (marketing_seller_price, не зачёркнутая)
     new_price: float
     delta_price_pct: float
 
@@ -38,7 +38,7 @@ class WhatIfPriceResult:
 
 def simulate_price_change(
     *,
-    current_price: float,
+    selling_price: float,
     new_price: float,
     avg_daily_orders: float,
     horizon_days: int = 30,
@@ -49,17 +49,19 @@ def simulate_price_change(
 ) -> WhatIfPriceResult:
     """Прибыль/выручка при новой цене.
 
+    selling_price = marketing_seller_price (рабочая цена продавца, от неё accruals и комиссия).
+    Зачёркнутая «до скидки» (Ozon `price`) в расчётах НЕ участвует.
+
     ЗАГЛУШКА: эластичность спроса по цене НЕ моделируется (TODO).
     Сейчас наивно: объём заказов остаётся прежним.
-    Реальная модель — отдельная задача когда накопится 90+ дней А/B-истории.
     """
-    delta_pct = ((new_price - current_price) / max(current_price, 1)) * 100.0
+    delta_pct = ((new_price - selling_price) / max(selling_price, 1)) * 100.0
     units = avg_daily_orders * horizon_days
 
     cur_gross = calc_gross_margin_unit(
-        price=current_price,
+        price=selling_price,
         cost=cost_per_unit,
-        commission=current_price * commission_pct / 100,
+        commission=selling_price * commission_pct / 100,
         logistics=logistics_per_unit,
     ).gross_margin
     new_gross = calc_gross_margin_unit(
@@ -69,7 +71,7 @@ def simulate_price_change(
         logistics=logistics_per_unit,
     ).gross_margin
 
-    revenue_change = (new_price - current_price) * units
+    revenue_change = (new_price - selling_price) * units
     gross_change = (new_gross - cur_gross) * units
 
     warnings: list[str] = []
@@ -79,7 +81,7 @@ def simulate_price_change(
         warnings.append("новая валовая маржа отрицательна — продаёшь в минус")
 
     return WhatIfPriceResult(
-        current_price=current_price,
+        selling_price=selling_price,
         new_price=new_price,
         delta_price_pct=round(delta_pct, 2),
         estimated_new_orders=units,

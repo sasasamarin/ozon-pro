@@ -67,9 +67,11 @@ class ProductItem(BaseModel):
     offer_id: str
     ozon_sku: int
     cost_price: float | None
-    current_price: float | None
-    old_price: float | None
-    marketing_price: float | None
+    current_price: float | None         # Ozon `price` = зачёркнутая «до скидки», ТОЛЬКО UI
+    old_price: float | None             # Ozon `old_price` = зачёркнутая, ТОЛЬКО UI
+    marketing_price: float | None       # Ozon `marketing_seller_price` = рабочая цена продавца
+    selling_price: float | None         # canonical: marketing_price ?? current_price (база финансов)
+    sales_percent_fbo: float | None     # реальная %-комиссия Ozon (из карточки товара)
     min_price: float | None
     price_index: str | None
     is_archived: bool
@@ -178,6 +180,11 @@ async def list_products(
                 current_price=float(product.current_price) if product.current_price is not None else None,
                 old_price=float(product.old_price) if product.old_price is not None else None,
                 marketing_price=float(product.marketing_price) if product.marketing_price is not None else None,
+                selling_price=(
+                    float(product.marketing_price) if product.marketing_price is not None
+                    else (float(product.current_price) if product.current_price is not None else None)
+                ),
+                sales_percent_fbo=float(product.sales_percent_fbo) if product.sales_percent_fbo is not None else None,
                 min_price=float(product.min_price) if product.min_price is not None else None,
                 price_index=product.price_index,
                 is_archived=product.is_archived,

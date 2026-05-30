@@ -31,6 +31,8 @@ interface ProductItem {
   current_price: number | null
   old_price: number | null
   marketing_price: number | null
+  selling_price: number | null
+  sales_percent_fbo: number | null
   min_price: number | null
   price_index: string | null
   is_archived: boolean
@@ -438,7 +440,7 @@ export function Products() {
                   <th className="py-3 px-4 text-right" title="Брутто-маржа: (цена−себест)/цена. Без комиссии Ozon, логистики, налога.">
                     Брутто %
                   </th>
-                  <th className="py-3 px-4 text-right" title="Приблизительная чистая маржа: брутто − 22% (комиссия Ozon FBO) − 1.5% (эквайринг) − 3% (реклама ~ДРР) − 6% (УСН) = брутто − ~32.5 п.п. Реальная сильно зависит от категории.">
+                  <th className="py-3 px-4 text-right" title="Чистая маржа: (selling_price − cost − реальная комиссия Ozon из API − ~3% реклама − ~6% УСН) / selling_price. Комиссия берётся из Product.sales_percent_fbo (реальная per-товар, 40-47%). Если комиссия не синкнута — fallback эвристика 25%.">
                     ≈Чистая %
                   </th>
                   <th className="py-3 px-4 text-right">Остаток</th>
@@ -449,16 +451,19 @@ export function Products() {
                 {products.map((p) => {
                   const expanded = expandedId === p.id
                   const checked = selectedIds.has(p.id)
-                  const sellingPrice = p.marketing_price ?? p.current_price
-                  // Брутто-маржа: (цена − себест) / цена — БЕЗ комиссий Ozon, логистики, налога.
-                  // Юзер просила не вводить в заблуждение → показываем 2 колонки.
+                  const sellingPrice = p.selling_price ?? p.marketing_price ?? p.current_price
+                  // Брутто-маржа: (selling_price − cost) / selling_price — БЕЗ комиссий Ozon, логистики, налога.
+                  // selling_price = рабочая цена продавца (marketing_seller_price), а не зачёркнутая 33000.
                   const grossMargin =
                     sellingPrice && p.cost_price && sellingPrice > 0
                       ? (sellingPrice - p.cost_price) / sellingPrice * 100
                       : null
-                  // Приблизительная чистая = брутто − 32.5 п.п. (комиссия 22 + эквайринг 1.5 + реклама 3 + УСН 6).
-                  // Грубая эвристика; реальная зависит от категории и типа доставки.
-                  const netMargin = grossMargin === null ? null : grossMargin - 32.5
+                  // Чистая = брутто − реальная %-комиссия Ozon (из карточки) − эквайринг 1.5 − реклама 3 − УСН 6.
+                  // Если sales_percent_fbo не синкнут — fallback 25%. Раньше была эвристика −32.5 п.п. от брутто
+                  // (предполагалась комиссия 22%) — но реальная комиссия Ozon в этих товарах 40-47%, маржа была завышена.
+                  const commPct = p.sales_percent_fbo ?? 25
+                  const otherPct = 1.5 + 3 + 6 // эквайринг + реклама + УСН
+                  const netMargin = grossMargin === null ? null : grossMargin - commPct - otherPct
                   const grossCls =
                     grossMargin === null ? 'text-fg-muted' :
                     grossMargin >= 60 ? 'text-emerald-700' :

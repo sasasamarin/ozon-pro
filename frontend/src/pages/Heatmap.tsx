@@ -12,6 +12,9 @@ interface RecRow {
   product_name: string
   offer_id: string
   current_price: number | null
+  marketing_price: number | null
+  selling_price: number | null
+  sales_percent_fbo: number | null
   cost_price: number | null
   current_stock: number
   velocity: { adjusted_daily: number; total_units_sold: number }
@@ -36,14 +39,17 @@ export function Heatmap() {
 
   const items = useMemo(() => {
     if (!data) return []
-    // Считаем revenue 30д ≈ units_sold × price (по velocity * 28 за 28д)
+    // Считаем revenue ≈ units_sold × selling_price (рабочая цена, не зачёркнутая 33000).
+    // Комиссия — из реального sales_percent_fbo (40-47% в зависимости от товара),
+    // эвристика 25% занижала комиссию и завышала маржу.
     return data
       .map((p) => {
+        const sp = p.selling_price ?? p.marketing_price ?? p.current_price ?? 0
         const units = p.velocity.total_units_sold
-        const revenue = (p.current_price || 0) * units
-        const grossPerUnit =
-          (p.current_price || 0) - (p.cost_price || 0) - (p.current_price || 0) * 0.25 // ≈ комиссия 25%
-        const marginPct = (p.current_price || 0) > 0 ? (grossPerUnit / (p.current_price || 1)) * 100 : 0
+        const revenue = sp * units
+        const commPct = p.sales_percent_fbo ?? 25 // fallback если не синкнут
+        const grossPerUnit = sp - (p.cost_price || 0) - sp * (commPct / 100)
+        const marginPct = sp > 0 ? (grossPerUnit / sp) * 100 : 0
         return { ...p, revenue, marginPct, units }
       })
       .filter((p) => p.revenue > 0)
