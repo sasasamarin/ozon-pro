@@ -1125,7 +1125,9 @@ async def funnel_sankey(
     pids = _parse_product_ids(product_id, product_ids)
     row = await _aggregate(db, accs=accs, product_ids=pids, date_from=date_from, date_to=date_to)
     imp = int(row.imp or 0)
-    clicks = int(row.clicks or 0)
+    # после фикса "не клики, а посещения карточки" поле row.clicks нет,
+    # есть row.card_visits — используем его в sankey как промежуточный уровень.
+    clicks = int(row.card_visits or 0)
     cart = int(row.cart or 0)
     orders = int(row.orders or 0)
     deliv = int(row.deliv or 0)

@@ -380,7 +380,7 @@ async def transactions_monthly(
                COUNT(*) AS cnt
         FROM transactions t
         WHERE t.ozon_account_id = ANY(:accs)
-          AND t.time >= NOW() - (:months || ' months')::interval
+          AND t.time >= NOW() - (CAST(:months AS INT) * INTERVAL '1 month')
         GROUP BY 1 ORDER BY 1 DESC
     """), {"accs": [str(a) for a in account_ids], "months": months_back})).all()
 
