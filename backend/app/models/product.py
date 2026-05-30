@@ -90,6 +90,20 @@ class Product(BaseModel, SoftDeleteMixin):
     rating: Mapped[float | None] = mapped_column(Numeric(3, 2), nullable=True)
     reviews_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    # === ТОЧНЫЕ КОМИССИИ И ЛОГИСТИКА OZON per-товар ===
+    # Ozon отдаёт в /v5/product/info/prices. Раньше мы это не сохраняли,
+    # маржу считали по эвристике 22% — реально 40-47%.
+    volume_weight: Mapped[float | None] = mapped_column(Numeric(8, 3), nullable=True)  # литры
+    acquiring_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)  # эквайринг ₽
+    sales_percent_fbo: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    sales_percent_fbs: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    fbo_deliv_to_customer: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    fbo_direct_flow_trans_min: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    fbo_direct_flow_trans_max: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    fbo_return_flow_amount: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # Полный raw_data всех комиссий — на случай если Ozon добавит новые поля
+    commissions_raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Дополнительные данные с Озона (полный JSON)
     raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
 

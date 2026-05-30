@@ -684,11 +684,18 @@ async def _sync_prices_for_account(
                             price_node = item.get("price", {})
                             price = _to_decimal(price_node.get("price"))
                             old_price = _to_decimal(price_node.get("old_price"))
-                            marketing_price = _to_decimal(price_node.get("marketing_price"))
+                            # Ozon шлёт СПП как 'marketing_seller_price', не 'marketing_price'.
+                            # Старый код брал несуществующий ключ → у всех 81 товара NULL.
+                            marketing_price = _to_decimal(price_node.get("marketing_seller_price"))
                             min_price = _to_decimal(price_node.get("min_price"))
                             price_index = (item.get("price_indexes") or {}).get(
                                 "color_index"
                             ) or item.get("price_index")
+
+                            # Точные комиссии и логистика Ozon per-товар (новое):
+                            comm = item.get("commissions") or {}
+                            volume_weight = _to_decimal(item.get("volume_weight"))
+                            acquiring = _to_decimal(item.get("acquiring"))
 
                             if price is not None:
                                 rows.append({
@@ -710,6 +717,19 @@ async def _sync_prices_for_account(
                                 product.marketing_price = marketing_price
                                 product.min_price = min_price
                                 product.price_index = price_index
+                                # точные комиссии
+                                if volume_weight is not None:
+                                    product.volume_weight = volume_weight
+                                if acquiring is not None:
+                                    product.acquiring_amount = acquiring
+                                if comm:
+                                    product.commissions_raw = comm
+                                    product.sales_percent_fbo = _to_decimal(comm.get("sales_percent_fbo"))
+                                    product.sales_percent_fbs = _to_decimal(comm.get("sales_percent_fbs"))
+                                    product.fbo_deliv_to_customer = _to_decimal(comm.get("fbo_deliv_to_customer_amount"))
+                                    product.fbo_direct_flow_trans_min = _to_decimal(comm.get("fbo_direct_flow_trans_min_amount"))
+                                    product.fbo_direct_flow_trans_max = _to_decimal(comm.get("fbo_direct_flow_trans_max_amount"))
+                                    product.fbo_return_flow_amount = _to_decimal(comm.get("fbo_return_flow_amount"))
                                 stats.updated += 1
                             stats.processed += 1
 
