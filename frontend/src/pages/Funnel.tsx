@@ -121,7 +121,7 @@ type BWMetric = 'overall' | 'cart' | 'order' | 'delivery'
 
 const DRILL_TITLES: Record<Exclude<DrillStep, null>, string> = {
   impressions: 'Детализация: Показы по дням',
-  clicks: 'Детализация: Клики по дням',
+  clicks: 'Детализация: Посещения карточки по дням',
   to_cart: 'Детализация: В корзину по дням',
   orders: 'Детализация: Заказы по дням',
   delivered: 'Детализация: Доставлено по дням',
@@ -186,10 +186,15 @@ export function Funnel() {
   }
 
   const { data: products } = useQuery<ProductLite[]>({
-    queryKey: ['products', 'lite'],
+    // Селектор товаров воронки фильтруется по тем же кабинетам что и метрики.
+    // Раньше брали все товары /products/ без cabinet_ids → юзер видел чужие
+    // (например Жираф из home хотя выбран презент).
+    queryKey: ['products', 'lite', selectedCabinetIds],
     queryFn: async () => {
-      const all = (await api.get('/products/')).data as ProductLite[]
-      return all
+      const p = new URLSearchParams()
+      selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
+      const qs = p.toString()
+      return (await api.get(qs ? `/products/?${qs}` : '/products/')).data as ProductLite[]
     },
   })
 
@@ -243,7 +248,7 @@ export function Funnel() {
     if (!kpi) return []
     return [
       { key: 'impressions' as const, label: 'Показы',     icon: Eye,                value: kpi.impressions, conv: null,                   convLabel: null,        color: 'bg-indigo-400'  },
-      { key: 'clicks'      as const, label: 'Клики',      icon: MousePointerClick,  value: kpi.clicks,      conv: kpi.ctr_pct,            convLabel: 'CTR',       color: 'bg-blue-400'    },
+      { key: 'clicks'      as const, label: 'Карточка',   icon: MousePointerClick,  value: kpi.clicks,      conv: kpi.ctr_pct,            convLabel: 'в карточку', color: 'bg-blue-400'    },
       { key: 'to_cart'     as const, label: 'В корзину',  icon: ShoppingCart,       value: kpi.to_cart,     conv: kpi.click_to_cart_pct,  convLabel: 'в корзину', color: 'bg-violet-400'  },
       { key: 'orders'      as const, label: 'Заказы',     icon: ShoppingBag,        value: kpi.orders,      conv: kpi.order_conv_pct,     convLabel: 'в заказ',   color: 'bg-emerald-400' },
       { key: 'delivered'   as const, label: 'Доставлено', icon: CheckCircle2,       value: kpi.delivered,   conv: kpi.delivery_conv_pct,  convLabel: 'выкуп',     color: 'bg-amber-400'   },
@@ -387,7 +392,7 @@ export function Funnel() {
           {/* === 6 KPI === */}
           <div className={cn('grid grid-cols-2 lg:grid-cols-6 gap-3 transition-opacity', isFetching && 'opacity-50')}>
             <ConvCard label="Сквозная" curr={kpi!.overall_conv_pct} prev={prev?.overall_conv_pct} />
-            <ConvCard label="CTR (показ→клик)" curr={kpi!.ctr_pct} prev={prev?.ctr_pct} />
+            <ConvCard label="Показ→карточка" curr={kpi!.ctr_pct} prev={prev?.ctr_pct} />
             <ConvCard label="В корзину" curr={kpi!.cart_conv_pct} prev={prev?.cart_conv_pct} />
             <ConvCard label="Корзина → заказ" curr={kpi!.order_conv_pct} prev={prev?.order_conv_pct} />
             <ConvCard label="Заказ → выкуп" curr={kpi!.delivery_conv_pct} prev={prev?.delivery_conv_pct} />
@@ -626,7 +631,7 @@ function DrillTable({
               <th className="py-2 px-3">дата</th>
               <th className="py-2 px-3 text-right">показы</th>
               <th className="py-2 px-3 text-right">клики</th>
-              <th className="py-2 px-3 text-right">CTR</th>
+              <th className="py-2 px-3 text-right">% в карточку</th>
               <th className="py-2 px-3 text-right">в корзину</th>
               <th className="py-2 px-3 text-right">клик → корзина</th>
             </tr>

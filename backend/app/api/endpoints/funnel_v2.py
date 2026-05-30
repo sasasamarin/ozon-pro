@@ -28,18 +28,35 @@ UTC = timezone.utc
 
 
 class FunnelKPI(BaseModel):
+    """ВОРОНКА КАК В КАБИНЕТЕ OZON (6 шагов, без выдуманных «кликов»).
+
+    Терминология (соответствует Ozon admin → Аналитика → Воронка продаж):
+      1. impressions       = Показы всего (search + pdp)
+      2. impressions_search= Показы в поиске и каталоге
+      3. card_visits       = Посещения карточки товара (session_view_pdp)
+      4. to_cart           = Добавления в корзину
+      5. orders            = Заказано
+      6. delivered         = Выкуплено
+    Конверсии: search→card, card→cart, cart→order, order→delivery, overall.
+    """
     impressions: int
-    clicks: int
+    impressions_search: int
+    card_visits: int           # = session_view_pdp; раньше было ошибочно «clicks»
     to_cart: int
     orders: int
     delivered: int
     revenue: float
-    cart_conv_pct: float | None
-    order_conv_pct: float | None
-    delivery_conv_pct: float | None
-    overall_conv_pct: float | None
-    ctr_pct: float | None
-    click_to_cart_pct: float | None
+    # Конверсии (% между шагами)
+    search_to_card_pct: float | None   # Конверсия поиск→карточка (Ozon: ~22%)
+    card_to_cart_pct: float | None     # Конверсия карточка→корзина (Ozon: ~9%)
+    cart_conv_pct: float | None        # legacy: показы→корзина
+    order_conv_pct: float | None       # корзина→заказ (Ozon: ~35%)
+    delivery_conv_pct: float | None    # заказ→выкуп (Ozon: ~90%)
+    overall_conv_pct: float | None     # показы→доставлено
+    # Legacy поля (для обратной совместимости фронта, скоро удалю)
+    clicks: int = 0
+    ctr_pct: float | None = None
+    click_to_cart_pct: float | None = None
 
 
 class AdBreakdownRow(BaseModel):
@@ -128,19 +145,27 @@ def _safe_pct(num: int | float, denom: int | float) -> float | None:
 
 def _kpi(row) -> FunnelKPI:
     imp = int(row.imp or 0)
-    clicks = int(row.clicks or 0)
+    imp_search = int(row.imp_search or 0)
+    card_visits = int(row.card_visits or 0)
     cart = int(row.cart or 0)
     orders = int(row.orders or 0)
     deliv = int(row.deliv or 0)
     return FunnelKPI(
-        impressions=imp, clicks=clicks, to_cart=cart, orders=orders, delivered=deliv,
+        impressions=imp,
+        impressions_search=imp_search,
+        card_visits=card_visits,
+        to_cart=cart, orders=orders, delivered=deliv,
         revenue=float(row.revenue or 0),
+        search_to_card_pct=_safe_pct(card_visits, imp_search),
+        card_to_cart_pct=_safe_pct(cart, card_visits),
         cart_conv_pct=_safe_pct(cart, imp),
         order_conv_pct=_safe_pct(orders, cart),
         delivery_conv_pct=_safe_pct(deliv, orders),
         overall_conv_pct=_safe_pct(deliv, imp),
-        ctr_pct=_safe_pct(clicks, imp),
-        click_to_cart_pct=_safe_pct(cart, clicks),
+        # legacy:
+        clicks=card_visits,
+        ctr_pct=_safe_pct(card_visits, imp),
+        click_to_cart_pct=_safe_pct(cart, card_visits),
     )
 
 
@@ -180,8 +205,13 @@ async def _aggregate(
     if product_ids:
         where.append(AnalyticsDaily.product_id.in_(product_ids))
     q = select(
+        # Показы всего = hits_view_search + hits_view_pdp
         func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
-        func.coalesce(func.sum(AnalyticsDaily.session_view_search + AnalyticsDaily.session_view_pdp), 0).label("clicks"),
+        # Показы в поиске и каталоге (для конверсии «поиск→карточка»)
+        func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp_search"),
+        # Посещения карточки = session_view_pdp (как в кабинете Ozon).
+        # Раньше считалось как "клики" + session_view_search, давало CTR 86%.
+        func.coalesce(func.sum(AnalyticsDaily.session_view_pdp), 0).label("card_visits"),
         func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
         func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
         func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
@@ -348,7 +378,9 @@ async def get_funnel_daily(
             AnalyticsDaily.date.label("d"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp_s"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("imp_p"),
-            func.coalesce(func.sum(AnalyticsDaily.session_view_search + AnalyticsDaily.session_view_pdp), 0).label("clicks"),
+            # «Посещения карточки» = session_view_pdp (как в кабинете Ozon).
+            # Раньше было session_view_search+pdp — давало CTR 86%, юзер: «абсурд».
+            func.coalesce(func.sum(AnalyticsDaily.session_view_pdp), 0).label("clicks"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search), 0).label("cart_s"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart_p"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
