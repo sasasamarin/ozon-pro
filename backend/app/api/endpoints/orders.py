@@ -34,7 +34,8 @@ class OrderItemRow(BaseModel):
     offer_id: str | None
     name: str | None
     quantity: int
-    price: float
+    price: float                       # цена продавца (= accruals_for_sale)
+    customer_price: float | None = None  # цена покупателя с СПП (из fbo/get)
     total_price: float
 
 
@@ -151,6 +152,7 @@ async def list_orders(
                     name=item.name,
                     quantity=item.quantity,
                     price=float(item.price or 0),
+                    customer_price=float(item.customer_price) if item.customer_price is not None else None,
                     total_price=float(item.total_price or 0),
                 )
             )

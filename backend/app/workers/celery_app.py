@@ -34,6 +34,7 @@ celery_app = Celery(
         "app.workers.tasks.sync_financing",
         "app.workers.tasks.maintenance",
         "app.workers.tasks.recompute_recommendations",
+        "app.workers.tasks.enrich_customer_price",
     ],
 )
 
@@ -77,6 +78,14 @@ celery_app.conf.beat_schedule = {
     "sync-orders-every-15-min": {
         "task": "app.workers.tasks.sync_orders.sync_all_orders",
         "schedule": crontab(minute="*/15"),
+    },
+    # Догоняем customer_price для свежих postings (хвост 500 шт).
+    # Полный backfill 29k запускается вручную:
+    #   docker exec ozon_worker celery -A app.workers.celery_app call enrich_customer_price --kwargs '{"max_postings": 30000}'
+    "enrich-customer-price-hourly": {
+        "task": "enrich_customer_price",
+        "schedule": crontab(minute=10),
+        "kwargs": {"max_postings": 500},
     },
     "sync-transactions-daily": {
         "task": "app.workers.tasks.sync_finance.sync_all_transactions",

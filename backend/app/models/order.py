@@ -141,7 +141,13 @@ class OrderItem(BaseModel):
 
     # Количество и цены
     quantity: Mapped[int] = mapped_column(Integer, default=1)
+    # price = «цена продавца» (= marketing_seller_price = accruals_for_sale)
+    # — то, что Ozon начисляет нам за единицу.
     price: Mapped[float] = mapped_column(Numeric(15, 2), default=0)
+    # customer_price = «оплачено покупателем» — индивидуальная цена с СПП/Ozon-Картой.
+    # Отдаётся Ozon API в /v2/posting/fbo/get → fd.products[].customer_price.
+    # Не влияет на финансы продавца, но драйвер спроса.
+    customer_price: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
     total_price: Mapped[float] = mapped_column(Numeric(15, 2), default=0)
     commission: Mapped[float] = mapped_column(Numeric(15, 2), default=0)
 

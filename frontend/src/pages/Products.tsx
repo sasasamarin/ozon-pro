@@ -32,6 +32,7 @@ interface ProductItem {
   old_price: number | null
   marketing_price: number | null
   selling_price: number | null
+  avg_customer_price_30d?: number | null
   sales_percent_fbo: number | null
   min_price: number | null
   price_index: string | null
@@ -435,7 +436,8 @@ export function Products() {
                   <th className="py-3 px-2 w-10"></th>
                   <th className="py-3 px-4">Товар</th>
                   <th className="py-3 px-4">Кабинет / Категория</th>
-                  <th className="py-3 px-4 text-right">Цена</th>
+                  <th className="py-3 px-4 text-right" title="Цена продавца (= marketing_seller_price). От неё считается выручка и комиссия.">Цена</th>
+                  <th className="py-3 px-4 text-right" title="Средняя «оплачено покупателем» за 30 дней — цена с СПП/Ozon-Картой. Драйвер спроса, не влияет на твою выручку.">Цена с СПП</th>
                   <th className="py-3 px-4 text-right">Себест.</th>
                   <th className="py-3 px-4 text-right" title="Брутто-маржа: (цена−себест)/цена. Без комиссии Ozon, логистики, налога.">
                     Брутто %
@@ -564,6 +566,22 @@ export function Products() {
                               <span className="text-fg-subtle">—</span>
                             )
                           })()}
+                        </td>
+                        <td className="py-3 px-4 text-right">
+                          {p.avg_customer_price_30d != null ? (
+                            <>
+                              <div className="font-mono tabular-nums text-blue-700" title="Средняя цена которую платил покупатель с СПП/Ozon-Картой за последние 30 дней.">
+                                {formatCurrency(p.avg_customer_price_30d)}
+                              </div>
+                              {sellingPrice && p.avg_customer_price_30d < sellingPrice && (
+                                <div className="text-[10px] text-blue-500 tabular-nums">
+                                  −{((1 - p.avg_customer_price_30d / sellingPrice) * 100).toFixed(0)}% от цены
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-fg-subtle text-xs">—</span>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-right">
                           {p.cost_price != null

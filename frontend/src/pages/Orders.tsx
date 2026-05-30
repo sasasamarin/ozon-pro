@@ -14,7 +14,8 @@ interface OrderItem {
   offer_id: string | null
   name: string | null
   quantity: number
-  price: number
+  price: number                       // цена продавца (= accruals_for_sale)
+  customer_price?: number | null      // оплачено покупателем с СПП (из fbo/get)
   total_price: number
 }
 
@@ -296,9 +297,14 @@ export function Orders() {
                                       {it.offer_id || '—'}
                                     </div>
                                   </div>
-                                  <span className="text-fg-muted tabular-nums">
+                                  <span className="text-fg-muted tabular-nums" title="Цена продавца — то, что Ozon начисляет тебе. От неё считается комиссия.">
                                     {formatNumber(it.quantity)} × {formatCurrency(it.price)}
                                   </span>
+                                  {it.customer_price != null && (
+                                    <span className="text-blue-700 tabular-nums text-[10px]" title="Цена с СПП — что фактически оплатил покупатель с Ozon-Картой/Premium. Не влияет на выручку, драйвер спроса.">
+                                      покупатель: {formatCurrency(it.customer_price)}
+                                    </span>
+                                  )}
                                   <span className="text-fg font-mono tabular-nums w-24 text-right">
                                     {formatCurrency(it.total_price)}
                                   </span>
