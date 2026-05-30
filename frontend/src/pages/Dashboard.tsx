@@ -298,7 +298,7 @@ export function Dashboard() {
                 spark={kpi?.sparkline || []}
                 icon={TrendingUp}
                 iconBg="from-emerald-50 to-white text-emerald-600"
-                clickTo={`/finance/transactions?date_from=${data!.period_from}&date_to=${data!.period_to}`}
+                clickTo={`/finance/transactions?date_from=${data?.period_from || ''}&date_to=${data?.period_to || ''}`}
               />
               <KpiCard
                 label="Прибыль валовая"
@@ -316,7 +316,7 @@ export function Dashboard() {
                 spark={kpi?.sparkline || []}
                 icon={ShoppingBag}
                 iconBg="from-amber-50 to-white text-amber-700"
-                clickTo={`/orders?date_from=${data!.period_from}&date_to=${data!.period_to}`}
+                clickTo={`/orders?date_from=${data?.period_from || ''}&date_to=${data?.period_to || ''}`}
               />
               <KpiCard
                 label="Средний чек"
