@@ -111,7 +111,7 @@ async def _sync_one_account(
                 # === Группируем транзакции по operation_type
                 tx_rows = (await db.execute(
                     select(
-                        Transaction.id.label("tx_id"),
+                        Transaction.ozon_transaction_id.label("tx_id"),
                         Transaction.operation_type,
                         Transaction.time,
                         Transaction.operation_date,
@@ -201,7 +201,7 @@ async def _sync_one_account(
                         "affects_cashflow": True,
                         "affects_debt": 0,
                         "raw_data": {
-                            "tx_id": str(tx.tx_id),
+                            "ozon_transaction_id": tx.tx_id,
                             "operation_type": tx.operation_type,
                         },
                     })
