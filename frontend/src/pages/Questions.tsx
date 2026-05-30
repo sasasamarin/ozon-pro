@@ -48,7 +48,7 @@ export function Questions() {
           {onlyUnanswered ? 'Только без ответа' : 'Все вопросы'}
         </button>
         <div className="flex gap-2 ml-auto">
-          {[30, 90, 365].map((d) => (
+          {[7, 28, 30, 90, 365].map((d) => (
             <button key={d} onClick={() => setDays(d)} className={cn(
               'px-3 py-1.5 rounded-md text-sm border transition-colors',
               days === d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',

@@ -71,7 +71,7 @@ export function Cashflow() {
           </p>
         </div>
         <div className="flex gap-2">
-          {[30, 90, 180, 365].map((d) => (
+          {[7, 28, 90, 180, 365].map((d) => (
             <button
               key={d}
               onClick={() => setDays(d)}

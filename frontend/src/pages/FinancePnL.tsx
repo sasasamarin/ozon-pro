@@ -65,7 +65,7 @@ export function FinancePnL() {
           </p>
         </div>
         <div className="flex gap-2">
-          {[7, 30, 90, 365].map((d) => (
+          {[7, 28, 30, 90, 365].map((d) => (
             <button
               key={d}
               onClick={() => setDays(d)}
