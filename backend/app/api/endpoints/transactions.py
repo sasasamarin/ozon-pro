@@ -327,3 +327,136 @@ async def export_transactions_csv(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+# =====================================================================
+# Помесячная сводка с drill-down — юзер: «верхний уровень помесячно,
+# вход / списания, клик → день → операции»
+# =====================================================================
+
+
+class MonthRow(BaseModel):
+    period: str       # "2026-05"
+    inflow: float     # SUM amount > 0
+    outflow: float    # SUM ABS(amount) WHERE amount < 0
+    net: float
+    tx_count: int
+
+
+class DayRow(BaseModel):
+    date: str         # "2026-05-15"
+    inflow: float
+    outflow: float
+    net: float
+    tx_count: int
+
+
+class MonthlySummaryResp(BaseModel):
+    months: list[MonthRow]
+    total_inflow: float
+    total_outflow: float
+    total_net: float
+
+
+@router.get("/monthly", response_model=MonthlySummaryResp)
+async def transactions_monthly(
+    cabinet_ids: list[uuid.UUID] | None = Query(None),
+    months_back: int = Query(12, ge=1, le=36),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MonthlySummaryResp:
+    """Помесячная сводка ВСЕХ транзакций (вход / списания / итог)."""
+    account_ids, _ = await _company_account_ids(
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+    )
+    if not account_ids:
+        return MonthlySummaryResp(months=[], total_inflow=0, total_outflow=0, total_net=0)
+
+    from sqlalchemy import text as _text
+    raw_rows = (await db.execute(_text("""
+        SELECT date_trunc('month', t.time) AS b,
+               COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0)::float AS inflow,
+               COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0)::float AS outflow,
+               COUNT(*) AS cnt
+        FROM transactions t
+        WHERE t.ozon_account_id = ANY(:accs)
+          AND t.time >= NOW() - (:months || ' months')::interval
+        GROUP BY 1 ORDER BY 1 DESC
+    """), {"accs": [str(a) for a in account_ids], "months": months_back})).all()
+
+    months_out: list[MonthRow] = []
+    total_in = total_out = 0.0
+    for r in raw_rows:
+        inflow = float(r.inflow or 0)
+        outflow = float(r.outflow or 0)
+        months_out.append(MonthRow(
+            period=r.b.strftime("%Y-%m"),
+            inflow=round(inflow, 2),
+            outflow=round(outflow, 2),
+            net=round(inflow - outflow, 2),
+            tx_count=int(r.cnt or 0),
+        ))
+        total_in += inflow
+        total_out += outflow
+
+    return MonthlySummaryResp(
+        months=months_out,
+        total_inflow=round(total_in, 2),
+        total_outflow=round(total_out, 2),
+        total_net=round(total_in - total_out, 2),
+    )
+
+
+@router.get("/daily", response_model=list[DayRow])
+async def transactions_daily(
+    period: str = Query(..., description="YYYY-MM"),
+    cabinet_ids: list[uuid.UUID] | None = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[DayRow]:
+    """Поденная разбивка месяца (drill-down уровня 2)."""
+    try:
+        period_dt = datetime.strptime(period, "%Y-%m")
+    except ValueError:
+        return []
+
+    account_ids, _ = await _company_account_ids(
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+    )
+    if not account_ids:
+        return []
+
+    # Конец периода = первое число следующего месяца
+    if period_dt.month == 12:
+        period_to = datetime(period_dt.year + 1, 1, 1)
+    else:
+        period_to = datetime(period_dt.year, period_dt.month + 1, 1)
+
+    from sqlalchemy import text as _text
+    rows = (await db.execute(_text("""
+        SELECT date_trunc('day', t.time)::date AS d,
+               COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0)::float AS inflow,
+               COALESCE(SUM(CASE WHEN t.amount < 0 THEN ABS(t.amount) ELSE 0 END), 0)::float AS outflow,
+               COUNT(*) AS cnt
+        FROM transactions t
+        WHERE t.ozon_account_id = ANY(:accs)
+          AND t.time >= :dfrom AND t.time < :dto
+        GROUP BY 1 ORDER BY 1
+    """), {
+        "accs": [str(a) for a in account_ids],
+        "dfrom": period_dt,
+        "dto": period_to,
+    })).all()
+
+    out = []
+    for r in rows:
+        inflow = float(r.inflow or 0)
+        outflow = float(r.outflow or 0)
+        out.append(DayRow(
+            date=r.d.isoformat(),
+            inflow=round(inflow, 2),
+            outflow=round(outflow, 2),
+            net=round(inflow - outflow, 2),
+            tx_count=int(r.cnt or 0),
+        ))
+    return out

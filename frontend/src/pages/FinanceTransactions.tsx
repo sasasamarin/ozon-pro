@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import {
   Receipt,
   Search,
@@ -11,6 +12,7 @@ import {
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { TransactionsMonthly } from '@/components/TransactionsMonthly'
 import { api, API_BASE_URL } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
@@ -63,13 +65,21 @@ const SERVICE_COLS: Array<[keyof TxRow, string]> = [
   ['utilization', 'Утилизация'],
 ]
 
+type ViewMode = 'monthly' | 'all'
+
 export function FinanceTransactions() {
+  const [urlParams] = useSearchParams()
+  // ?view=all из drill-down дня → сразу попадаем в плоский список
+  const initialView: ViewMode = (urlParams.get('view') === 'all'
+    || urlParams.get('date_from')
+    || urlParams.get('date_to')) ? 'all' : 'monthly'
+  const [viewMode, setViewMode] = useState<ViewMode>(initialView)
   const { selectedCabinetIds } = useCabinetStore()
   const [page, setPage] = useState(1)
   const [operationType, setOperationType] = useState('')
   const [search, setSearch] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [dateFrom, setDateFrom] = useState(urlParams.get('date_from') || '')
+  const [dateTo, setDateTo] = useState(urlParams.get('date_to') || '')
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
   // Dropdown с типами операций
@@ -137,13 +147,32 @@ export function FinanceTransactions() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-3xl font-semibold text-fg tracking-tight">Транзакции Ozon</h1>
-        <p className="text-sm text-fg-muted mt-1.5">
-          {formatNumber(total)} операций · сумма по фильтру: {formatCurrency(data?.sum_amount ?? 0)}
-        </p>
+      <div className="flex items-end justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-3xl font-semibold text-fg tracking-tight">Транзакции Ozon</h1>
+          <p className="text-sm text-fg-muted mt-1.5">
+            {viewMode === 'monthly'
+              ? 'Помесячная сводка → клик на месяц → день → операции'
+              : `${formatNumber(total)} операций · сумма по фильтру: ${formatCurrency(data?.sum_amount ?? 0)}`}
+          </p>
+        </div>
+        <div className="inline-flex rounded-md border border-border-subtle p-0.5 text-xs">
+          {([
+            ['monthly', 'Помесячно'],
+            ['all', 'Все операции'],
+          ] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setViewMode(k)} className={cn(
+              'px-3 py-1 rounded',
+              viewMode === k ? 'bg-fg text-bg' : 'text-fg-muted hover:bg-bg-subtle',
+            )}>{l}</button>
+          ))}
+        </div>
       </div>
 
+      {viewMode === 'monthly' && <TransactionsMonthly />}
+
+      {viewMode === 'all' && (
+      <>
       <Card className="p-4 flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[220px]">
           <label className="block text-[11px] font-medium text-fg-muted uppercase tracking-wider mb-1">
@@ -359,6 +388,8 @@ export function FinanceTransactions() {
           </div>
         )}
       </Card>
+      </>
+      )}
     </div>
   )
 }
