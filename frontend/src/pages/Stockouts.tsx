@@ -19,8 +19,21 @@ const SIGNAL_META: Record<string, { label: string; tone: 'red' | 'amber' | 'gree
   ok: { label: '🟢 Запас в норме', tone: 'green' },
 }
 
-function SignalBadge({ signal }: { signal: string }) {
-  const meta = SIGNAL_META[signal] || { label: signal, tone: 'green' as const }
+function deriveSignalMeta(signal: string, currentStock: number, isArchived: boolean) {
+  if (currentStock <= 0) {
+    return { label: '🔴 Нет в наличии', tone: 'red' as const }
+  }
+  if (currentStock <= 1) {
+    return { label: '🔴 Критический остаток', tone: 'red' as const }
+  }
+  if (isArchived) {
+    return { label: '⚪ Архив', tone: 'green' as const }
+  }
+  return SIGNAL_META[signal] || { label: signal, tone: 'green' as const }
+}
+
+function SignalBadge({ signal, currentStock, isArchived }: { signal: string; currentStock: number; isArchived: boolean }) {
+  const meta = deriveSignalMeta(signal, currentStock, isArchived)
   return (
     <span
       className={cn(
@@ -51,10 +64,14 @@ function ConfidenceDot({ value }: { value: 'high' | 'medium' | 'low' | null }) {
 export function Stockouts() {
   const { data, isLoading } = useRecommendations()
   const [filter, setFilter] = useState<SignalFilter>('all')
+  const [showArchived, setShowArchived] = useState(false)
 
   const rows = useMemo(() => {
     if (!data) return []
     let r = data.filter((p) => p.procurement)
+    if (!showArchived) {
+      r = r.filter((p) => !p.is_archived)
+    }
     if (filter !== 'all') {
       r = r.filter((p) => p.procurement!.signal === filter)
     }
@@ -67,22 +84,27 @@ export function Stockouts() {
       return va - vb
     })
     return r
-  }, [data, filter])
+  }, [data, filter, showArchived])
 
   const counts = useMemo(() => {
-    if (!data) return { stockout: 0, reorder_now: 0, ok: 0 }
+    const init = { stockout: 0, reorder_now: 0, ok: 0, archived: 0 }
+    if (!data) return init
     return data.reduce(
       (acc, p) => {
         if (!p.procurement) return acc
+        if (p.is_archived) acc.archived++
+        if (p.is_archived && !showArchived) return acc
         const s = p.procurement.signal
         if (s === 'stockout') acc.stockout++
         else if (s === 'reorder_now') acc.reorder_now++
         else if (s === 'ok') acc.ok++
         return acc
       },
-      { stockout: 0, reorder_now: 0, ok: 0 },
+      init,
     )
-  }, [data])
+  }, [data, showArchived])
+
+  const visibleTotal = (data || []).filter((p) => p.procurement && (showArchived || !p.is_archived)).length
 
   return (
     <div className="flex flex-col gap-6">
@@ -104,26 +126,37 @@ export function Stockouts() {
       </Card>
 
       {/* Filter tabs */}
-      <div className="flex gap-2 flex-wrap">
-        {([
-          ['all', 'Все', data?.length ?? 0],
-          ['stockout', '🔴 Стокаут', counts.stockout],
-          ['reorder_now', '🟡 Пора заказывать', counts.reorder_now],
-          ['ok', '🟢 В норме', counts.ok],
-        ] as Array<[SignalFilter, string, number]>).map(([key, label, n]) => (
-          <button
-            key={key}
-            onClick={() => setFilter(key)}
-            className={cn(
-              'px-3 py-1.5 rounded-md text-sm border transition-colors',
-              filter === key
-                ? 'border-fg bg-fg text-bg'
-                : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-            )}
-          >
-            {label} <span className="opacity-60">({formatNumber(n)})</span>
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap">
+          {([
+            ['all', 'Все', visibleTotal],
+            ['stockout', '🔴 Стокаут', counts.stockout],
+            ['reorder_now', '🟡 Пора заказывать', counts.reorder_now],
+            ['ok', '🟢 В норме', counts.ok],
+          ] as Array<[SignalFilter, string, number]>).map(([key, label, n]) => (
+            <button
+              key={key}
+              onClick={() => setFilter(key)}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-sm border transition-colors',
+                filter === key
+                  ? 'border-fg bg-fg text-bg'
+                  : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
+              )}
+            >
+              {label} <span className="opacity-60">({formatNumber(n)})</span>
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-2 text-xs text-fg-muted cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+            className="rounded border-border-subtle"
+          />
+          Показать архивные <span className="opacity-60">({counts.archived})</span>
+        </label>
       </div>
 
       <Card className="overflow-hidden">
@@ -214,7 +247,7 @@ export function Stockouts() {
                         {reorderPoint}
                       </td>
                       <td className="py-2.5 px-4">
-                        <SignalBadge signal={pr.signal} />
+                        <SignalBadge signal={pr.signal} currentStock={p.current_stock} isArchived={!!p.is_archived} />
                       </td>
                       <td className="py-2.5 px-4 text-right tabular-nums">
                         {pr.recommended_qty > 0 ? (

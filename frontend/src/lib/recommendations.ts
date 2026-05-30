@@ -66,6 +66,7 @@ export interface ProductRecommendation {
   ozon_sku: number
   current_price: number | null
   cost_price: number | null
+  is_archived?: boolean
   image_url: string | null
   current_stock: number
   in_transit_to_customer: number

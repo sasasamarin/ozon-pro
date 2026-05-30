@@ -63,6 +63,7 @@ class ProductRecommendation(BaseModel):
     ozon_sku: int
     current_price: float | None
     cost_price: float | None
+    is_archived: bool = False
     image_url: str | None = None
     current_stock: int
     in_transit_to_customer: int

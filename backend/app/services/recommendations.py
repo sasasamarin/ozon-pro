@@ -366,6 +366,13 @@ async def compute_product_recommendation(
     signal = _classify_reorder_signal(
         procurement_result.days_left, lead_time, safety
     )
+    # Hard override: физический остаток 0/1 — это всегда тревога, независимо от velocity.
+    # Если скорости нет (товар не продаётся) — days_left=∞ → signal='ok', но 0/1 на складе
+    # = «ничего не отгрузить если попросят», статус 'ok' вводит в заблуждение.
+    if current_stock <= 0:
+        signal = "stockout"
+    elif current_stock <= 1 and signal == "ok":
+        signal = "reorder_now"
     procurement: dict[str, Any] = asdict(procurement_result)
     procurement["signal"] = signal               # stockout / reorder_now / ok
     procurement["lead_time_days"] = lead_time
@@ -432,6 +439,7 @@ async def compute_product_recommendation(
         "ozon_sku": product.ozon_sku,
         "current_price": float(product.current_price) if product.current_price is not None else None,
         "cost_price": float(product.cost_price) if product.cost_price is not None else None,
+        "is_archived": bool(product.is_archived),
         "image_url": image_url,
         "current_stock": current_stock,
         "in_transit_to_customer": in_transit_to_customer,

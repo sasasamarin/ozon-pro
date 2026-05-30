@@ -50,7 +50,7 @@ export function Summary() {
               'px-3 py-1.5 rounded-md text-sm border transition-colors',
               days === d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
             )}>
-              {d === 7 && '7 дней'}{d === 30 && '30 дней'}{d === 90 && '90 дней'}{d === 365 && 'Год'}
+              {d === 7 && '7 дней'}{d === 28 && '28 дней'}{d === 30 && '30 дней'}{d === 90 && '90 дней'}{d === 365 && 'Год'}
             </button>
           ))}
         </div>
