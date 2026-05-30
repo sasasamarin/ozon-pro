@@ -6,14 +6,17 @@ GET /api/v1/email/templates → список доступных шаблонов
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, EmailStr
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import EmailLog, EmailStatus, EmailTemplate, User
+from app.services.email import EmailJob, queue_email
 
 router = APIRouter()
 
@@ -89,3 +92,43 @@ async def list_email_log(
         )
         for e in rows
     ]
+
+
+# =====================================================================
+# Реальная отправка
+# =====================================================================
+
+
+class TestSendInput(BaseModel):
+    to: EmailStr
+    template: str = "test"
+    user_name: str | None = None
+
+
+@router.post("/test-send")
+async def test_send_email(
+    payload: TestSendInput,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Отправить тестовое письмо. Юзер: проверка что Beget работает."""
+    result = await queue_email(EmailJob(
+        to_email=payload.to,
+        template=payload.template,
+        subject=None,
+        context={"user_name": payload.user_name or current_user.email or ""},
+        user_id=current_user.id,
+    ))
+    db.add(EmailLog(
+        user_id=current_user.id,
+        to_email=payload.to,
+        subject=f"Flowoi: {payload.template}",
+        template=payload.template,
+        status=EmailStatus.SENT.value if result.get("ok") else EmailStatus.FAILED.value,
+        error=result.get("error"),
+        sent_at=datetime.now(UTC) if result.get("ok") else None,
+    ))
+    await db.commit()
+    if not result.get("ok"):
+        raise HTTPException(500, result.get("error") or "SMTP send failed")
+    return {"ok": True, "to": payload.to, "template": payload.template}
