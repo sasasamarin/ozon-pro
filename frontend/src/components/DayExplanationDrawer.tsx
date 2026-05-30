@@ -52,9 +52,11 @@ interface DayExplanation {
 
 const FACTOR_ICON: Record<string, typeof AlertTriangle> = {
   stockout: Package,
+  stock_ok: Package,
   ads_off: Megaphone,
   high_drr: Megaphone,
   price_drop: Tag,
+  price_ok: Tag,
   impressions_drop: TrendingDown,
   cr_drop: TrendingDown,
   normal: CheckCircle2,
@@ -164,6 +166,15 @@ export function DayExplanationDrawer({
               <div className="p-4 rounded-lg bg-bg-subtle border border-border-subtle">
                 <p className="text-sm text-fg leading-relaxed">{data.summary}</p>
               </div>
+
+              {/* Подсказка про per-product режим (фактор цены/остатка считается для одного товара) */}
+              {!data.product_id && (
+                <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-xs text-blue-900 leading-relaxed">
+                  <strong>Подсказка:</strong> сейчас показан агрегат по всем товарам. Чтобы увидеть факторы
+                  <span className="font-semibold"> Цена</span> и
+                  <span className="font-semibold"> Остаток</span> — выбери один товар в фильтре товаров на воронке.
+                </div>
+              )}
 
               {/* Факторы */}
               <div>

@@ -337,7 +337,7 @@ async def explain_day(
     # ─── Факторы (детерминированные правила) ───────────────────────────────
     factors: list[DayFactor] = []
 
-    # 1) Стокаут
+    # 1) Стокаут / Остаток
     if product_id is not None and stockout:
         factors.append(DayFactor(
             type="stockout", severity="high",
@@ -349,6 +349,12 @@ async def explain_day(
             type="stockout", severity="medium",
             title=f"Критический остаток ({stock_total} шт)",
             text=f"Остаток {stock_total} — товар может закончиться в любой момент, риск ускоренной просадки.",
+        ))
+    elif product_id is not None and stock_total > 3:
+        factors.append(DayFactor(
+            type="stock_ok", severity="info",
+            title=f"Остаток {stock_total} шт — норма",
+            text=f"На конец {date} на складах {stock_total} шт. Стокаут не был причиной этого дня.",
         ))
 
     # 2) Реклама выключена в день с историей рекламы
@@ -383,12 +389,20 @@ async def explain_day(
         ))
 
     # 4) Снижение цены продажи (Ozon крутил СПП)
-    if price_dropped_pct and price_dropped_pct >= 2:
+    if price_dropped_pct and price_dropped_pct >= 1.5:
         factors.append(DayFactor(
             type="price_drop", severity="info",
             title=f"Ozon снизил цену на {price_dropped_pct}%",
             text=f"Средняя фактическая цена продажи в этот день: {avg_sold:,.0f}₽ "
                  f"(вместо обычной {seller_price:,.0f}₽). Это обычно поднимает спрос.",
+        ))
+    elif product_id is not None and avg_sold and seller_price and abs(avg_sold - seller_price) < seller_price * 0.015:
+        # Positive confirmation: цена дня стандартная (СПП не крутили)
+        factors.append(DayFactor(
+            type="price_ok", severity="info",
+            title=f"Цена дня стандартная ({avg_sold:,.0f}₽)",
+            text=f"Ozon не крутил СПП-скидку, средняя фактическая = установленной цене продавца. "
+                 f"Цена не была драйвером этого дня.",
         ))
 
     # 5) Просадка показов (z<-1.5)
