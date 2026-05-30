@@ -25,7 +25,6 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_secret
-from app.db.session import AsyncSessionLocal
 from app.models import OrderItem, OzonAccount
 from app.services.ozon_client import OzonSellerClient
 from app.workers.tasks._helpers import run_celery_async
@@ -47,10 +46,10 @@ def enrich_customer_price(self, max_postings: int | None = None, account_id: str
     return run_celery_async(_enrich_async, max_postings=max_postings, account_id=account_id)
 
 
-async def _enrich_async(max_postings: int | None = None, account_id: str | None = None) -> dict:
+async def _enrich_async(SessionLocal, max_postings: int | None = None, account_id: str | None = None) -> dict:
     stats = {"processed": 0, "updated": 0, "skipped": 0, "errors": 0, "started_at": datetime.now(UTC).isoformat()}
 
-    async with AsyncSessionLocal() as db:
+    async with SessionLocal() as db:
         accounts_query = select(OzonAccount).where(OzonAccount.is_active.is_(True))
         if account_id:
             accounts_query = accounts_query.where(OzonAccount.id == uuid.UUID(account_id))
