@@ -539,26 +539,19 @@ async def get_dashboard_v2(
     )
     missing_n = 0
     if accs:
-        # Считаем «без себестоимости» = (NULL OR <=100 как заглушка) И активные
-        # (архивный товар не продаётся — себестоимость не нужна для прибыли).
-        # Юзер: «в товары захожу — заполнено» (потому что фильтр Активные),
-        # а заглушки сидят в архиве.
+        # «Без себестоимости» = cost_price пуст/заглушка И активный товар.
+        # Юзер: «архивные не продаются — их себест не нужна».
+        # History.confidence='missing' НЕ учитываем: при bulk-правке cost_price
+        # запись в product_cost_history не обновляется, и старое 'missing'
+        # остаётся как аудит → давало ложные 15 при реально 1 пустом.
+        # Доверяем текущему Product.cost_price.
         missing_n = int((await db.execute(
             select(func.count(Product.id))
-            .select_from(Product)
-            .outerjoin(latest_subq, latest_subq.c.product_id == Product.id)
-            .outerjoin(
-                ProductCostHistory,
-                (ProductCostHistory.product_id == Product.id)
-                & (ProductCostHistory.effective_from == latest_subq.c.latest),
-            )
             .where(
                 Product.ozon_account_id.in_(accs),
                 Product.deleted_at.is_(None),
-                Product.is_archived.is_(False),  # только активные
-                (Product.cost_price.is_(None))
-                | (Product.cost_price <= 100)  # заглушка 100 = тоже «не задана»
-                | (ProductCostHistory.confidence == CostConfidence.MISSING.value),
+                Product.is_archived.is_(False),
+                (Product.cost_price.is_(None)) | (Product.cost_price <= 100),
             )
         )).scalar() or 0)
 
