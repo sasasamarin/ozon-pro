@@ -520,14 +520,14 @@ class OzonSellerClient:
     ) -> dict:
         """Возвраты FBO. Endpoint: POST /v1/returns/list
 
-        Старые /v2/returns/company/fbo и /v3/returns/company/fbo помечены как
-        obsolete. Текущий рабочий — /v1/returns/list с filter по типу.
+        Ozon ждёт return_schema STRING ("Fbo"/"Fbs"), не массив — раньше слали
+        ["FBO"] и получали 400 «invalid value for string field return_schema».
         """
         return await self._request(
             "POST",
             "/v1/returns/list",
             json={
-                "filter": {"return_schema": ["FBO"]},
+                "filter": {"return_schema": "Fbo"},
                 "limit": limit,
                 "offset": offset,
             },
@@ -544,7 +544,7 @@ class OzonSellerClient:
             "POST",
             "/v1/returns/list",
             json={
-                "filter": {"return_schema": ["FBS"]},
+                "filter": {"return_schema": "Fbs"},
                 "limit": limit,
                 "offset": offset,
             },
