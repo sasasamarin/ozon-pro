@@ -31,6 +31,7 @@ celery_app = Celery(
         "app.workers.tasks.sync_ads",
         "app.workers.tasks.sync_marketplace",
         "app.workers.tasks.sync_communications",
+        "app.workers.tasks.sync_financing",
         "app.workers.tasks.maintenance",
         "app.workers.tasks.recompute_recommendations",
     ],
