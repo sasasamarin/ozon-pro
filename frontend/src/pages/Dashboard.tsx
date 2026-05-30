@@ -16,8 +16,18 @@ import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
 
 interface KPI {
+  // «Заказано» (как в кабинете Ozon)
+  ordered_revenue: number
+  ordered_count: number
+  ordered_change_pct: number | null
+  // «Продажи / Доставлено» (то что было revenue)
   revenue: number
   revenue_change_pct: number | null
+  delivered_count: number
+  // Разбивка
+  in_transit_revenue: number
+  cancelled_revenue: number
+  cancelled_count: number
   gross_profit: number
   gross_profit_change_pct: number | null
   orders_count: number
@@ -232,53 +242,102 @@ export function Dashboard() {
             <Loader2 className="w-5 h-5 animate-spin" />
           </Card>
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <KpiCard
-              label="Выручка"
-              value={formatCurrency(kpi?.revenue ?? 0)}
-              change={kpi?.revenue_change_pct}
-              spark={kpi?.sparkline || []}
-              icon={TrendingUp}
-              iconBg="from-emerald-50 to-white text-emerald-600"
-              clickTo={`/finance/transactions?date_from=${data!.period_from}&date_to=${data!.period_to}`}
-            />
-            <KpiCard
-              label="Прибыль валовая"
-              value={formatCurrency(kpi?.gross_profit ?? 0)}
-              change={kpi?.gross_profit_change_pct}
-              spark={kpi?.sparkline || []}
-              icon={Package}
-              iconBg="from-indigo-50 to-white text-indigo-600"
-              clickTo="/finance/pnl"
-            />
-            <KpiCard
-              label="Заказы"
-              value={formatNumber(kpi?.orders_count ?? 0)}
-              change={kpi?.orders_change_pct}
-              spark={kpi?.sparkline || []}
-              icon={ShoppingBag}
-              iconBg="from-amber-50 to-white text-amber-700"
-              clickTo={`/orders?date_from=${data!.period_from}&date_to=${data!.period_to}`}
-            />
-            <KpiCard
-              label="Средний чек"
-              value={formatCurrency(kpi?.aov ?? 0)}
-              change={kpi?.aov_change_pct}
-              spark={[]}
-              icon={Wallet}
-              iconBg="from-violet-50 to-white text-violet-600"
-            />
-            <KpiCard
-              label="Расходы Ozon"
-              value={formatCurrency(kpi?.ozon_expenses ?? 0)}
-              change={null}
-              subtitle={kpi?.expense_share_pct != null ? `${kpi.expense_share_pct}% от выручки` : undefined}
-              spark={[]}
-              icon={Wallet}
-              iconBg="from-rose-50 to-white text-rose-600"
-              clickTo="/finance/transactions"
-            />
-          </div>
+          <>
+            {/* ВЕРХНЯЯ ПОЛОСА: «Заказано» (как в кабинете Ozon) — для сверки */}
+            <Card className="p-4">
+              <div className="flex items-start justify-between flex-wrap gap-3">
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-fg-muted">
+                    Заказано (как в кабинете Ozon)
+                  </div>
+                  <div className="flex items-baseline gap-3 mt-1 flex-wrap">
+                    <span className="text-2xl font-bold text-fg tabular-nums">
+                      {formatCurrency(kpi?.ordered_revenue ?? 0)}
+                    </span>
+                    <span className="text-sm text-fg-muted tabular-nums">
+                      {formatNumber(kpi?.ordered_count ?? 0)} заказов
+                    </span>
+                    {kpi?.ordered_change_pct != null && (
+                      <span className={cn('text-xs tabular-nums',
+                        kpi.ordered_change_pct >= 0 ? 'text-emerald-700' : 'text-rose-700')}>
+                        {kpi.ordered_change_pct >= 0 ? '+' : ''}{kpi.ordered_change_pct.toFixed(1)}%
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-fg-muted mt-1">
+                    Все заказы периода (вкл. в пути и отменённые). Совпадает с Ozon admin → «Заказано на сумму».
+                  </p>
+                </div>
+                <div className="flex gap-4 text-xs flex-wrap">
+                  <div>
+                    <div className="text-fg-muted text-[10px] uppercase">В пути</div>
+                    <div className="font-semibold tabular-nums text-amber-700">
+                      {formatCurrency(kpi?.in_transit_revenue ?? 0)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-fg-muted text-[10px] uppercase">Отменено</div>
+                    <div className="font-semibold tabular-nums text-rose-700">
+                      {formatCurrency(kpi?.cancelled_revenue ?? 0)}
+                    </div>
+                    <div className="text-fg-muted text-[10px] tabular-nums">
+                      {kpi?.cancelled_count ?? 0} шт
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            {/* ОСНОВНЫЕ KPI: фактические продажи + прибыль */}
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+              <KpiCard
+                label="Продажи (доставлено)"
+                value={formatCurrency(kpi?.revenue ?? 0)}
+                change={kpi?.revenue_change_pct}
+                subtitle={kpi?.delivered_count ? `${formatNumber(kpi.delivered_count)} выкуплено` : undefined}
+                spark={kpi?.sparkline || []}
+                icon={TrendingUp}
+                iconBg="from-emerald-50 to-white text-emerald-600"
+                clickTo={`/finance/transactions?date_from=${data!.period_from}&date_to=${data!.period_to}`}
+              />
+              <KpiCard
+                label="Прибыль валовая"
+                value={formatCurrency(kpi?.gross_profit ?? 0)}
+                change={kpi?.gross_profit_change_pct}
+                spark={kpi?.sparkline || []}
+                icon={Package}
+                iconBg="from-indigo-50 to-white text-indigo-600"
+                clickTo="/finance/pnl"
+              />
+              <KpiCard
+                label="Заказы (доставлено)"
+                value={formatNumber(kpi?.orders_count ?? 0)}
+                change={kpi?.orders_change_pct}
+                spark={kpi?.sparkline || []}
+                icon={ShoppingBag}
+                iconBg="from-amber-50 to-white text-amber-700"
+                clickTo={`/orders?date_from=${data!.period_from}&date_to=${data!.period_to}`}
+              />
+              <KpiCard
+                label="Средний чек"
+                value={formatCurrency(kpi?.aov ?? 0)}
+                change={kpi?.aov_change_pct}
+                spark={[]}
+                icon={Wallet}
+                iconBg="from-violet-50 to-white text-violet-600"
+              />
+              <KpiCard
+                label="Расходы Ozon"
+                value={formatCurrency(kpi?.ozon_expenses ?? 0)}
+                change={null}
+                subtitle={kpi?.expense_share_pct != null ? `${kpi.expense_share_pct}% от продаж` : undefined}
+                spark={[]}
+                icon={Wallet}
+                iconBg="from-rose-50 to-white text-rose-600"
+                clickTo="/finance/transactions"
+              />
+            </div>
+          </>
         )}
 
         {/* === MAIN CHART === */}

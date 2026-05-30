@@ -30,11 +30,22 @@ UTC = timezone.utc
 
 
 class KPIBlock(BaseModel):
-    revenue: float
+    # «Заказано» — все заказы периода (как в кабинете Ozon «Заказано на сумму»)
+    ordered_revenue: float
+    ordered_count: int
+    ordered_change_pct: float | None
+    # «Продажи / Доставлено» — только status=delivered
+    revenue: float                  # = delivered_revenue (для обратной совместимости)
     revenue_change_pct: float | None
+    delivered_count: int
+    # Промежуточные статусы — разница между заказано и продажами
+    in_transit_revenue: float       # delivering + awaiting_*
+    cancelled_revenue: float
+    cancelled_count: int
+
     gross_profit: float
     gross_profit_change_pct: float | None
-    orders_count: int
+    orders_count: int               # = delivered_count (legacy)
     orders_change_pct: float | None
     aov: float
     aov_change_pct: float | None
@@ -139,25 +150,51 @@ async def _kpi_for_window(
     accs: list[uuid.UUID],
     dt_from: datetime,
     dt_to: datetime,
-) -> tuple[float, int, float, float]:
-    """Возвращает (revenue, orders, cogs, ozon_expenses) за окно."""
+) -> dict:
+    """Возвращает по окну: ordered/delivered/in_transit/cancelled + cogs + expenses.
+
+    «Заказано» (как в Ozon кабинете) = SUM(Order.total_amount) по ВСЕМ статусам.
+    «Продажи» (=delivered) = SUM где status=delivered.
+    «В пути» = delivering + awaiting_*.
+    «Отменено» = cancelled.
+    """
     if not accs:
-        return 0.0, 0, 0.0, 0.0
+        return {
+            "ordered_revenue": 0.0, "ordered_count": 0,
+            "delivered_revenue": 0.0, "delivered_count": 0,
+            "in_transit_revenue": 0.0, "cancelled_revenue": 0.0, "cancelled_count": 0,
+            "cogs": 0.0, "ozon_expenses": 0.0,
+        }
 
     rev_row = (await db.execute(
         select(
-            func.coalesce(func.sum(Order.total_amount), 0),
-            func.count(Order.id),
+            func.coalesce(func.sum(Order.total_amount), 0).label("ordered_revenue"),
+            func.count(Order.id).label("ordered_count"),
+            func.coalesce(func.sum(
+                func.case((Order.status == "delivered", Order.total_amount), else_=0)
+            ), 0).label("delivered_revenue"),
+            func.sum(
+                func.case((Order.status == "delivered", 1), else_=0)
+            ).label("delivered_count"),
+            func.coalesce(func.sum(
+                func.case((Order.status.in_(
+                    ("delivering", "awaiting_packaging", "awaiting_deliver")
+                ), Order.total_amount), else_=0)
+            ), 0).label("in_transit_revenue"),
+            func.coalesce(func.sum(
+                func.case((Order.status == "cancelled", Order.total_amount), else_=0)
+            ), 0).label("cancelled_revenue"),
+            func.sum(
+                func.case((Order.status == "cancelled", 1), else_=0)
+            ).label("cancelled_count"),
         ).where(
             Order.ozon_account_id.in_(accs),
             Order.order_created_at >= dt_from,
             Order.order_created_at < dt_to,
-            Order.status == "delivered",
         )
     )).one()
-    revenue = float(rev_row[0] or 0)
-    orders = int(rev_row[1] or 0)
 
+    # COGS считаем по доставленным (только delivered формирует факт. себестоимость)
     cogs_row = await db.execute(
         select(
             func.coalesce(
@@ -189,7 +226,17 @@ async def _kpi_for_window(
     )).one()
     ozon_expenses = sum(float(v or 0) for v in exp_row)
 
-    return revenue, orders, cogs, ozon_expenses
+    return {
+        "ordered_revenue": float(rev_row.ordered_revenue or 0),
+        "ordered_count": int(rev_row.ordered_count or 0),
+        "delivered_revenue": float(rev_row.delivered_revenue or 0),
+        "delivered_count": int(rev_row.delivered_count or 0),
+        "in_transit_revenue": float(rev_row.in_transit_revenue or 0),
+        "cancelled_revenue": float(rev_row.cancelled_revenue or 0),
+        "cancelled_count": int(rev_row.cancelled_count or 0),
+        "cogs": cogs,
+        "ozon_expenses": ozon_expenses,
+    }
 
 
 def _pct(curr: float, prev: float) -> float | None:
@@ -225,9 +272,11 @@ async def get_dashboard_v2(
     accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
 
     # ===== KPI текущий период =====
-    revenue, orders, cogs, ozon_exp = await _kpi_for_window(
-        db, accs=accs, dt_from=dt_from, dt_to=dt_to
-    )
+    k = await _kpi_for_window(db, accs=accs, dt_from=dt_from, dt_to=dt_to)
+    revenue = k["delivered_revenue"]    # «продажи» (legacy revenue)
+    orders = k["delivered_count"]
+    cogs = k["cogs"]
+    ozon_exp = k["ozon_expenses"]
     gross_profit = revenue - cogs - ozon_exp
     aov = revenue / orders if orders else 0
     expense_share = (ozon_exp / revenue * 100) if revenue else None
@@ -237,13 +286,16 @@ async def get_dashboard_v2(
     if cmp:
         cmp_from = datetime.combine(cmp[0], datetime.min.time(), tzinfo=UTC)
         cmp_to = datetime.combine(cmp[1] + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
-        p_rev, p_ord, p_cogs, p_exp = await _kpi_for_window(
-            db, accs=accs, dt_from=cmp_from, dt_to=cmp_to
-        )
+        pk = await _kpi_for_window(db, accs=accs, dt_from=cmp_from, dt_to=cmp_to)
+        p_rev = pk["delivered_revenue"]
+        p_ord = pk["delivered_count"]
+        p_cogs = pk["cogs"]
+        p_exp = pk["ozon_expenses"]
+        p_ordered = pk["ordered_revenue"]
         p_gross = p_rev - p_cogs - p_exp
         p_aov = p_rev / p_ord if p_ord else 0
     else:
-        p_rev = p_ord = p_gross = p_aov = 0
+        p_rev = p_ord = p_gross = p_aov = p_ordered = 0
 
     # ===== Series по granularity =====
     trunc_unit = granularity if granularity in ("day", "week", "month") else "day"
@@ -462,8 +514,15 @@ async def get_dashboard_v2(
         has_missing_costs=missing_n > 0,
         missing_costs_count=missing_n,
         kpi=KPIBlock(
+            ordered_revenue=round(k["ordered_revenue"], 2),
+            ordered_count=k["ordered_count"],
+            ordered_change_pct=_pct(k["ordered_revenue"], p_ordered) if cmp else None,
             revenue=round(revenue, 2),
             revenue_change_pct=_pct(revenue, p_rev) if cmp else None,
+            delivered_count=k["delivered_count"],
+            in_transit_revenue=round(k["in_transit_revenue"], 2),
+            cancelled_revenue=round(k["cancelled_revenue"], 2),
+            cancelled_count=k["cancelled_count"],
             gross_profit=round(gross_profit, 2),
             gross_profit_change_pct=_pct(gross_profit, p_gross) if cmp else None,
             orders_count=orders,
