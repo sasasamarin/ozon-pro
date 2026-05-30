@@ -15,7 +15,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import desc, func, select
+from sqlalchemy import case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
@@ -171,21 +171,21 @@ async def _kpi_for_window(
             func.coalesce(func.sum(Order.total_amount), 0).label("ordered_revenue"),
             func.count(Order.id).label("ordered_count"),
             func.coalesce(func.sum(
-                func.case((Order.status == "delivered", Order.total_amount), else_=0)
+                case((Order.status == "delivered", Order.total_amount), else_=0)
             ), 0).label("delivered_revenue"),
             func.sum(
-                func.case((Order.status == "delivered", 1), else_=0)
+                case((Order.status == "delivered", 1), else_=0)
             ).label("delivered_count"),
             func.coalesce(func.sum(
-                func.case((Order.status.in_(
+                case((Order.status.in_(
                     ("delivering", "awaiting_packaging", "awaiting_deliver")
                 ), Order.total_amount), else_=0)
             ), 0).label("in_transit_revenue"),
             func.coalesce(func.sum(
-                func.case((Order.status == "cancelled", Order.total_amount), else_=0)
+                case((Order.status == "cancelled", Order.total_amount), else_=0)
             ), 0).label("cancelled_revenue"),
             func.sum(
-                func.case((Order.status == "cancelled", 1), else_=0)
+                case((Order.status == "cancelled", 1), else_=0)
             ).label("cancelled_count"),
         ).where(
             Order.ozon_account_id.in_(accs),
