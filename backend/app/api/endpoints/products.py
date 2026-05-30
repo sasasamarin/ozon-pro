@@ -284,51 +284,6 @@ class ProductMetaPatch(BaseModel):
     cost_price: float | None = None
 
 
-@router.patch("/{product_id}/meta")
-async def patch_product_meta(
-    product_id: str,
-    payload: ProductMetaPatch,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Редактировать tags / is_hot / cost_price одного товара."""
-    import uuid as _uuid
-    try:
-        pid = _uuid.UUID(product_id)
-    except ValueError:
-        raise HTTPException(400, "Невалидный product_id")
-
-    prod = (await db.execute(
-        select(Product)
-        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
-        .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
-    )).scalar_one_or_none()
-    if not prod:
-        raise HTTPException(404, "Товар не найден")
-
-    if payload.tags is not None:
-        # нормализуем: trim + dedup + max 20 тегов
-        clean = []
-        for t in payload.tags[:20]:
-            t = (t or "").strip()
-            if t and t not in clean:
-                clean.append(t)
-        prod.tags = clean
-    if payload.is_hot is not None:
-        prod.is_hot = bool(payload.is_hot)
-    if payload.cost_price is not None:
-        prod.cost_price = payload.cost_price
-
-    await db.commit()
-    await db.refresh(prod)
-    return {
-        "id": str(prod.id),
-        "tags": list(prod.tags or []),
-        "is_hot": bool(prod.is_hot),
-        "cost_price": float(prod.cost_price) if prod.cost_price is not None else None,
-    }
-
-
 class BulkMetaPatch(BaseModel):
     product_ids: list[str]
     add_tags: list[str] = []
@@ -338,6 +293,9 @@ class BulkMetaPatch(BaseModel):
     cost_price_add: float | None = None  # добавляет к существующей (упаковка 150₽)
 
 
+# ВАЖНО: /bulk/meta РЕГИСТРИРУЕТСЯ ПЕРЕД /{product_id}/meta, иначе FastAPI
+# матчит /bulk/meta под /{product_id}/meta и пытается парсить "bulk" как UUID
+# → 400 "Невалидный product_id". Порядок роутов имеет значение.
 @router.patch("/bulk/meta")
 async def patch_bulk_meta(
     payload: BulkMetaPatch,
@@ -380,6 +338,56 @@ async def patch_bulk_meta(
         updated += 1
     await db.commit()
     return {"updated": updated, "total_requested": len(pids)}
+
+
+@router.patch(
+    "/{product_id}/meta",
+    # ограничиваем product_id UUID-форматом → /bulk/meta никогда не попадёт сюда
+    # как fallback (даже если порядок маршрутов будет нарушен).
+    dependencies=[],
+)
+async def patch_product_meta(
+    product_id: str,
+    payload: ProductMetaPatch,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Редактировать tags / is_hot / cost_price одного товара."""
+    import uuid as _uuid
+    try:
+        pid = _uuid.UUID(product_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный product_id")
+
+    prod = (await db.execute(
+        select(Product)
+        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+        .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
+    )).scalar_one_or_none()
+    if not prod:
+        raise HTTPException(404, "Товар не найден")
+
+    if payload.tags is not None:
+        # нормализуем: trim + dedup + max 20 тегов
+        clean = []
+        for t in payload.tags[:20]:
+            t = (t or "").strip()
+            if t and t not in clean:
+                clean.append(t)
+        prod.tags = clean
+    if payload.is_hot is not None:
+        prod.is_hot = bool(payload.is_hot)
+    if payload.cost_price is not None:
+        prod.cost_price = payload.cost_price
+
+    await db.commit()
+    await db.refresh(prod)
+    return {
+        "id": str(prod.id),
+        "tags": list(prod.tags or []),
+        "is_hot": bool(prod.is_hot),
+        "cost_price": float(prod.cost_price) if prod.cost_price is not None else None,
+    }
 
 
 @router.get("/{product_id}/stocks", response_model=list[ProductStockRow])

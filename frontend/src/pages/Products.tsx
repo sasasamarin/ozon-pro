@@ -415,7 +415,12 @@ export function Products() {
                   <th className="py-3 px-4">Кабинет / Категория</th>
                   <th className="py-3 px-4 text-right">Цена</th>
                   <th className="py-3 px-4 text-right">Себест.</th>
-                  <th className="py-3 px-4 text-right">Маржа</th>
+                  <th className="py-3 px-4 text-right" title="Брутто-маржа: (цена−себест)/цена. Без комиссии Ozon, логистики, налога.">
+                    Брутто %
+                  </th>
+                  <th className="py-3 px-4 text-right" title="Приблизительная чистая маржа: брутто − 22% (комиссия Ozon FBO) − 1.5% (эквайринг) − 3% (реклама ~ДРР) − 6% (УСН) = брутто − ~32.5 п.п. Реальная сильно зависит от категории.">
+                    ≈Чистая %
+                  </th>
                   <th className="py-3 px-4 text-right">Остаток</th>
                   <th className="py-3 px-2 w-8"></th>
                 </tr>
@@ -425,14 +430,24 @@ export function Products() {
                   const expanded = expandedId === p.id
                   const checked = selectedIds.has(p.id)
                   const sellingPrice = p.marketing_price ?? p.current_price
-                  const margin =
+                  // Брутто-маржа: (цена − себест) / цена — БЕЗ комиссий Ozon, логистики, налога.
+                  // Юзер просила не вводить в заблуждение → показываем 2 колонки.
+                  const grossMargin =
                     sellingPrice && p.cost_price && sellingPrice > 0
                       ? (sellingPrice - p.cost_price) / sellingPrice * 100
                       : null
-                  const marginCls =
-                    margin === null ? 'text-fg-muted' :
-                    margin >= 30 ? 'text-emerald-700' :
-                    margin >= 10 ? 'text-amber-700' :
+                  // Приблизительная чистая = брутто − 32.5 п.п. (комиссия 22 + эквайринг 1.5 + реклама 3 + УСН 6).
+                  // Грубая эвристика; реальная зависит от категории и типа доставки.
+                  const netMargin = grossMargin === null ? null : grossMargin - 32.5
+                  const grossCls =
+                    grossMargin === null ? 'text-fg-muted' :
+                    grossMargin >= 60 ? 'text-emerald-700' :
+                    grossMargin >= 40 ? 'text-amber-700' :
+                    'text-rose-700'
+                  const netCls =
+                    netMargin === null ? 'text-fg-muted' :
+                    netMargin >= 25 ? 'text-emerald-700' :
+                    netMargin >= 10 ? 'text-amber-700' :
                     'text-rose-700'
                   return (
                     <Fragment key={p.id}>
@@ -530,8 +545,15 @@ export function Products() {
                             ? <span className="font-mono tabular-nums text-fg-muted">{formatCurrency(p.cost_price)}</span>
                             : <span className="text-fg-subtle text-xs">не указана</span>}
                         </td>
-                        <td className={cn('py-3 px-4 text-right tabular-nums font-semibold', marginCls)}>
-                          {margin === null ? '—' : `${margin.toFixed(1)}%`}
+                        <td className={cn('py-3 px-4 text-right tabular-nums', grossCls)}>
+                          {grossMargin === null ? '—' : `${grossMargin.toFixed(1)}%`}
+                        </td>
+                        <td className={cn('py-3 px-4 text-right tabular-nums font-semibold', netCls)}>
+                          {netMargin === null
+                            ? '—'
+                            : <span title="Прибл.: −22% Ozon −1.5% эквайринг −3% реклама −6% УСН">
+                                {netMargin.toFixed(1)}%
+                              </span>}
                         </td>
                         <td className="py-3 px-4 text-right">
                           <StockBreakdownChip productId={p.id} totalAvailable={p.total_stock} alignRight />
@@ -547,7 +569,7 @@ export function Products() {
                       </tr>
                       {expanded && (
                         <tr>
-                          <td colSpan={9} className="bg-bg-subtle/30 px-6 py-3">
+                          <td colSpan={10} className="bg-bg-subtle/30 px-6 py-3">
                             <StockBreakdown productId={p.id} />
                           </td>
                         </tr>
