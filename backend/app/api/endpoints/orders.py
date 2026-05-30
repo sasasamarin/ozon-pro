@@ -13,7 +13,9 @@ GET /api/v1/orders
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, date as date_cls
+from datetime import datetime, date as date_cls, timedelta, timezone
+
+UTC = timezone.utc
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -175,4 +177,112 @@ async def list_orders(
         page_size=page_size,
         total=total,
         items=items,
+    )
+
+
+# =====================================================================
+# /orders/daily — график по дням (Ozon-style)
+# =====================================================================
+
+
+class OrdersDailyPoint(BaseModel):
+    date: str
+    orders: int
+    units: int
+    revenue: float
+    avg_check: float
+
+
+class OrdersDailyResp(BaseModel):
+    period_from: str
+    period_to: str
+    series: list[OrdersDailyPoint]
+    prev_period_series: list[OrdersDailyPoint]
+    total_orders: int
+    total_units: int
+    total_revenue: float
+    delta_orders_pct: float | None
+    delta_revenue_pct: float | None
+
+
+@router.get("/daily", response_model=OrdersDailyResp)
+async def orders_daily(
+    days: int = Query(28, ge=1, le=365),
+    cabinet_ids: list[uuid.UUID] | None = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> OrdersDailyResp:
+    """Дневной ряд заказов — для графика «Заказано»."""
+    today = datetime.now(UTC).date()
+    date_from = today - timedelta(days=days)
+    prev_to = date_from - timedelta(days=1)
+    prev_from = prev_to - timedelta(days=days)
+
+    accs_q = select(OzonAccount.id).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
+    )
+    if cabinet_ids:
+        accs_q = accs_q.where(OzonAccount.id.in_(cabinet_ids))
+    accs = [r[0] for r in (await db.execute(accs_q)).all()]
+    if not accs:
+        return OrdersDailyResp(
+            period_from=date_from.isoformat(), period_to=today.isoformat(),
+            series=[], prev_period_series=[],
+            total_orders=0, total_units=0, total_revenue=0,
+            delta_orders_pct=None, delta_revenue_pct=None,
+        )
+
+    async def _series(d_from, d_to) -> list[OrdersDailyPoint]:
+        rows = (await db.execute(
+            select(
+                func.date_trunc("day", Order.created_at).label("d"),
+                func.count(func.distinct(Order.id)).label("orders"),
+                func.coalesce(func.sum(OrderItem.quantity), 0).label("units"),
+                func.coalesce(func.sum(OrderItem.total_price), 0).label("revenue"),
+            )
+            .select_from(Order)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .where(
+                Order.ozon_account_id.in_(accs),
+                Order.created_at >= datetime.combine(d_from, datetime.min.time(), tzinfo=UTC),
+                Order.created_at < datetime.combine(d_to + timedelta(days=1), datetime.min.time(), tzinfo=UTC),
+            )
+            .group_by(func.date_trunc("day", Order.created_at))
+            .order_by(func.date_trunc("day", Order.created_at))
+        )).all()
+        out: list[OrdersDailyPoint] = []
+        for d, orders, units, revenue in rows:
+            orders_i = int(orders or 0)
+            units_i = int(units or 0)
+            rev_f = float(revenue or 0)
+            out.append(OrdersDailyPoint(
+                date=d.date().isoformat(),
+                orders=orders_i, units=units_i,
+                revenue=round(rev_f, 2),
+                avg_check=round(rev_f / orders_i, 2) if orders_i else 0,
+            ))
+        return out
+
+    series = await _series(date_from, today)
+    prev_series = await _series(prev_from, prev_to)
+
+    total_orders = sum(p.orders for p in series)
+    total_units = sum(p.units for p in series)
+    total_revenue = round(sum(p.revenue for p in series), 2)
+    prev_orders = sum(p.orders for p in prev_series)
+    prev_revenue = sum(p.revenue for p in prev_series)
+    delta_orders = ((total_orders - prev_orders) / prev_orders * 100) if prev_orders else None
+    delta_revenue = ((total_revenue - prev_revenue) / prev_revenue * 100) if prev_revenue else None
+
+    return OrdersDailyResp(
+        period_from=date_from.isoformat(),
+        period_to=today.isoformat(),
+        series=series,
+        prev_period_series=prev_series,
+        total_orders=total_orders,
+        total_units=total_units,
+        total_revenue=total_revenue,
+        delta_orders_pct=round(delta_orders, 1) if delta_orders is not None else None,
+        delta_revenue_pct=round(delta_revenue, 1) if delta_revenue is not None else None,
     )

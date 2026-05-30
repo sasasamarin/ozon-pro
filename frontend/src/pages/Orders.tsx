@@ -4,6 +4,7 @@ import { ShoppingBag, Search, ChevronLeft, ChevronRight, Loader2 } from 'lucide-
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { OrdersDailyChart } from '@/components/OrdersDailyChart'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
@@ -115,6 +116,8 @@ export function Orders() {
           {formatNumber(total)} {total === 1 ? 'заказ' : 'заказов'} в выбранных кабинетах
         </p>
       </div>
+
+      <OrdersDailyChart cabinetIds={selectedCabinetIds} />
 
       {/* Filters */}
       <Card className="p-4 flex flex-wrap items-end gap-3">

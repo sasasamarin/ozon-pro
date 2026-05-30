@@ -86,6 +86,7 @@ const DONUT_COLORS = [
 
 const PRESETS: Array<{ key: string; label: string; days: number }> = [
   { key: '7', label: '7 дней', days: 7 },
+  { key: '28', label: '28 дней', days: 28 },  // окно Ozon для сверки
   { key: '30', label: '30 дней', days: 30 },
   { key: '90', label: '90 дней', days: 90 },
   { key: '365', label: 'Год', days: 365 },

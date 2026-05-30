@@ -25,10 +25,12 @@ interface FunnelKPI {
 export function ReverseFunnel() {
   const [targetRevenue, setTargetRevenue] = useState('5000000')
   const [aov, setAov] = useState('5000')
+  const [days, setDays] = useState(28)
 
   const { data: funnel } = useQuery<{ kpi: FunnelKPI }>({
-    queryKey: ['funnel-current'],
-    queryFn: async () => (await api.get('/analytics/funnel/?days=30&compare=false')).data,
+    queryKey: ['funnel-current', days],
+    queryFn: async () =>
+      (await api.get(`/analytics/funnel/?days=${days}&compare=false`)).data,
   })
 
   const calc = useMemo(() => {
@@ -89,10 +91,23 @@ export function ReverseFunnel() {
               </label>
               <Input value={aov} onChange={(e) => setAov(e.target.value)} type="number" />
             </div>
+            <div>
+              <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">
+                Брать конверсии за
+              </label>
+              <div className="flex gap-1.5">
+                {[7, 28, 30, 90, 365].map((d) => (
+                  <button key={d} onClick={() => setDays(d)} className={cn(
+                    'px-2 py-1 rounded text-xs border',
+                    days === d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+                  )}>{d}д</button>
+                ))}
+              </div>
+            </div>
           </div>
           {funnel?.kpi && (
             <div className="mt-5 pt-4 border-t border-border-subtle text-xs text-fg-muted space-y-1">
-              <div className="font-medium text-fg mb-2">Текущие конверсии (30 дн):</div>
+              <div className="font-medium text-fg mb-2">Текущие конверсии ({days} дн):</div>
               <div>В корзину: <strong className="text-fg">{funnel.kpi.cart_conv_pct?.toFixed(2)}%</strong></div>
               <div>Корзина→заказ: <strong className="text-fg">{funnel.kpi.order_conv_pct?.toFixed(2)}%</strong></div>
               <div>Заказ→доставка: <strong className="text-fg">{funnel.kpi.delivery_conv_pct?.toFixed(2)}%</strong></div>
