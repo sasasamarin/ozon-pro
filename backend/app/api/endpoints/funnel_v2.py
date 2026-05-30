@@ -543,9 +543,29 @@ async def best_worst_days(
     best = items[:5]
     worst = sorted(items, key=lambda x: x.conv_pct)[:5]
 
+    # «Средний день» = медиана конверсии за период (юзер: «нужна норма»).
+    average = None
+    if items:
+        sorted_items = sorted(items, key=lambda x: x.conv_pct)
+        median_item = sorted_items[len(sorted_items) // 2]
+        avg_conv = sum(x.conv_pct for x in items) / len(items)
+        avg_from = sum(x.from_value for x in items) / len(items)
+        avg_to = sum(x.to_value for x in items) / len(items)
+        avg_rev = sum(x.revenue for x in items) / len(items)
+        average = {
+            "date": f"средний из {len(items)} дн",
+            "from_value": int(avg_from),
+            "to_value": int(avg_to),
+            "conv_pct": round(avg_conv, 2),
+            "median_pct": round(median_item.conv_pct, 2),
+            "revenue": round(avg_rev, 2),
+            "days_count": len(items),
+        }
+
     return {
         "best": [b.dict() for b in best],
         "worst": [w.dict() for w in worst],
+        "average": average,
         "metric": metric,
         "from_label": from_label,
         "to_label": to_label,

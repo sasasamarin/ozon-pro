@@ -90,9 +90,20 @@ interface BestWorstDay {
   revenue: number
 }
 
+interface AverageDay {
+  date: string         // "средний из N дн"
+  from_value: number
+  to_value: number
+  conv_pct: number     // средняя конверсия
+  median_pct: number   // медианная (устойчива к выбросам)
+  revenue: number
+  days_count: number
+}
+
 interface BestWorstResp {
   best: BestWorstDay[]
   worst: BestWorstDay[]
+  average: AverageDay | null
   metric: string
   from_label: string
   to_label: string
@@ -583,14 +594,49 @@ export function Funnel() {
               </div>
             </div>
             {bestWorst && (bestWorst.best.length > 0 || bestWorst.worst.length > 0) ? (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <BWTable title="Лучшие" Icon={TrendingUp} iconColor="text-emerald-700"
-                  rows={bestWorst.best} from_label={bestWorst.from_label} to_label={bestWorst.to_label}
-                  highlightColor="text-emerald-700" />
-                <BWTable title="Худшие" Icon={TrendingDown} iconColor="text-rose-700"
-                  rows={bestWorst.worst} from_label={bestWorst.from_label} to_label={bestWorst.to_label}
-                  highlightColor="text-rose-700" />
-              </div>
+              <>
+                {/* Средний день — норма для сравнения. Юзер: «есть лучшие/худшие, где средняя?» */}
+                {bestWorst.average && (
+                  <div className="rounded-md border border-indigo-200 bg-indigo-50/50 px-4 py-3 mb-4 text-sm flex flex-wrap items-center gap-4">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-indigo-700 font-semibold">
+                        Средний день за период
+                      </div>
+                      <div className="text-fg-muted text-[11px] mt-0.5">
+                        Из {bestWorst.average.days_count} дней с данными. Сравни лучший/худший с этим — отклонение покажет «норму».
+                      </div>
+                    </div>
+                    <div className="ml-auto flex gap-5 text-fg">
+                      <div>
+                        <div className="text-[10px] text-fg-muted uppercase">средн. {bestWorst.from_label}</div>
+                        <div className="tabular-nums font-medium">{formatNumber(bestWorst.average.from_value)}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-fg-muted uppercase">средн. {bestWorst.to_label}</div>
+                        <div className="tabular-nums font-medium">{formatNumber(bestWorst.average.to_value)}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-fg-muted uppercase">средняя конв.</div>
+                        <div className="tabular-nums font-semibold text-indigo-700">{bestWorst.average.conv_pct.toFixed(2)}%</div>
+                      </div>
+                      <div title="Медиана устойчивее к выбросам, чем среднее">
+                        <div className="text-[10px] text-fg-muted uppercase">медиана</div>
+                        <div className="tabular-nums text-fg-muted">{bestWorst.average.median_pct.toFixed(2)}%</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <BWTable title="Лучшие" Icon={TrendingUp} iconColor="text-emerald-700"
+                    rows={bestWorst.best} from_label={bestWorst.from_label} to_label={bestWorst.to_label}
+                    highlightColor="text-emerald-700"
+                    avgConv={bestWorst.average?.conv_pct ?? null} />
+                  <BWTable title="Худшие" Icon={TrendingDown} iconColor="text-rose-700"
+                    rows={bestWorst.worst} from_label={bestWorst.from_label} to_label={bestWorst.to_label}
+                    highlightColor="text-rose-700"
+                    avgConv={bestWorst.average?.conv_pct ?? null} />
+                </div>
+              </>
             ) : (
               <p className="text-fg-muted text-sm text-center py-4">Недостаточно данных для топ-5</p>
             )}
@@ -803,7 +849,7 @@ function DrillTable({
 }
 
 function BWTable({
-  title, Icon, iconColor, rows, from_label, to_label, highlightColor,
+  title, Icon, iconColor, rows, from_label, to_label, highlightColor, avgConv,
 }: {
   title: string
   Icon: React.ComponentType<{ className?: string }>
@@ -812,6 +858,7 @@ function BWTable({
   from_label: string
   to_label: string
   highlightColor: string
+  avgConv: number | null
 }) {
   return (
     <div>
@@ -825,17 +872,27 @@ function BWTable({
             <th className="py-2 px-2.5 text-right">{from_label}</th>
             <th className="py-2 px-2.5 text-right">{to_label}</th>
             <th className="py-2 px-2.5 text-right">конверсия</th>
+            {avgConv !== null && <th className="py-2 px-2.5 text-right text-[10px]">δ vs средн.</th>}
           </tr>
         </thead>
         <tbody className="divide-y divide-border-subtle">
-          {rows.map((d) => (
-            <tr key={d.date}>
-              <td className="py-2 px-2.5 font-mono text-xs">{formatDate(d.date)}</td>
-              <td className="py-2 px-2.5 text-right tabular-nums">{formatNumber(d.from_value)}</td>
-              <td className="py-2 px-2.5 text-right tabular-nums">{formatNumber(d.to_value)}</td>
-              <td className={cn('py-2 px-2.5 text-right tabular-nums font-semibold', highlightColor)}>{d.conv_pct}%</td>
-            </tr>
-          ))}
+          {rows.map((d) => {
+            const delta = avgConv !== null ? d.conv_pct - avgConv : null
+            return (
+              <tr key={d.date}>
+                <td className="py-2 px-2.5 font-mono text-xs">{formatDate(d.date)}</td>
+                <td className="py-2 px-2.5 text-right tabular-nums">{formatNumber(d.from_value)}</td>
+                <td className="py-2 px-2.5 text-right tabular-nums">{formatNumber(d.to_value)}</td>
+                <td className={cn('py-2 px-2.5 text-right tabular-nums font-semibold', highlightColor)}>{d.conv_pct}%</td>
+                {delta !== null && (
+                  <td className={cn('py-2 px-2.5 text-right tabular-nums text-xs',
+                    delta >= 0 ? 'text-emerald-600' : 'text-rose-600')}>
+                    {delta >= 0 ? '+' : ''}{delta.toFixed(2)} п.п.
+                  </td>
+                )}
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

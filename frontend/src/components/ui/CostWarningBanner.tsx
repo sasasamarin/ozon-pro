@@ -43,10 +43,12 @@ export function CostWarningBanner({ count, context = 'general', className }: Cos
         <p className="text-sm text-amber-800/90 mt-0.5">{detail}</p>
       </div>
       <Link
-        to="/products"
+        // Сразу с фильтром «без себестоимости» — иначе юзер не найдёт где они.
+        // arch=all чтобы показать и архивные заглушки тоже.
+        to="/products?missing_cost=1&arch=all"
         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-amber-900 hover:bg-amber-800 text-white text-xs font-medium shrink-0 transition-colors"
       >
-        Ввести
+        Найти и ввести
         <ArrowRight className="w-3.5 h-3.5" />
       </Link>
     </div>

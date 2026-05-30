@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   Package,
   AlertCircle,
@@ -180,10 +180,17 @@ export function Products() {
   const { selectedCabinetIds } = useCabinetStore()
   const [stockFilter, setStockFilter] = useState<StockFilter>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [urlParams] = useSearchParams()
+  // ?missing_cost=1 — пришли с баннера дашборда, сразу включаем фильтр
+  const [filterMissingCost, setFilterMissingCost] = useState<boolean>(
+    urlParams.get('missing_cost') === '1'
+  )
   const [filterCategory, setFilterCategory] = useState<string>('')
   const [filterTag, setFilterTag] = useState<string>('')
   const [filterHot, setFilterHot] = useState<boolean>(false)
-  const [filterArchive, setFilterArchive] = useState<'active' | 'archived' | 'all'>('active')
+  const [filterArchive, setFilterArchive] = useState<'active' | 'archived' | 'all'>(
+    (urlParams.get('arch') as 'active' | 'archived' | 'all') || 'active'
+  )
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showBulk, setShowBulk] = useState(false)
 
@@ -229,6 +236,10 @@ export function Products() {
     .filter((p) => !filterCategory || p.category_name === filterCategory)
     .filter((p) => !filterTag || (p.tags || []).includes(filterTag))
     .filter((p) => !filterHot || p.is_hot)
+    // Без себестоимости: NULL или заглушка ≤100
+    .filter((p) => !filterMissingCost
+      || p.cost_price === null
+      || (typeof p.cost_price === 'number' && p.cost_price <= 100))
 
   const inStockCount = allProducts.filter((p) => p.total_stock > 0).length
   const outStockCount = allProducts.length - inStockCount
@@ -326,10 +337,19 @@ export function Products() {
             <Flame className="w-3.5 h-3.5" /> Горячие
           </button>
 
+          {/* Без себестоимости — фильтр с баннера дашборда */}
+          <button onClick={() => setFilterMissingCost((v) => !v)} className={cn(
+            'inline-flex items-center gap-1 px-2.5 py-1 rounded border',
+            filterMissingCost ? 'border-amber-500 bg-amber-50 text-amber-800' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+          )} title="Cost_price пустая или заглушка ≤100">
+            <AlertCircle className="w-3.5 h-3.5" /> Без себестоимости
+          </button>
+
           {/* Очистка фильтров */}
-          {(filterCategory || filterTag || filterHot || filterArchive !== 'active') && (
+          {(filterCategory || filterTag || filterHot || filterMissingCost || filterArchive !== 'active') && (
             <button onClick={() => {
-              setFilterCategory(''); setFilterTag(''); setFilterHot(false); setFilterArchive('active')
+              setFilterCategory(''); setFilterTag(''); setFilterHot(false)
+              setFilterMissingCost(false); setFilterArchive('active')
             }} className="text-fg-muted hover:text-fg">
               × сброс
             </button>
