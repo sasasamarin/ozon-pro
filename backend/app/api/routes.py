@@ -22,6 +22,7 @@ from app.api.endpoints import (
     markers,
     orders,
     ozon_accounts,
+    plan_purchase,
     plan_vs_fact,
     pnl,
     products,
@@ -90,6 +91,9 @@ api_router.include_router(
 )
 api_router.include_router(
     account_balance.router, prefix="/finance/account-balance", tags=["finance"]
+)
+api_router.include_router(
+    plan_purchase.router, prefix="/analytics/plan-purchase", tags=["analytics"]
 )
 api_router.include_router(credit.router, prefix="/credit", tags=["credit"])
 api_router.include_router(email_logs.router, prefix="/email", tags=["email"])

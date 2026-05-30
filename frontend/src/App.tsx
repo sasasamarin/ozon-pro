@@ -31,6 +31,7 @@ import { Team } from '@/pages/Team'
 import { AIChat } from '@/pages/AIChat'
 import { ReverseFunnel } from '@/pages/ReverseFunnel'
 import { PlanVsFact } from '@/pages/PlanVsFact'
+import { PlanPurchase } from '@/pages/PlanPurchase'
 import { AccountBalance } from '@/pages/AccountBalance'
 import { Credit } from '@/pages/Credit'
 import { Email } from '@/pages/Email'
@@ -94,6 +95,7 @@ export default function App() {
         <Route path="/ai" element={<AIChat />} />
         <Route path="/analytics/reverse-funnel" element={<ReverseFunnel />} />
         <Route path="/analytics/plan-vs-fact" element={<PlanVsFact />} />
+        <Route path="/analytics/plan-purchase" element={<PlanPurchase />} />
         <Route path="/finance/account-balance" element={<AccountBalance />} />
         <Route path="/credit" element={<Credit />} />
         <Route path="/credit/list" element={<Credit />} />
