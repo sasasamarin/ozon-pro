@@ -112,13 +112,13 @@ async def list_products(
         WHERE warehouse_type IN ('AGG','FBO','FBS','RFBS') GROUP BY product_id
       ),
       wh_sum AS (
-        SELECT s.product_id, COALESCE(SUM(s.free_to_sell - s.reserved), 0) total
+        SELECT s.product_id, COALESCE(SUM(GREATEST(s.free_to_sell - s.reserved, 0)), 0) total
         FROM stocks s JOIN last_wh l ON l.product_id=s.product_id AND l.t=s.time
         WHERE s.warehouse_type='FBO_WH'
         GROUP BY s.product_id
       ),
       agg_sum AS (
-        SELECT s.product_id, COALESCE(SUM(s.free_to_sell - s.reserved), 0) total
+        SELECT s.product_id, COALESCE(SUM(GREATEST(s.free_to_sell - s.reserved, 0)), 0) total
         FROM stocks s JOIN last_agg l ON l.product_id=s.product_id AND l.t=s.time
         WHERE s.warehouse_type IN ('FBS','RFBS')
            OR (s.warehouse_type IN ('AGG','FBO')
