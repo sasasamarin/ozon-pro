@@ -75,17 +75,19 @@ export function Orders() {
   const { selectedCabinetIds } = useCabinetStore()
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState<string>('')
+  const [orderType, setOrderType] = useState<string>('')
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const { data, isLoading, isFetching } = useQuery<OrdersResponse>({
-    queryKey: ['orders', page, status, search, dateFrom, dateTo, selectedCabinetIds],
+    queryKey: ['orders', page, status, orderType, search, dateFrom, dateTo, selectedCabinetIds],
     queryFn: async () => {
       const params = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) })
       selectedCabinetIds.forEach((id) => params.append('cabinet_ids', id))
       if (status) params.append('status', status)
+      if (orderType) params.append('order_type', orderType)
       if (search) params.append('search', search)
       if (dateFrom) params.append('date_from', dateFrom)
       if (dateTo) params.append('date_to', dateTo)
@@ -102,6 +104,7 @@ export function Orders() {
 
   const resetFilters = () => {
     setStatus('')
+    setOrderType('')
     setSearch('')
     setDateFrom('')
     setDateTo('')
@@ -137,6 +140,23 @@ export function Orders() {
               className="pl-9"
             />
           </div>
+        </div>
+        <div>
+          <label className="block text-[11px] font-medium text-fg-muted uppercase tracking-wider mb-1">
+            Тип
+          </label>
+          <select
+            value={orderType}
+            onChange={(e) => {
+              setOrderType(e.target.value)
+              setPage(1)
+            }}
+            className="h-9 px-3 rounded-md border border-border bg-surface text-sm"
+          >
+            <option value="">все</option>
+            <option value="fbo">FBO</option>
+            <option value="fbs">FBS</option>
+          </select>
         </div>
         <div>
           <label className="block text-[11px] font-medium text-fg-muted uppercase tracking-wider mb-1">
@@ -186,7 +206,7 @@ export function Orders() {
             className="w-[150px]"
           />
         </div>
-        {(status || search || dateFrom || dateTo) && (
+        {(status || orderType || search || dateFrom || dateTo) && (
           <Button variant="ghost" onClick={resetFilters}>
             Сбросить
           </Button>

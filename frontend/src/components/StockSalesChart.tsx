@@ -133,7 +133,7 @@ export function StockSalesChart({ productId }: { productId: string }) {
           </p>
         </div>
         <div className="flex gap-1">
-          {[30, 90, 180, 365].map((d) => (
+          {[28, 30, 90, 180, 365].map((d) => (
             <button key={d} onClick={() => setDays(d)} className={cn(
               'px-2.5 py-1 rounded text-xs border',
               days === d ? 'border-fg bg-fg text-bg'

@@ -70,6 +70,7 @@ async def list_orders(
     date_from: date_cls | None = Query(None),
     date_to: date_cls | None = Query(None),
     status: str | None = Query(None),
+    order_type: str | None = Query(None, description="fbo | fbs"),
     search: str | None = Query(None, description="ищем по posting_number / order_number / offer_id"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -97,6 +98,9 @@ async def list_orders(
         where_clauses.append(Order.order_created_at < datetime.combine(date_to, datetime.max.time()))
     if status:
         where_clauses.append(Order.status == status)
+    if order_type:
+        # Ozon шлёт строкой "fbo"/"fbs" в нижнем регистре
+        where_clauses.append(Order.order_type == order_type.lower())
 
     # Поиск: posting_number ILIKE OR order_number ILIKE OR EXISTS(item.offer_id ILIKE)
     if search:

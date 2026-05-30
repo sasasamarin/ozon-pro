@@ -1,8 +1,9 @@
-import { NavLink, Link } from 'react-router-dom'
-import { Zap, Lock, X, ExternalLink } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { NavLink, Link, useLocation } from 'react-router-dom'
+import { Zap, Lock, X, ExternalLink, ChevronDown } from 'lucide-react'
 import { Logo } from './ui/Logo'
 import { cn } from '@/lib/utils'
-import { NAV_GROUPS, FOOTER_NAV, type NavItem } from '@/lib/menu'
+import { NAV_GROUPS, FOOTER_NAV, type NavItem, type NavGroup } from '@/lib/menu'
 
 // TODO: replace with real user tier when account context exposes it
 const HAS_PREMIUM_PLUS = false
@@ -74,7 +75,50 @@ interface SidebarProps {
   onMobileClose: () => void
 }
 
+function groupContainsActive(group: NavGroup, pathname: string): boolean {
+  return group.items.some((i) =>
+    pathname === i.path || pathname.startsWith(i.path + '/')
+  ) || (group.headerPath && (
+    pathname === group.headerPath || pathname.startsWith(group.headerPath + '/')
+  )) || false
+}
+
+function groupKey(group: NavGroup, gi: number): string {
+  return group.header ? `g:${group.header}` : `g:idx:${gi}`
+}
+
+const STORAGE_KEY = 'sidebar.openGroups'
+
+function loadOpenGroups(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
 export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
+  const { pathname } = useLocation()
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(loadOpenGroups)
+
+  // Группа с текущим маршрутом всегда раскрыта (не сохраняем — только текущий expansion)
+  const effectiveOpen = useMemo(() => {
+    const out: Record<string, boolean> = { ...openGroups }
+    NAV_GROUPS.forEach((g, gi) => {
+      const k = groupKey(g, gi)
+      if (groupContainsActive(g, pathname)) out[k] = true
+    })
+    return out
+  }, [openGroups, pathname])
+
+  const toggleGroup = (k: string) => {
+    setOpenGroups((prev) => {
+      const next = { ...prev, [k]: !effectiveOpen[k] }
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+
   return (
     <>
       {/* Mobile overlay */}
@@ -114,34 +158,47 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
         {/* Scrollable nav */}
         <nav className="flex-1 overflow-y-auto py-3 px-2">
           <ul className="flex flex-col gap-0.5">
-            {NAV_GROUPS.map((group, gi) => (
-              <li key={gi} className="flex flex-col gap-0.5">
-                {group.header && (
-                  group.headerPath ? (
-                    <NavLink
-                      to={group.headerPath}
-                      onClick={onMobileClose}
-                      end
-                      className={({ isActive }) =>
-                        cn(
-                          'px-2.5 pt-4 pb-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
-                          isActive ? 'text-fg' : 'text-fg-subtle hover:text-fg'
-                        )
-                      }
+            {NAV_GROUPS.map((group, gi) => {
+              const k = groupKey(group, gi)
+              const isOpen = !group.header || effectiveOpen[k]
+              return (
+                <li key={gi} className="flex flex-col gap-0.5">
+                  {group.header && (
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(k)}
+                      className={cn(
+                        'flex items-center gap-1 px-2.5 pt-4 pb-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
+                        groupContainsActive(group, pathname) ? 'text-fg' : 'text-fg-subtle hover:text-fg',
+                      )}
                     >
-                      {group.header}
-                    </NavLink>
-                  ) : (
-                    <div className="px-2.5 pt-4 pb-1.5 text-[10px] font-semibold text-fg-subtle uppercase tracking-wider">
-                      {group.header}
-                    </div>
-                  )
-                )}
-                {group.items.map((item) => (
-                  <SidebarItem key={item.path} item={item} onNavigate={onMobileClose} />
-                ))}
-              </li>
-            ))}
+                      <ChevronDown className={cn(
+                        'w-3 h-3 transition-transform shrink-0',
+                        isOpen ? 'rotate-0' : '-rotate-90',
+                      )} />
+                      <span>{group.header}</span>
+                      {group.headerPath && (
+                        <NavLink
+                          to={group.headerPath}
+                          end
+                          onClick={(e) => { e.stopPropagation(); onMobileClose?.() }}
+                          className={({ isActive }) =>
+                            cn('ml-1 text-[9px] uppercase tracking-wider',
+                               isActive ? 'text-fg' : 'text-fg-subtle hover:text-fg')
+                          }
+                          title="Открыть страницу раздела"
+                        >
+                          ↗
+                        </NavLink>
+                      )}
+                    </button>
+                  )}
+                  {isOpen && group.items.map((item) => (
+                    <SidebarItem key={item.path} item={item} onNavigate={onMobileClose} />
+                  ))}
+                </li>
+              )
+            })}
           </ul>
         </nav>
 
