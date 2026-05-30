@@ -13,6 +13,7 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { StockSalesChart } from '@/components/StockSalesChart'
+import { StockBreakdownChip } from '@/components/StockBreakdownChip'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 
@@ -96,10 +97,10 @@ export function ProductDetail() {
             {warehouses?.product_name || 'Загрузка…'}
           </h1>
           <p className="text-sm text-fg-muted font-mono mt-1">{warehouses?.offer_id}</p>
-          <div className="flex items-center gap-4 mt-3 text-sm">
-            <div>
-              <span className="text-fg-muted">Всего остаток:</span>{' '}
-              <span className="font-semibold text-fg tabular-nums">{formatNumber(warehouses?.total_free_to_sell ?? 0)} шт</span>
+          <div className="flex items-center gap-4 mt-3 text-sm flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <span className="text-fg-muted">Остаток:</span>
+              <StockBreakdownChip productId={id!} totalAvailable={warehouses?.total_free_to_sell ?? 0} />
             </div>
             <div>
               <span className="text-fg-muted">Складов:</span>{' '}

@@ -13,6 +13,7 @@ import {
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { HelpHint } from '@/components/ui/HelpHint'
+import { StockBreakdownChip } from '@/components/StockBreakdownChip'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors'
@@ -71,13 +72,6 @@ function PriceIndexBadge({ value }: { value: string | null }) {
       {meta.label}
     </span>
   )
-}
-
-function StockBadge({ value }: { value: number }) {
-  if (value === 0) {
-    return <span className="text-error font-mono tabular-nums">0</span>
-  }
-  return <span className="text-fg font-mono tabular-nums">{value.toLocaleString('ru-RU')}</span>
 }
 
 function StockBreakdown({ productId }: { productId: string }) {
@@ -367,7 +361,7 @@ export function Products() {
                           })()}
                         </td>
                         <td className="py-3 px-4 text-right">
-                          <StockBadge value={p.total_stock} />
+                          <StockBreakdownChip productId={p.id} totalAvailable={p.total_stock} alignRight />
                         </td>
                         <td className="py-3 px-2 text-fg-subtle">
                           <ChevronRight

@@ -96,6 +96,14 @@ interface ProductLite {
   name: string
   offer_id: string
   image_url: string | null
+  total_stock: number
+  is_archived: boolean
+}
+
+function stockColor(stock: number): string {
+  if (stock === 0) return 'bg-rose-500'      // 🔴 стокаут
+  if (stock < 10) return 'bg-amber-500'      // 🟡 мало
+  return 'bg-emerald-500'                    // 🟢 норма
 }
 
 const PRESETS = [
@@ -272,12 +280,35 @@ export function Funnel() {
         </div>
         <div className="flex flex-wrap gap-2 max-h-[180px] overflow-y-auto">
           {filteredProducts.map((p) => (
-            <button key={p.id} onClick={() => updateParam('p', p.id)} className={cn(
-              'flex items-center gap-2 px-2 py-1.5 rounded-md border text-xs',
-              productId === p.id ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-            )}>
-              {p.image_url ? <img src={p.image_url} alt="" className="w-5 h-5 rounded object-cover shrink-0" /> : <ImageIcon className="w-4 h-4 shrink-0" />}
-              <span className="truncate max-w-[180px]">{p.offer_id}</span>
+            <button
+              key={p.id}
+              onClick={() => updateParam('p', p.id)}
+              title={`${p.name}\nОстаток: ${p.total_stock} шт${p.is_archived ? '\nАРХИВ' : ''}`}
+              className={cn(
+                'flex items-center gap-2 px-2 py-1.5 rounded-md border text-xs',
+                productId === p.id
+                  ? 'border-fg bg-fg text-bg'
+                  : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
+                p.is_archived && 'opacity-60',
+              )}
+            >
+              {p.image_url ? (
+                <img src={p.image_url} alt="" className="w-5 h-5 rounded object-cover shrink-0" />
+              ) : (
+                <ImageIcon className="w-4 h-4 shrink-0" />
+              )}
+              <span
+                className={cn('w-1.5 h-1.5 rounded-full shrink-0', stockColor(p.total_stock))}
+                aria-hidden
+              />
+              <span className="truncate max-w-[160px]">{p.offer_id}</span>
+              <span className={cn(
+                'tabular-nums shrink-0',
+                productId === p.id ? 'text-bg/70' : 'text-fg-subtle',
+              )}>{p.total_stock}</span>
+              {p.is_archived && (
+                <span className="text-[9px] px-1 rounded bg-slate-200 text-slate-600 shrink-0">АРХИВ</span>
+              )}
             </button>
           ))}
         </div>
