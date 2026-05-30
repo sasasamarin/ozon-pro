@@ -377,7 +377,41 @@ async def get_dashboard_v2(
             Transaction.time < dt_to,
         )
         exp_row = (await db.execute(sel)).one()
-        total_exp = sum(float(v or 0) for v in exp_row)
+        total_buckets = sum(float(v or 0) for v in exp_row)
+
+        # «Не опознано» = ВСЕ отрицательные транзакции − сумма разнесённых
+        # категорий. Юзер: «если есть суммы — сделай блок Не опознано снизу».
+        total_negative = float((await db.execute(
+            select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0)).where(
+                Transaction.ozon_account_id.in_(accs),
+                Transaction.time >= dt_from,
+                Transaction.time < dt_to,
+                Transaction.amount < 0,
+            )
+        )).scalar() or 0)
+        # Получаем список op_type для тултипа «что внутри»
+        # Запрашиваем top-20 неотнесённых op_type'ов для прозрачности
+        unmapped_ops: list[tuple[str, float]] = []
+        mapped_ops = {op for _, _, op in _EXPENSE_BUCKETS if op}
+        if total_negative > total_buckets:
+            unm_rows = (await db.execute(
+                select(
+                    Transaction.operation_type,
+                    func.coalesce(func.sum(func.abs(Transaction.amount)), 0).label("amt"),
+                ).where(
+                    Transaction.ozon_account_id.in_(accs),
+                    Transaction.time >= dt_from,
+                    Transaction.time < dt_to,
+                    Transaction.amount < 0,
+                    ~Transaction.operation_type.in_(list(mapped_ops)),
+                ).group_by(Transaction.operation_type)
+                .order_by(func.sum(func.abs(Transaction.amount)).desc())
+                .limit(20)
+            )).all()
+            unmapped_ops = [(r.operation_type, float(r.amt)) for r in unm_rows]
+        unidentified = max(0.0, total_negative - total_buckets)
+
+        total_exp = total_buckets + unidentified
         expense_breakdown = []
         for i, (label, op_filter, _) in enumerate(cols):
             v = float(exp_row[i] or 0)
@@ -389,6 +423,18 @@ async def get_dashboard_v2(
                     op_type_filter=op_filter,
                 ))
         expense_breakdown.sort(key=lambda x: x.amount, reverse=True)
+        if unidentified > 0:
+            # «Не опознано» — отдельным блоком снизу с тултипом по op_type'ам
+            top_unmapped = ", ".join(
+                f"{op} ({amt:,.0f}₽)" for op, amt in unmapped_ops[:5]
+            )
+            expense_breakdown.append(ExpenseSegment(
+                category=f"Не опознано (Ozon op_type'ы вне категорий): {top_unmapped}"
+                          if unmapped_ops else "Не опознано",
+                amount=round(unidentified, 2),
+                pct=round(unidentified / total_exp * 100, 1) if total_exp else 0,
+                op_type_filter=None,
+            ))
     else:
         expense_breakdown = []
 
