@@ -17,6 +17,7 @@ from datetime import date as date_cls, datetime, timedelta, timezone
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import AnalyticsDaily, OzonAccount, Product, Stock, User
+from app.services.stock import get_stock
 
 router = APIRouter()
 
@@ -95,30 +96,44 @@ async def list_products(
     NB: name + image_url пока заглушки — `/v3/product/list` их не отдаёт.
     Полная информация после интеграции `/v3/product/info/list`.
     """
-    # Подзапрос: latest_time для каждого product_id в stocks
-    latest_time_subq = (
-        select(
-            Stock.product_id.label("p_id"),
-            func.max(Stock.time).label("latest_time"),
-        )
-        .group_by(Stock.product_id)
-        .subquery()
-    )
-
-    # Подзапрос: SUM(free_to_sell) для latest_time каждого товара
-    stock_sum_subq = (
-        select(
-            Stock.product_id.label("p_id"),
-            func.coalesce(func.sum(Stock.free_to_sell), 0).label("total_stock"),
-        )
-        .join(
-            latest_time_subq,
-            (Stock.product_id == latest_time_subq.c.p_id)
-            & (Stock.time == latest_time_subq.c.latest_time),
-        )
-        .group_by(Stock.product_id)
-        .subquery()
-    )
+    # Total stock считаем через единую логику (см. services/stock.py),
+    # но без N+1 — здесь нужна быстрая агрегация. ВАЖНО: дубли AGG+FBO+FBO_WH
+    # давали раздутые цифры. Сейчас приоритет: per-warehouse (FBO_WH) или
+    # агрегат, но не оба сразу.
+    # SQL-вариант: для каждого продукта берём последний снимок отдельно для
+    # FBO_WH и для AGG, суммируем согласованно.
+    stock_per_product_sql = """
+      WITH last_wh AS (
+        SELECT product_id, MAX(time) t FROM stocks
+        WHERE warehouse_type='FBO_WH' GROUP BY product_id
+      ),
+      last_agg AS (
+        SELECT product_id, MAX(time) t FROM stocks
+        WHERE warehouse_type IN ('AGG','FBO','FBS','RFBS') GROUP BY product_id
+      ),
+      wh_sum AS (
+        SELECT s.product_id, COALESCE(SUM(s.free_to_sell - s.reserved), 0) total
+        FROM stocks s JOIN last_wh l ON l.product_id=s.product_id AND l.t=s.time
+        WHERE s.warehouse_type='FBO_WH'
+        GROUP BY s.product_id
+      ),
+      agg_sum AS (
+        SELECT s.product_id, COALESCE(SUM(s.free_to_sell - s.reserved), 0) total
+        FROM stocks s JOIN last_agg l ON l.product_id=s.product_id AND l.t=s.time
+        WHERE s.warehouse_type IN ('FBS','RFBS')
+           OR (s.warehouse_type IN ('AGG','FBO')
+               AND NOT EXISTS (SELECT 1 FROM last_wh w WHERE w.product_id=s.product_id))
+        GROUP BY s.product_id
+      )
+      SELECT p.id AS p_id,
+             COALESCE(wh.total, 0) + COALESCE(ag.total, 0) AS total_stock
+      FROM products p
+      LEFT JOIN wh_sum  wh ON wh.product_id=p.id
+      LEFT JOIN agg_sum ag ON ag.product_id=p.id
+    """
+    from sqlalchemy import text as _sql_text
+    stock_rows = (await db.execute(_sql_text(stock_per_product_sql))).all()
+    stock_map: dict[uuid.UUID, int] = {row.p_id: int(row.total_stock or 0) for row in stock_rows}
 
     query = (
         select(
@@ -126,10 +141,8 @@ async def list_products(
             OzonAccount.id.label("cabinet_id"),
             OzonAccount.name.label("cabinet_name"),
             OzonAccount.premium_tier.label("cabinet_premium_tier"),
-            func.coalesce(stock_sum_subq.c.total_stock, 0).label("total_stock"),
         )
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
-        .outerjoin(stock_sum_subq, stock_sum_subq.c.p_id == Product.id)
         .where(
             OzonAccount.company_id == current_user.company_id,
             OzonAccount.deleted_at.is_(None),
@@ -166,11 +179,34 @@ async def list_products(
                 cabinet_id=str(row.cabinet_id),
                 cabinet_name=row.cabinet_name,
                 cabinet_premium_tier=row.cabinet_premium_tier,
-                total_stock=int(row.total_stock or 0),
+                total_stock=stock_map.get(product.id, 0),
             )
         )
 
     return items
+
+
+@router.get("/{product_id}/stock-details")
+async def product_stock_details(
+    product_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Единая разбивка остатков для tooltip/раскрытия — используется ВЕЗДЕ."""
+    import uuid as _uuid
+    try:
+        pid = _uuid.UUID(product_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Невалидный product_id")
+    # принадлежность компании
+    ok = (await db.execute(
+        select(Product.id)
+        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+        .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
+    )).scalar_one_or_none()
+    if not ok:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    return (await get_stock(db, pid)).to_dict()
 
 
 @router.get("/{product_id}/stocks", response_model=list[ProductStockRow])

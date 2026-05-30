@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.models.cost import CostConfidence, CostSource
 from app.services.ozon_client import OzonAPIError, OzonSellerClient
+from app.services.warehouse_cluster import parse_warehouse_name
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
@@ -144,19 +145,19 @@ async def _sync_warehouse_stocks_for_account(
                                 product_id = offer_to_id.get(offer)
                             if not product_id:
                                 continue
+                            wh_name = it.get("warehouse_name") or "<aggregate>"
+                            city, cluster = parse_warehouse_name(wh_name)
                             rows.append({
                                 "time": snapshot_at,
                                 "product_id": product_id,
-                                # FBO_WH (per-warehouse) ≠ FBO (aggregate) — иначе
-                                # ON CONFLICT DO NOTHING на PK (time, product_id,
-                                # warehouse_type) блокирует запись.
+                                # FBO_WH (per-warehouse) ≠ FBO (aggregate)
                                 "warehouse_type": "FBO_WH",
-                                "warehouse_name": it.get("warehouse_name"),
+                                "warehouse_name": wh_name,
                                 "warehouse_id": int(it["warehouse_id"]) if it.get("warehouse_id") else None,
                                 "free_to_sell": int(it.get("free_to_sell_amount", 0) or 0),
                                 "reserved": int(it.get("reserved_amount", 0) or 0),
                                 "in_transit": int(it.get("promised_amount", 0) or 0),
-                                "cluster": it.get("cluster") or it.get("cluster_name"),
+                                "cluster": cluster,
                             })
                             stats.processed += 1
 
@@ -166,8 +167,15 @@ async def _sync_warehouse_stocks_for_account(
 
                 if rows:
                     stmt = pg_insert(Stock).values(rows)
-                    stmt = stmt.on_conflict_do_nothing(
-                        index_elements=["time", "product_id", "warehouse_type"]
+                    # PK теперь (time, product_id, warehouse_type, warehouse_name) —
+                    # per-warehouse строки больше не теряются.
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["time", "product_id", "warehouse_type", "warehouse_name"],
+                        set_={
+                            col: stmt.excluded[col]
+                            for col in ("free_to_sell", "reserved", "in_transit",
+                                        "warehouse_id", "cluster")
+                        },
                     )
                     await db.execute(stmt)
                     stats.created += len(rows)
