@@ -144,11 +144,31 @@ def _kpi(row) -> FunnelKPI:
     )
 
 
+def _parse_product_ids(
+    product_id: str | None, product_ids: list[str] | None
+) -> list[uuid.UUID]:
+    """Принимаем обе формы (legacy product_id и новый product_ids)."""
+    raw: list[str] = []
+    if product_ids:
+        raw.extend(product_ids)
+    if product_id:
+        raw.append(product_id)
+    out: list[uuid.UUID] = []
+    for s in raw:
+        try:
+            u = uuid.UUID(s)
+            if u not in out:
+                out.append(u)
+        except (ValueError, AttributeError):
+            pass
+    return out
+
+
 async def _aggregate(
     db: AsyncSession,
     *,
     accs: list[uuid.UUID],
-    product_id: uuid.UUID | None,
+    product_ids: list[uuid.UUID],
     date_from: date_cls,
     date_to: date_cls,
 ):
@@ -157,8 +177,8 @@ async def _aggregate(
         AnalyticsDaily.date >= date_from,
         AnalyticsDaily.date <= date_to,
     ]
-    if product_id:
-        where.append(AnalyticsDaily.product_id == product_id)
+    if product_ids:
+        where.append(AnalyticsDaily.product_id.in_(product_ids))
     q = select(
         func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
         func.coalesce(func.sum(AnalyticsDaily.session_view_search + AnalyticsDaily.session_view_pdp), 0).label("clicks"),
@@ -228,6 +248,7 @@ async def get_funnel_v2(
     date_from: date_cls | None = Query(None),
     date_to: date_cls | None = Query(None),
     product_id: str | None = Query(None),
+    product_ids: list[str] | None = Query(None),
     cabinet_ids: list[uuid.UUID] | None = Query(None),
     compare: str = Query("prev_period"),
     current_user: User = Depends(get_current_user),
@@ -241,16 +262,15 @@ async def get_funnel_v2(
 
     accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
 
-    pid: uuid.UUID | None = None
+    pids = _parse_product_ids(product_id, product_ids)
     prod_name: str | None = None
-    if product_id:
-        try:
-            pid = uuid.UUID(product_id)
-            prod = (await db.execute(select(Product).where(Product.id == pid))).scalar_one_or_none()
-            if prod:
-                prod_name = prod.name
-        except ValueError:
-            pid = None
+    if pids:
+        rows = (await db.execute(select(Product.name).where(Product.id.in_(pids)))).all()
+        names = [r[0] for r in rows]
+        if len(names) == 1:
+            prod_name = names[0]
+        elif len(names) > 1:
+            prod_name = f"{names[0]} +{len(names) - 1}"
 
     if not accs:
         empty_kpi = FunnelKPI(
@@ -266,7 +286,7 @@ async def get_funnel_v2(
             has_data=False, kpi=empty_kpi, prev_kpi=None, ad=empty_ad,
         )
 
-    row = await _aggregate(db, accs=accs, product_id=pid, date_from=date_from, date_to=date_to)
+    row = await _aggregate(db, accs=accs, product_ids=pids, date_from=date_from, date_to=date_to)
     kpi = _kpi(row)
 
     prev_kpi: FunnelKPI | None = None
@@ -278,7 +298,7 @@ async def get_funnel_v2(
         else:
             prev_from = date_from - span - timedelta(days=1)
             prev_to = date_from - timedelta(days=1)
-        prev_row = await _aggregate(db, accs=accs, product_id=pid, date_from=prev_from, date_to=prev_to)
+        prev_row = await _aggregate(db, accs=accs, product_ids=pids, date_from=prev_from, date_to=prev_to)
         prev_kpi = _kpi(prev_row)
 
     ad = await _ad_breakdown(db, accs=accs, date_from=date_from, date_to=date_to, revenue=kpi.revenue)
@@ -298,6 +318,7 @@ async def get_funnel_daily(
     date_from: date_cls | None = Query(None),
     date_to: date_cls | None = Query(None),
     product_id: str | None = Query(None),
+    product_ids: list[str] | None = Query(None),
     cabinet_ids: list[uuid.UUID] | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -312,20 +333,15 @@ async def get_funnel_daily(
     if not accs:
         return []
 
-    pid: uuid.UUID | None = None
-    if product_id:
-        try:
-            pid = uuid.UUID(product_id)
-        except ValueError:
-            pass
+    pids = _parse_product_ids(product_id, product_ids)
 
     where = [
         Product.ozon_account_id.in_(accs),
         AnalyticsDaily.date >= date_from,
         AnalyticsDaily.date <= date_to,
     ]
-    if pid:
-        where.append(AnalyticsDaily.product_id == pid)
+    if pids:
+        where.append(AnalyticsDaily.product_id.in_(pids))
 
     rows = (await db.execute(
         select(
@@ -383,8 +399,9 @@ async def get_funnel_daily(
 @router.get("/best-worst-days", response_model=dict)
 async def best_worst_days(
     days: int = Query(90, ge=7, le=365),
-    metric: str = Query("overall", description="overall|cart|order|delivery"),
+    metric: str = Query("order", description="overall|cart|order|delivery"),
     product_id: str | None = Query(None),
+    product_ids: list[str] | None = Query(None),
     cabinet_ids: list[uuid.UUID] | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -394,29 +411,24 @@ async def best_worst_days(
 
     label_map = {
         "cart":     ("Показы",  "В корзину"),
-        "order":    ("Корзина", "Заказы"),
+        "order":    ("Показы", "Заказы"),
         "delivery": ("Заказы",  "Доставлено"),
         "overall":  ("Показы",  "Доставлено"),
     }
-    from_label, to_label = label_map.get(metric, label_map["overall"])
+    from_label, to_label = label_map.get(metric, label_map["order"])
 
     accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
     if not accs:
         return {"best": [], "worst": [], "metric": metric, "from_label": from_label, "to_label": to_label}
 
-    pid: uuid.UUID | None = None
-    if product_id:
-        try:
-            pid = uuid.UUID(product_id)
-        except ValueError:
-            pass
+    pids = _parse_product_ids(product_id, product_ids)
 
     where = [
         Product.ozon_account_id.in_(accs),
         AnalyticsDaily.date >= date_from,
     ]
-    if pid:
-        where.append(AnalyticsDaily.product_id == pid)
+    if pids:
+        where.append(AnalyticsDaily.product_id.in_(pids))
 
     rows = (await db.execute(
         select(
@@ -445,10 +457,12 @@ async def best_worst_days(
             return BestWorstDay(date=r.d.isoformat(), from_value=imp, to_value=cart,
                                 conv_pct=_safe_pct(cart, imp) or 0, revenue=revenue)
         if metric == "order":
-            if cart < 20:
+            # Показ → Заказ (день в день): юзер просила это как дефолт (не доставку,
+            # т.к. доставка может прийти через месяц после показа → искажение).
+            if imp < 100:
                 return None
-            return BestWorstDay(date=r.d.isoformat(), from_value=cart, to_value=orders,
-                                conv_pct=_safe_pct(orders, cart) or 0, revenue=revenue)
+            return BestWorstDay(date=r.d.isoformat(), from_value=imp, to_value=orders,
+                                conv_pct=_safe_pct(orders, imp) or 0, revenue=revenue)
         if metric == "delivery":
             if orders < 5:
                 return None
@@ -570,6 +584,7 @@ async def funnel_correlations(
     date_from: date_cls | None = Query(None),
     date_to: date_cls | None = Query(None),
     product_id: str | None = Query(None),
+    product_ids: list[str] | None = Query(None),
     cabinet_ids: list[uuid.UUID] | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -590,20 +605,16 @@ async def funnel_correlations(
             explanation="Подключите хотя бы один кабинет Ozon — без него нечего сопоставлять.",
         )
 
-    pid: uuid.UUID | None = None
-    if product_id:
-        try:
-            pid = uuid.UUID(product_id)
-        except ValueError:
-            pass
+    pids = _parse_product_ids(product_id, product_ids)
+    pid = pids[0] if len(pids) == 1 else None  # overlay цены/СПП только для одиночного
 
     where = [
         Product.ozon_account_id.in_(accs),
         AnalyticsDaily.date >= date_from,
         AnalyticsDaily.date <= date_to,
     ]
-    if pid:
-        where.append(AnalyticsDaily.product_id == pid)
+    if pids:
+        where.append(AnalyticsDaily.product_id.in_(pids))
 
     rows = (await db.execute(
         select(
@@ -1051,6 +1062,7 @@ async def funnel_sankey(
     date_from: date_cls | None = Query(None),
     date_to: date_cls | None = Query(None),
     product_id: str | None = Query(None),
+    product_ids: list[str] | None = Query(None),
     cabinet_ids: list[uuid.UUID] | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -1071,14 +1083,8 @@ async def funnel_sankey(
         return SankeyResp(period_from=date_from.isoformat(), period_to=date_to.isoformat(),
                           nodes=nodes, links=[])
 
-    pid: uuid.UUID | None = None
-    if product_id:
-        try:
-            pid = uuid.UUID(product_id)
-        except ValueError:
-            pass
-
-    row = await _aggregate(db, accs=accs, product_id=pid, date_from=date_from, date_to=date_to)
+    pids = _parse_product_ids(product_id, product_ids)
+    row = await _aggregate(db, accs=accs, product_ids=pids, date_from=date_from, date_to=date_to)
     imp = int(row.imp or 0)
     clicks = int(row.clicks or 0)
     cart = int(row.cart or 0)

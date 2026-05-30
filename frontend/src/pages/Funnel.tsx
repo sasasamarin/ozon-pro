@@ -143,17 +143,45 @@ export function Funnel() {
   const navigate = useNavigate()
 
   const days = parseInt(params.get('days') || '28', 10)
-  const productId = params.get('p') || ''
+  // Power BI-style multi-select: URL держит массив p=id1&p=id2&...
+  const productIds = params.getAll('p')
+  // Для обратной совместимости (старый код передавал один)
+  const productId = productIds[0] || ''
   const compare = (params.get('cmp') || 'prev_period') as 'none' | 'prev_period' | 'year_ago'
+  const archiveFilter = (params.get('arch') || 'active') as 'active' | 'archived' | 'all'
   const [productSearch, setProductSearch] = useState('')
   const [drillStep, setDrillStep] = useState<DrillStep>(null)
-  // Дефолт = order (Показ→Заказ), а не delivery: доставка может быть через
-  // месяц после показа, привязка к дню показа искажает корреляцию.
   const [bwMetric, setBwMetric] = useState<BWMetric>('order')
 
   const updateParam = (k: string, v: string | undefined) => {
     const p = new URLSearchParams(params)
     if (v) p.set(k, v); else p.delete(k)
+    setParams(p, { replace: true })
+  }
+
+  const toggleProductId = (id: string) => {
+    const p = new URLSearchParams(params)
+    const current = p.getAll('p')
+    if (current.includes(id)) {
+      // снять выбор
+      p.delete('p')
+      current.filter((x) => x !== id).forEach((x) => p.append('p', x))
+    } else {
+      p.append('p', id)
+    }
+    setParams(p, { replace: true })
+  }
+
+  const clearAllProducts = () => {
+    const p = new URLSearchParams(params)
+    p.delete('p')
+    setParams(p, { replace: true })
+  }
+
+  const selectAllVisible = (ids: string[]) => {
+    const p = new URLSearchParams(params)
+    p.delete('p')
+    ids.forEach((id) => p.append('p', id))
     setParams(p, { replace: true })
   }
 
@@ -168,41 +196,39 @@ export function Funnel() {
   const filteredProducts = useMemo(() => {
     if (!products) return []
     const s = productSearch.trim().toLowerCase()
-    return (s
-      ? products.filter((p) => p.name.toLowerCase().includes(s) || p.offer_id.toLowerCase().includes(s))
-      : products
-    ).slice(0, 20)
-  }, [products, productSearch])
+    return products
+      .filter((p) => {
+        if (archiveFilter === 'active' && p.is_archived) return false
+        if (archiveFilter === 'archived' && !p.is_archived) return false
+        return true
+      })
+      .filter((p) => !s || p.name.toLowerCase().includes(s) || p.offer_id.toLowerCase().includes(s))
+  }, [products, productSearch, archiveFilter])
+
+  // Сборка query параметров: множественный ?p= + cabinet_ids
+  const buildQs = (extra: Record<string, string> = {}): string => {
+    const p = new URLSearchParams({ days: String(days), ...extra })
+    productIds.forEach((id) => p.append('product_ids', id))
+    selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
+    return p.toString()
+  }
 
   const { data, isLoading, isFetching } = useQuery<FunnelV2Resp>({
-    queryKey: ['funnel-v2', selectedCabinetIds, days, productId, compare],
-    queryFn: async () => {
-      const p = new URLSearchParams({ days: String(days), compare })
-      if (productId) p.append('product_id', productId)
-      selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
-      return (await api.get(`/analytics/funnel/v2/?${p.toString()}`)).data
-    },
+    queryKey: ['funnel-v2', selectedCabinetIds, days, productIds.join(','), compare],
+    queryFn: async () =>
+      (await api.get(`/analytics/funnel/v2/?${buildQs({ compare })}`)).data,
   })
 
   const { data: daily, isFetching: dailyLoading } = useQuery<FunnelDaily[]>({
-    queryKey: ['funnel-v2', 'daily', selectedCabinetIds, days, productId],
-    queryFn: async () => {
-      const p = new URLSearchParams({ days: String(days) })
-      if (productId) p.append('product_id', productId)
-      selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
-      return (await api.get(`/analytics/funnel/v2/daily?${p.toString()}`)).data
-    },
+    queryKey: ['funnel-v2', 'daily', selectedCabinetIds, days, productIds.join(',')],
+    queryFn: async () => (await api.get(`/analytics/funnel/v2/daily?${buildQs()}`)).data,
     enabled: drillStep !== null,
   })
 
   const { data: bestWorst } = useQuery<BestWorstResp>({
-    queryKey: ['funnel-v2', 'bw', selectedCabinetIds, days, productId, bwMetric],
-    queryFn: async () => {
-      const p = new URLSearchParams({ days: String(days), metric: bwMetric })
-      if (productId) p.append('product_id', productId)
-      selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
-      return (await api.get(`/analytics/funnel/v2/best-worst-days?${p.toString()}`)).data
-    },
+    queryKey: ['funnel-v2', 'bw', selectedCabinetIds, days, productIds.join(','), bwMetric],
+    queryFn: async () =>
+      (await api.get(`/analytics/funnel/v2/best-worst-days?${buildQs({ metric: bwMetric })}`)).data,
   })
 
   const kpi = data?.kpi
@@ -266,54 +292,86 @@ export function Funnel() {
         ))}
       </Card>
 
-      {/* PRODUCT SELECTOR */}
+      {/* PRODUCT SELECTOR — Power BI-style multi-select со списком чекбоксов */}
       <Card className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-fg">Выберите товар</h3>
-          {productId && (
-            <button onClick={() => updateParam('p', undefined)} className="text-xs text-fg-muted hover:text-fg">
-              × сбросить (показать общую)
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h3 className="text-sm font-semibold text-fg">
+            Товары
+            {productIds.length > 0 && (
+              <span className="ml-2 text-xs font-normal text-fg-muted">
+                выбрано {productIds.length}
+              </span>
+            )}
+          </h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Архив-фильтр */}
+            <div className="flex border border-border-subtle rounded-md overflow-hidden">
+              {(['active', 'archived', 'all'] as const).map((k) => (
+                <button key={k} onClick={() => updateParam('arch', k)} className={cn(
+                  'px-2 py-1 text-[11px]',
+                  archiveFilter === k ? 'bg-fg text-bg' : 'text-fg-muted hover:bg-bg-subtle',
+                )}>
+                  {k === 'active' ? 'Активные' : k === 'archived' ? 'Архив' : 'Все'}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => selectAllVisible(filteredProducts.map((x) => x.id))}
+                    className="text-xs text-fg-muted hover:text-fg border border-border-subtle rounded px-2 py-1">
+              Выбрать все
             </button>
-          )}
+            {productIds.length > 0 && (
+              <button onClick={clearAllProducts}
+                      className="text-xs text-fg-muted hover:text-fg">
+                × снять выбор
+              </button>
+            )}
+          </div>
         </div>
         <div className="relative mb-3">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-fg-subtle" />
           <Input value={productSearch} onChange={(e) => setProductSearch(e.target.value)}
             placeholder="название или offer_id" className="pl-9" />
         </div>
-        <div className="flex flex-wrap gap-2 max-h-[180px] overflow-y-auto">
-          {filteredProducts.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => updateParam('p', p.id)}
-              title={`${p.name}\nОстаток: ${p.total_stock} шт${p.is_archived ? '\nАРХИВ' : ''}`}
-              className={cn(
-                'flex items-center gap-2 px-2 py-1.5 rounded-md border text-xs',
-                productId === p.id
-                  ? 'border-fg bg-fg text-bg'
-                  : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-                p.is_archived && 'opacity-60',
-              )}
-            >
-              {p.image_url ? (
-                <img src={p.image_url} alt="" className="w-5 h-5 rounded object-cover shrink-0" />
-              ) : (
-                <ImageIcon className="w-4 h-4 shrink-0" />
-              )}
-              <span
-                className={cn('w-1.5 h-1.5 rounded-full shrink-0', stockColor(p.total_stock))}
-                aria-hidden
-              />
-              <span className="truncate max-w-[160px]">{p.offer_id}</span>
-              <span className={cn(
-                'tabular-nums shrink-0',
-                productId === p.id ? 'text-bg/70' : 'text-fg-subtle',
-              )}>{p.total_stock}</span>
-              {p.is_archived && (
-                <span className="text-[9px] px-1 rounded bg-slate-200 text-slate-600 shrink-0">АРХИВ</span>
-              )}
-            </button>
-          ))}
+        <div className="border border-border-subtle rounded-md max-h-[260px] overflow-y-auto divide-y divide-border-subtle">
+          {filteredProducts.length === 0 && (
+            <div className="text-sm text-fg-muted py-4 text-center">Нет товаров для фильтра</div>
+          )}
+          {filteredProducts.map((p) => {
+            const checked = productIds.includes(p.id)
+            return (
+              <label
+                key={p.id}
+                title={`${p.name}\nОстаток: ${p.total_stock} шт${p.is_archived ? '\nАРХИВ' : ''}`}
+                className={cn(
+                  'flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-bg-subtle/40',
+                  checked && 'bg-indigo-50/50',
+                  p.is_archived && 'opacity-60',
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleProductId(p.id)}
+                  className="w-3.5 h-3.5 accent-indigo-600 shrink-0"
+                />
+                {p.image_url ? (
+                  <img src={p.image_url} alt="" className="w-5 h-5 rounded object-cover shrink-0" />
+                ) : (
+                  <ImageIcon className="w-4 h-4 shrink-0 text-fg-subtle" />
+                )}
+                <span
+                  className={cn('w-1.5 h-1.5 rounded-full shrink-0', stockColor(p.total_stock))}
+                  aria-hidden
+                />
+                <span className="flex-1 truncate text-fg">{p.name}</span>
+                <span className="text-fg-muted font-mono shrink-0">{p.offer_id}</span>
+                <span className="text-fg-subtle tabular-nums shrink-0 w-10 text-right">{p.total_stock}</span>
+                {p.is_archived && (
+                  <span className="text-[9px] px-1 rounded bg-slate-200 text-slate-600 shrink-0">АРХИВ</span>
+                )}
+              </label>
+            )
+          })}
         </div>
       </Card>
 
@@ -484,7 +542,7 @@ export function Funnel() {
             )}
           </Card>
 
-          <FunnelInsights days={days} productId={productId || undefined}
+          <FunnelInsights days={days} productIds={productIds}
                           cabinetIds={selectedCabinetIds} />
         </>
       )}

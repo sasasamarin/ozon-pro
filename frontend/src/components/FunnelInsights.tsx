@@ -116,15 +116,15 @@ const RU_DATE = (s: string) =>
 
 export function FunnelInsights({
   days,
-  productId,
+  productIds,
   cabinetIds,
 }: {
   days: number
-  productId?: string
+  productIds?: string[]
   cabinetIds?: string[]
 }) {
   const params = new URLSearchParams({ days: String(days) })
-  if (productId) params.set('product_id', productId)
+  if (productIds && productIds.length) productIds.forEach((p) => params.append('product_ids', p))
   if (cabinetIds && cabinetIds.length) cabinetIds.forEach((c) => params.append('cabinet_ids', c))
   const qs = params.toString()
 
