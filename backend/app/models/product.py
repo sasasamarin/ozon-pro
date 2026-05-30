@@ -78,6 +78,14 @@ class Product(BaseModel, SoftDeleteMixin):
     visibility: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Свободные теги юзера (например "хит", "сезон", "новинка") + флаг 🔥
+    tags: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default="[]", nullable=False
+    )
+    is_hot: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+
     # Рейтинг и отзывы
     rating: Mapped[float | None] = mapped_column(Numeric(3, 2), nullable=True)
     reviews_count: Mapped[int] = mapped_column(Integer, default=0)

@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
@@ -9,11 +9,14 @@ import {
   ChevronRight,
   Warehouse,
   Loader2,
+  Flame,
+  Settings2,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { HelpHint } from '@/components/ui/HelpHint'
 import { StockBreakdownChip } from '@/components/StockBreakdownChip'
+import { BulkMetaModal } from '@/components/BulkMetaModal'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors'
@@ -24,6 +27,7 @@ interface ProductItem {
   name: string
   offer_id: string
   ozon_sku: number
+  cost_price: number | null
   current_price: number | null
   old_price: number | null
   marketing_price: number | null
@@ -35,6 +39,10 @@ interface ProductItem {
   cabinet_name: string
   cabinet_premium_tier: string
   total_stock: number
+  category_id: number | null
+  category_name: string | null
+  tags: string[]
+  is_hot: boolean
 }
 
 interface StockRow {
@@ -172,6 +180,12 @@ export function Products() {
   const { selectedCabinetIds } = useCabinetStore()
   const [stockFilter, setStockFilter] = useState<StockFilter>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [filterCategory, setFilterCategory] = useState<string>('')
+  const [filterTag, setFilterTag] = useState<string>('')
+  const [filterHot, setFilterHot] = useState<boolean>(false)
+  const [filterArchive, setFilterArchive] = useState<'active' | 'archived' | 'all'>('active')
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [showBulk, setShowBulk] = useState(false)
 
   const { data, isLoading, error } = useQuery<ProductItem[]>({
     queryKey: ['products', selectedCabinetIds],
@@ -187,15 +201,48 @@ export function Products() {
   })
 
   const allProducts = data || []
-  const products =
-    stockFilter === 'in_stock'
-      ? allProducts.filter((p) => p.total_stock > 0)
-      : stockFilter === 'out_of_stock'
-        ? allProducts.filter((p) => p.total_stock === 0)
-        : allProducts
+
+  // Список категорий / тегов из текущих данных
+  const categories = useMemo(() => {
+    const counts = new Map<string, number>()
+    allProducts.forEach((p) => {
+      if (p.category_name) counts.set(p.category_name, (counts.get(p.category_name) || 0) + 1)
+    })
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])
+  }, [allProducts])
+
+  const tagsAll = useMemo(() => {
+    const counts = new Map<string, number>()
+    allProducts.forEach((p) => p.tags?.forEach((t) => counts.set(t, (counts.get(t) || 0) + 1)))
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])
+  }, [allProducts])
+
+  const products = allProducts
+    .filter((p) => {
+      if (filterArchive === 'active' && p.is_archived) return false
+      if (filterArchive === 'archived' && !p.is_archived) return false
+      return true
+    })
+    .filter((p) => stockFilter === 'all'
+      || (stockFilter === 'in_stock' && p.total_stock > 0)
+      || (stockFilter === 'out_of_stock' && p.total_stock === 0))
+    .filter((p) => !filterCategory || p.category_name === filterCategory)
+    .filter((p) => !filterTag || (p.tags || []).includes(filterTag))
+    .filter((p) => !filterHot || p.is_hot)
 
   const inStockCount = allProducts.filter((p) => p.total_stock > 0).length
   const outStockCount = allProducts.length - inStockCount
+
+  const toggleId = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const selectAllVisible = () =>
+    setSelectedIds(new Set(products.map((p) => p.id)))
+  const clearSelection = () => setSelectedIds(new Set())
 
   return (
     <div className="flex flex-col gap-6">
@@ -220,29 +267,99 @@ export function Products() {
         </Link>
       </div>
 
-      {/* Stock filter tabs */}
+      {/* Toolbar фильтры */}
       {allProducts.length > 0 && (
-        <div className="inline-flex rounded-lg border border-border-subtle bg-bg p-0.5 self-start">
-          {([
-            ['all', `Все (${allProducts.length})`],
-            ['in_stock', `В наличии (${inStockCount})`],
-            ['out_of_stock', `Без остатка (${outStockCount})`],
-          ] as const).map(([k, label]) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setStockFilter(k)}
-              className={cn(
-                'px-3 py-1.5 text-xs font-medium rounded-md transition-all',
-                stockFilter === k
-                  ? 'bg-bg-subtle text-fg shadow-sm'
-                  : 'text-fg-muted hover:text-fg',
-              )}
-            >
-              {label}
+        <Card className="p-3 flex flex-wrap items-center gap-3 text-xs">
+          {/* Stock */}
+          <div className="inline-flex rounded-md border border-border-subtle p-0.5">
+            {([
+              ['all', `Все (${allProducts.length})`],
+              ['in_stock', `В наличии (${inStockCount})`],
+              ['out_of_stock', `Без остатка (${outStockCount})`],
+            ] as const).map(([k, label]) => (
+              <button key={k} onClick={() => setStockFilter(k)} className={cn(
+                'px-2.5 py-1 rounded',
+                stockFilter === k ? 'bg-fg text-bg' : 'text-fg-muted hover:bg-bg-subtle',
+              )}>{label}</button>
+            ))}
+          </div>
+
+          {/* Архив */}
+          <div className="inline-flex rounded-md border border-border-subtle p-0.5">
+            {([
+              ['active', 'Активные'],
+              ['archived', 'Архив'],
+              ['all', 'Все'],
+            ] as const).map(([k, label]) => (
+              <button key={k} onClick={() => setFilterArchive(k)} className={cn(
+                'px-2.5 py-1 rounded',
+                filterArchive === k ? 'bg-fg text-bg' : 'text-fg-muted hover:bg-bg-subtle',
+              )}>{label}</button>
+            ))}
+          </div>
+
+          {/* Категория */}
+          {categories.length > 0 && (
+            <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}
+              className="h-8 px-2 rounded border border-border-subtle bg-surface text-fg">
+              <option value="">Все категории</option>
+              {categories.map(([n, c]) => (
+                <option key={n} value={n}>{n} ({c})</option>
+              ))}
+            </select>
+          )}
+
+          {/* Тег */}
+          {tagsAll.length > 0 && (
+            <select value={filterTag} onChange={(e) => setFilterTag(e.target.value)}
+              className="h-8 px-2 rounded border border-border-subtle bg-surface text-fg">
+              <option value="">Все теги</option>
+              {tagsAll.map(([t, c]) => <option key={t} value={t}>#{t} ({c})</option>)}
+            </select>
+          )}
+
+          {/* 🔥 hot */}
+          <button onClick={() => setFilterHot((v) => !v)} className={cn(
+            'inline-flex items-center gap-1 px-2.5 py-1 rounded border',
+            filterHot ? 'border-rose-500 bg-rose-50 text-rose-700' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+          )}>
+            <Flame className="w-3.5 h-3.5" /> Горячие
+          </button>
+
+          {/* Очистка фильтров */}
+          {(filterCategory || filterTag || filterHot || filterArchive !== 'active') && (
+            <button onClick={() => {
+              setFilterCategory(''); setFilterTag(''); setFilterHot(false); setFilterArchive('active')
+            }} className="text-fg-muted hover:text-fg">
+              × сброс
             </button>
-          ))}
-        </div>
+          )}
+
+          <div className="ml-auto flex items-center gap-2">
+            {selectedIds.size > 0 && (
+              <>
+                <span className="text-fg-muted">
+                  выбрано: <strong className="text-fg">{selectedIds.size}</strong>
+                </span>
+                <button onClick={clearSelection} className="text-fg-muted hover:text-fg">× снять</button>
+                <Button onClick={() => setShowBulk(true)}>
+                  <Settings2 className="w-3.5 h-3.5" /> Массовая правка
+                </Button>
+              </>
+            )}
+            {selectedIds.size === 0 && products.length > 0 && (
+              <button onClick={selectAllVisible} className="text-fg-muted hover:text-fg border border-border-subtle rounded px-2 py-1">
+                Выбрать всё видимое
+              </button>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {showBulk && (
+        <BulkMetaModal productIds={[...selectedIds]} onClose={() => {
+          setShowBulk(false); clearSelection()
+        }} />
       )}
 
       {error && (
@@ -284,10 +401,21 @@ export function Products() {
             <table className="w-full text-sm">
               <thead className="bg-bg-subtle/60 border-b border-border-subtle">
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
-                  <th className="py-3 px-4 w-14"></th>
+                  <th className="py-3 px-2 w-8">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.size === products.length && products.length > 0}
+                      onChange={() => selectedIds.size === products.length ? clearSelection() : selectAllVisible()}
+                      className="w-3.5 h-3.5 accent-indigo-600"
+                      title="Выбрать всё видимое"
+                    />
+                  </th>
+                  <th className="py-3 px-2 w-10"></th>
                   <th className="py-3 px-4">Товар</th>
-                  <th className="py-3 px-4">Кабинет</th>
+                  <th className="py-3 px-4">Кабинет / Категория</th>
                   <th className="py-3 px-4 text-right">Цена</th>
+                  <th className="py-3 px-4 text-right">Себест.</th>
+                  <th className="py-3 px-4 text-right">Маржа</th>
                   <th className="py-3 px-4 text-right">Остаток</th>
                   <th className="py-3 px-2 w-8"></th>
                 </tr>
@@ -295,14 +423,36 @@ export function Products() {
               <tbody className="divide-y divide-border-subtle">
                 {products.map((p) => {
                   const expanded = expandedId === p.id
+                  const checked = selectedIds.has(p.id)
+                  const sellingPrice = p.marketing_price ?? p.current_price
+                  const margin =
+                    sellingPrice && p.cost_price && sellingPrice > 0
+                      ? (sellingPrice - p.cost_price) / sellingPrice * 100
+                      : null
+                  const marginCls =
+                    margin === null ? 'text-fg-muted' :
+                    margin >= 30 ? 'text-emerald-700' :
+                    margin >= 10 ? 'text-amber-700' :
+                    'text-rose-700'
                   return (
                     <Fragment key={p.id}>
                       <tr
                         onClick={() => setExpandedId(expanded ? null : p.id)}
-                        className="hover:bg-bg-subtle/40 transition-colors cursor-pointer"
+                        className={cn(
+                          'hover:bg-bg-subtle/40 transition-colors cursor-pointer',
+                          checked && 'bg-indigo-50/40',
+                        )}
                       >
-                        <td className="py-3 px-4">
-                          <div className="w-10 h-10 rounded-md bg-bg-subtle border border-border-subtle flex items-center justify-center overflow-hidden">
+                        <td className="py-3 px-2" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleId(p.id)}
+                            className="w-3.5 h-3.5 accent-indigo-600"
+                          />
+                        </td>
+                        <td className="py-3 px-2">
+                          <div className="w-10 h-10 rounded-md bg-bg-subtle border border-border-subtle flex items-center justify-center overflow-hidden relative">
                             {p.image_url ? (
                               <img
                                 src={p.image_url}
@@ -312,11 +462,16 @@ export function Products() {
                             ) : (
                               <ImageIcon className="w-4 h-4 text-fg-subtle" />
                             )}
+                            {p.is_hot && (
+                              <span className="absolute -top-1 -right-1 text-sm" title="Горячий товар">🔥</span>
+                            )}
                           </div>
                         </td>
-                        <td className="py-3 px-4 max-w-[420px]">
-                          <div className="font-medium text-fg truncate">{p.name}</div>
-                          <div className="flex items-center gap-2 text-[11px] text-fg-muted mt-0.5 flex-wrap">
+                        <td className="py-3 px-4 max-w-[380px]">
+                          <div className="font-medium text-fg truncate flex items-center gap-1.5">
+                            {p.name}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[11px] text-fg-muted mt-0.5 flex-wrap">
                             <span className="font-mono">SKU {p.ozon_sku}</span>
                             <span>·</span>
                             <span className="font-mono truncate">{p.offer_id}</span>
@@ -326,6 +481,14 @@ export function Products() {
                                 Архив
                               </span>
                             )}
+                            {p.tags?.slice(0, 3).map((t) => (
+                              <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">
+                                #{t}
+                              </span>
+                            ))}
+                            {p.tags && p.tags.length > 3 && (
+                              <span className="text-[10px] text-fg-subtle">+{p.tags.length - 3}</span>
+                            )}
                           </div>
                         </td>
                         <td className="py-3 px-4">
@@ -333,12 +496,14 @@ export function Products() {
                           <div className="text-[10px] text-fg-subtle uppercase tracking-wider">
                             {p.cabinet_premium_tier.replace('_', ' ')}
                           </div>
+                          {p.category_name && (
+                            <div className="text-[10px] text-fg-muted mt-0.5 truncate" title={p.category_name}>
+                              {p.category_name}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-right">
                           {(() => {
-                            // Покупатель на витрине видит marketing_price (с СПП).
-                            // current_price (исходная цена продавца) показываем
-                            // зачёркнутой, если она ВЫШЕ чем marketing_price.
                             const visible = p.marketing_price ?? p.current_price
                             const showOriginal =
                               p.marketing_price != null &&
@@ -361,6 +526,14 @@ export function Products() {
                           })()}
                         </td>
                         <td className="py-3 px-4 text-right">
+                          {p.cost_price != null
+                            ? <span className="font-mono tabular-nums text-fg-muted">{formatCurrency(p.cost_price)}</span>
+                            : <span className="text-fg-subtle text-xs">не указана</span>}
+                        </td>
+                        <td className={cn('py-3 px-4 text-right tabular-nums font-semibold', marginCls)}>
+                          {margin === null ? '—' : `${margin.toFixed(1)}%`}
+                        </td>
+                        <td className="py-3 px-4 text-right">
                           <StockBreakdownChip productId={p.id} totalAvailable={p.total_stock} alignRight />
                         </td>
                         <td className="py-3 px-2 text-fg-subtle">
@@ -374,7 +547,7 @@ export function Products() {
                       </tr>
                       {expanded && (
                         <tr>
-                          <td colSpan={6} className="bg-bg-subtle/30 px-6 py-3">
+                          <td colSpan={9} className="bg-bg-subtle/30 px-6 py-3">
                             <StockBreakdown productId={p.id} />
                           </td>
                         </tr>

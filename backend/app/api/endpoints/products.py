@@ -66,6 +66,7 @@ class ProductItem(BaseModel):
     name: str
     offer_id: str
     ozon_sku: int
+    cost_price: float | None
     current_price: float | None
     old_price: float | None
     marketing_price: float | None
@@ -77,6 +78,10 @@ class ProductItem(BaseModel):
     cabinet_name: str
     cabinet_premium_tier: str
     total_stock: int  # sum free_to_sell across warehouses в последнем снимке
+    category_id: int | None = None
+    category_name: str | None = None
+    tags: list[str] = []
+    is_hot: bool = False
 
 
 @router.get("/", response_model=list[ProductItem])
@@ -169,6 +174,7 @@ async def list_products(
                 name=product.name,
                 offer_id=product.offer_id,
                 ozon_sku=product.ozon_sku,
+                cost_price=float(product.cost_price) if product.cost_price is not None else None,
                 current_price=float(product.current_price) if product.current_price is not None else None,
                 old_price=float(product.old_price) if product.old_price is not None else None,
                 marketing_price=float(product.marketing_price) if product.marketing_price is not None else None,
@@ -180,6 +186,10 @@ async def list_products(
                 cabinet_name=row.cabinet_name,
                 cabinet_premium_tier=row.cabinet_premium_tier,
                 total_stock=stock_map.get(product.id, 0),
+                category_id=product.category_id,
+                category_name=product.category_name,
+                tags=list(product.tags or []),
+                is_hot=bool(product.is_hot),
             )
         )
 
@@ -207,6 +217,169 @@ async def product_stock_details(
     if not ok:
         raise HTTPException(status_code=404, detail="Товар не найден")
     return (await get_stock(db, pid)).to_dict()
+
+
+# =====================================================================
+# КАТЕГОРИИ / ТЕГИ / ГОРЯЧИЕ — единый справочник
+# =====================================================================
+
+
+class CategoryItem(BaseModel):
+    category_id: int | None
+    category_name: str
+    product_count: int
+
+
+@router.get("/categories-list", response_model=list[CategoryItem])
+async def list_categories(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[CategoryItem]:
+    """Реальные категории из товаров — для фильтров."""
+    rows = (await db.execute(
+        select(
+            Product.category_id, Product.category_name, func.count(Product.id).label("cnt"),
+        )
+        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+        .where(
+            OzonAccount.company_id == current_user.company_id,
+            Product.deleted_at.is_(None),
+            Product.category_name.is_not(None),
+        )
+        .group_by(Product.category_id, Product.category_name)
+        .order_by(func.count(Product.id).desc())
+    )).all()
+    return [
+        CategoryItem(category_id=r.category_id, category_name=r.category_name, product_count=r.cnt)
+        for r in rows
+    ]
+
+
+@router.get("/tags-list", response_model=list[dict])
+async def list_tags(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Все теги юзера (из products.tags). Не справочник — реальные использованные."""
+    rows = (await db.execute(
+        select(Product.tags)
+        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+        .where(
+            OzonAccount.company_id == current_user.company_id,
+            Product.deleted_at.is_(None),
+        )
+    )).all()
+    counts: dict[str, int] = {}
+    for r in rows:
+        tags = r[0] or []
+        for t in tags:
+            if isinstance(t, str) and t.strip():
+                counts[t.strip()] = counts.get(t.strip(), 0) + 1
+    return [{"tag": t, "count": c} for t, c in sorted(counts.items(), key=lambda x: -x[1])]
+
+
+class ProductMetaPatch(BaseModel):
+    tags: list[str] | None = None
+    is_hot: bool | None = None
+    cost_price: float | None = None
+
+
+@router.patch("/{product_id}/meta")
+async def patch_product_meta(
+    product_id: str,
+    payload: ProductMetaPatch,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Редактировать tags / is_hot / cost_price одного товара."""
+    import uuid as _uuid
+    try:
+        pid = _uuid.UUID(product_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный product_id")
+
+    prod = (await db.execute(
+        select(Product)
+        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+        .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
+    )).scalar_one_or_none()
+    if not prod:
+        raise HTTPException(404, "Товар не найден")
+
+    if payload.tags is not None:
+        # нормализуем: trim + dedup + max 20 тегов
+        clean = []
+        for t in payload.tags[:20]:
+            t = (t or "").strip()
+            if t and t not in clean:
+                clean.append(t)
+        prod.tags = clean
+    if payload.is_hot is not None:
+        prod.is_hot = bool(payload.is_hot)
+    if payload.cost_price is not None:
+        prod.cost_price = payload.cost_price
+
+    await db.commit()
+    await db.refresh(prod)
+    return {
+        "id": str(prod.id),
+        "tags": list(prod.tags or []),
+        "is_hot": bool(prod.is_hot),
+        "cost_price": float(prod.cost_price) if prod.cost_price is not None else None,
+    }
+
+
+class BulkMetaPatch(BaseModel):
+    product_ids: list[str]
+    add_tags: list[str] = []
+    remove_tags: list[str] = []
+    is_hot: bool | None = None
+    cost_price: float | None = None  # ставит единой суммой
+    cost_price_add: float | None = None  # добавляет к существующей (упаковка 150₽)
+
+
+@router.patch("/bulk/meta")
+async def patch_bulk_meta(
+    payload: BulkMetaPatch,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Массовая правка нескольких товаров. Юзер: «упаковка 150₽ всем»."""
+    import uuid as _uuid
+    try:
+        pids = [_uuid.UUID(p) for p in payload.product_ids]
+    except ValueError:
+        raise HTTPException(400, "Невалидный product_id в списке")
+    if not pids:
+        raise HTTPException(400, "Нужно хотя бы 1 product_id")
+
+    products = (await db.execute(
+        select(Product)
+        .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+        .where(Product.id.in_(pids), OzonAccount.company_id == current_user.company_id)
+    )).scalars().all()
+    updated = 0
+    for prod in products:
+        if payload.add_tags or payload.remove_tags:
+            current = list(prod.tags or [])
+            for t in payload.add_tags:
+                t = (t or "").strip()
+                if t and t not in current:
+                    current.append(t)
+            current = [t for t in current if t not in payload.remove_tags][:20]
+            prod.tags = current
+        if payload.is_hot is not None:
+            prod.is_hot = bool(payload.is_hot)
+        if payload.cost_price is not None:
+            prod.cost_price = payload.cost_price
+        elif payload.cost_price_add is not None and prod.cost_price is not None:
+            prod.cost_price = float(prod.cost_price) + payload.cost_price_add
+        elif payload.cost_price_add is not None:
+            # был NULL — ставим только надбавку
+            prod.cost_price = payload.cost_price_add
+        updated += 1
+    await db.commit()
+    return {"updated": updated, "total_requested": len(pids)}
 
 
 @router.get("/{product_id}/stocks", response_model=list[ProductStockRow])
