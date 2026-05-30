@@ -54,6 +54,9 @@ class DayMetrics(BaseModel):
     avg_sold_price: float | None     # средний oi.price дня — если Ozon снижал СПП, увидим
     seller_price: float | None       # текущая selling_price (из карточки)
     price_dropped_pct: float | None  # насколько ниже текущего selling_price (если >0 — Ozon снизил цену)
+    # «Оплачено покупателем» с СПП/Ozon-Картой за этот день (среднее по customer_price)
+    avg_customer_price: float | None = None
+    customer_spp_pct: float | None = None  # размер СПП в %: 1 − customer_price / seller_price
 
     # Реклама
     ad_impressions: int
@@ -272,21 +275,31 @@ async def explain_day(
     ad_drr = round(ad_spend / revenue * 100, 2) if revenue > 0 else None
 
     # ─── Средняя ФАКТИЧЕСКАЯ цена дня из order_items (если Ozon снижал — увидим) ───
+    # + средняя customer_price (= цена покупателя с СПП) того же дня.
+    avg_sold = None
+    avg_customer = None
     if product_id is not None:
         op_row = (await db.execute(text("""
-            SELECT AVG(oi.price)::float avg_p, COUNT(*) n
+            SELECT AVG(oi.price)::float avg_p,
+                   AVG(oi.customer_price)::float avg_cp,
+                   COUNT(*) n
             FROM order_items oi JOIN orders o ON o.id = oi.order_id
             WHERE oi.product_id = :pid
               AND DATE(o.order_created_at) = :d
               AND oi.price > 0
         """), {"pid": str(product_id), "d": date})).first()
         avg_sold = float(op_row.avg_p) if op_row and op_row.avg_p else None
-    else:
-        avg_sold = None  # для агрегата по всем товарам цена бессмысленна
+        avg_customer = float(op_row.avg_cp) if op_row and op_row.avg_cp else None
 
     price_dropped_pct = (
         round((seller_price - avg_sold) / seller_price * 100, 1)
         if (seller_price and avg_sold and seller_price > 0 and avg_sold < seller_price * 0.99)
+        else None
+    )
+    # СПП-скидка покупателю: на сколько % customer_price ниже цены продавца
+    customer_spp_pct = (
+        round((1 - avg_customer / seller_price) * 100, 1)
+        if (avg_customer and seller_price and seller_price > 0)
         else None
     )
 
@@ -322,6 +335,8 @@ async def explain_day(
         avg_sold_price=avg_sold,
         seller_price=seller_price,
         price_dropped_pct=price_dropped_pct,
+        avg_customer_price=avg_customer,
+        customer_spp_pct=customer_spp_pct,
         ad_impressions=ad_imp,
         ad_clicks=ad_clk,
         ad_orders=ad_ord,
@@ -388,7 +403,17 @@ async def explain_day(
             text=f"Реклама съела {ad_drr}% выручки. Это снижает маржу.",
         ))
 
-    # 4) Снижение цены продажи (Ozon крутил СПП)
+    # 4a) Цена покупателя с СПП (Ozon-Карта/Premium). Информационно, не финансы.
+    if product_id is not None and avg_customer and customer_spp_pct and customer_spp_pct >= 5:
+        factors.append(DayFactor(
+            type="customer_spp", severity="info",
+            title=f"Цена покупателя {avg_customer:,.0f}₽ (СПП −{customer_spp_pct}%)",
+            text=f"Покупатели в этот день платили в среднем {avg_customer:,.0f}₽ (с учётом Ozon-СПП/Premium/баллов). "
+                 f"На {customer_spp_pct}% ниже твоей цены {seller_price:,.0f}₽. На твою выручку это не влияет — "
+                 f"начисление = твоя цена; но это драйвер спроса.",
+        ))
+
+    # 4b) Снижение цены продажи (Ozon крутил СПП самой ставки продавца)
     if price_dropped_pct and price_dropped_pct >= 1.5:
         factors.append(DayFactor(
             type="price_drop", severity="info",

@@ -34,6 +34,7 @@ interface CorrPoint {
   orders: number
   price?: number | null
   marketing_price?: number | null
+  customer_price?: number | null   // средняя customer_price дня (СПП-цена покупателя)
   is_stockout?: boolean
 }
 interface LagCorr { lag_days: number; r: number | null }
@@ -159,6 +160,7 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
     orders: p.orders,
     price: p.price ?? null,
     spp: p.marketing_price ?? null,
+    customer: p.customer_price ?? null,
     is_stockout: p.is_stockout || false,
   }))
 
@@ -222,8 +224,9 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
             )}
             <Tooltip
               formatter={(v: number, name: string) => {
-                if (name === 'spp')  return [v ? `${formatNumber(v)} ₽` : '—', 'СПП']
-                if (name === 'price') return [v ? `${formatNumber(v)} ₽` : '—', 'Цена']
+                if (name === 'spp')  return [v ? `${formatNumber(v)} ₽` : '—', 'СПП (карточка)']
+                if (name === 'price') return [v ? `${formatNumber(v)} ₽` : '—', 'Цена продавца']
+                if (name === 'customer') return [v ? `${formatNumber(v)} ₽` : '—', 'Покупатель факт.']
                 if (name === 'orders') return [formatNumber(v), 'Заказы']
                 if (name === 'impressions') return [formatNumber(v), 'Показы']
                 return [formatNumber(v), name]
@@ -233,8 +236,9 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
                     formatter={(v: string) => (
                       v === 'impressions' ? 'Показы' :
                       v === 'orders' ? 'Заказы' :
-                      v === 'spp' ? 'СПП' :
-                      v === 'price' ? 'Цена' : v
+                      v === 'spp' ? 'СПП (карточка)' :
+                      v === 'customer' ? 'Покупатель факт.' :
+                      v === 'price' ? 'Цена продавца' : v
                     )} />
             {/* Красные зоны стокаута поверх */}
             {stockoutSpans.map((s, i) => (
@@ -250,6 +254,9 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
                       strokeWidth={1.5} strokeDasharray="4 3" dot={false} name="price" />
                 <Line yAxisId="price" type="monotone" dataKey="spp" stroke="#a855f7"
                       strokeWidth={2} dot={false} name="spp" />
+                {/* Реальная цена покупателя с СПП по дням — драйвер спроса */}
+                <Line yAxisId="price" type="monotone" dataKey="customer" stroke="#2563eb"
+                      strokeWidth={2} dot={{ r: 2 }} connectNulls name="customer" />
               </>
             )}
           </ComposedChart>

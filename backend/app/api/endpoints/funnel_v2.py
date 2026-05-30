@@ -107,6 +107,9 @@ class FunnelDailyPoint(BaseModel):
     cart_conv_pct: float | None
     order_conv_pct: float | None
     delivery_conv_pct: float | None
+    # Средняя «цена покупателя с СПП» за день — драйвер спроса, не влияет на выручку
+    avg_customer_price: float | None = None
+    avg_seller_price: float | None = None
 
 
 class BestWorstDay(BaseModel):
@@ -428,6 +431,25 @@ async def get_funnel_daily(
         .order_by("d")
     )).all()
 
+    # Параллельно — средние customer_price/seller_price по дням из order_items
+    # (по тем же accounts/products/период). Это драйвер спроса для overlay на графике.
+    price_where_sql = "o.ozon_account_id = ANY(:accs) AND DATE(o.order_created_at) BETWEEN :df AND :dt"
+    price_params: dict = {"accs": list(map(str, accs)), "df": date_from, "dt": date_to}
+    if pids:
+        price_where_sql += " AND oi.product_id = ANY(:pids)"
+        price_params["pids"] = list(map(str, pids))
+    price_rows = (await db.execute(text(f"""
+        SELECT DATE(o.order_created_at) d,
+               AVG(oi.customer_price)::float avg_cust,
+               AVG(oi.price)::float avg_sell
+        FROM order_items oi JOIN orders o ON o.id = oi.order_id
+        WHERE {price_where_sql}
+          AND o.status = 'delivered'
+          AND oi.price > 0
+        GROUP BY 1
+    """), price_params)).all()
+    price_map = {pr.d: (pr.avg_cust, pr.avg_sell) for pr in price_rows}
+
     out: list[FunnelDailyPoint] = []
     for r in rows:
         imp_s = int(r.imp_s or 0)
@@ -439,6 +461,7 @@ async def get_funnel_daily(
         cart = cart_s + cart_p
         orders = int(r.orders or 0)
         deliv = int(r.deliv or 0)
+        avg_cust, avg_sell = price_map.get(r.d, (None, None))
         out.append(FunnelDailyPoint(
             date=r.d.isoformat(),
             impressions=imp,
@@ -457,6 +480,8 @@ async def get_funnel_daily(
             cart_conv_pct=_safe_pct(cart, imp),
             order_conv_pct=_safe_pct(orders, cart),
             delivery_conv_pct=_safe_pct(deliv, orders),
+            avg_customer_price=float(avg_cust) if avg_cust else None,
+            avg_seller_price=float(avg_sell) if avg_sell else None,
         ))
     return out
 
@@ -632,6 +657,7 @@ class CorrPoint(BaseModel):
     orders: int
     price: float | None = None              # текущая цена в этот день
     marketing_price: float | None = None    # СПП — реальная цена для покупателя
+    customer_price: float | None = None     # средняя «оплачено покупателем» с СПП за этот день
     is_stockout: bool = False               # был ли товар в стокауте
 
 
@@ -750,6 +776,21 @@ async def funnel_correlations(
                 if p.date in stock_by_day:
                     last_known = stock_by_day[p.date]
                 p.is_stockout = (last_known == 0) if last_known is not None else False
+
+            # avg customer_price (СПП) по дням из order_items — динамический оверлей
+            cp_rows = (await db.execute(text("""
+              SELECT DATE(o.order_created_at) d, AVG(oi.customer_price)::float avg_cp
+              FROM order_items oi JOIN orders o ON o.id = oi.order_id
+              WHERE oi.product_id = :pid AND o.status = 'delivered'
+                AND DATE(o.order_created_at) BETWEEN :df AND :dt
+                AND oi.customer_price IS NOT NULL
+              GROUP BY 1
+            """), {"pid": str(pid), "df": date_from, "dt": date_to})).all()
+            cp_by_day = {r.d.isoformat(): float(r.avg_cp) for r in cp_rows if r.avg_cp}
+            for p in series:
+                if p.date in cp_by_day:
+                    p.customer_price = cp_by_day[p.date]
+                    has_price_overlay = True
 
     imps = [float(p.impressions) for p in series]
     ords = [float(p.orders) for p in series]

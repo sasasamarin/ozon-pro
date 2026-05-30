@@ -19,6 +19,8 @@ interface DayMetrics {
   avg_sold_price: number | null
   seller_price: number | null
   price_dropped_pct: number | null
+  avg_customer_price?: number | null     // средняя customer_price этого дня
+  customer_spp_pct?: number | null       // СПП покупателя в %
   ad_impressions: number
   ad_clicks: number
   ad_orders: number
@@ -57,6 +59,7 @@ const FACTOR_ICON: Record<string, typeof AlertTriangle> = {
   high_drr: Megaphone,
   price_drop: Tag,
   price_ok: Tag,
+  customer_spp: Tag,
   impressions_drop: TrendingDown,
   cr_drop: TrendingDown,
   normal: CheckCircle2,
@@ -262,16 +265,27 @@ export function DayExplanationDrawer({
                     <div className="text-xs font-medium text-fg-muted uppercase tracking-wider flex items-center gap-1.5">
                       <Tag className="w-3.5 h-3.5" /> Цена дня
                     </div>
-                    <div className="mt-1.5">
-                      <div className="text-xl font-bold tabular-nums">
-                        {data.day.avg_sold_price != null ? formatCurrency(data.day.avg_sold_price) : '—'}
+                    <div className="mt-1.5 space-y-1">
+                      <div title="Средняя цена продавца (= accruals_for_sale = твоя выручка на единицу).">
+                        <div className="text-xs text-fg-muted">Продавцу</div>
+                        <div className="text-base font-bold tabular-nums">
+                          {data.day.avg_sold_price != null ? formatCurrency(data.day.avg_sold_price) : '—'}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-fg-subtle">
-                        Текущая selling_price: {data.day.seller_price != null ? formatCurrency(data.day.seller_price) : '—'}
-                      </div>
+                      {data.day.avg_customer_price != null && (
+                        <div className="mt-1.5 pt-1.5 border-t border-border-subtle/40" title="Средняя «оплачено покупателем» с СПП/Ozon-Картой. На выручку не влияет, драйвер спроса.">
+                          <div className="text-xs text-blue-700">С СПП покупателю</div>
+                          <div className="text-base font-bold tabular-nums text-blue-700">
+                            {formatCurrency(data.day.avg_customer_price)}
+                            {data.day.customer_spp_pct != null && (
+                              <span className="text-[11px] text-blue-500 ml-1">−{data.day.customer_spp_pct}%</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                       {data.day.price_dropped_pct != null && (
-                        <div className="text-xs text-blue-700 mt-1">
-                          Ozon снизил цену на {data.day.price_dropped_pct}%
+                        <div className="text-[11px] text-amber-700 mt-1">
+                          Ozon снизил твою цену на {data.day.price_dropped_pct}%
                         </div>
                       )}
                     </div>
