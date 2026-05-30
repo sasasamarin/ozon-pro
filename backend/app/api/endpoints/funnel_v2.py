@@ -69,7 +69,11 @@ class AdBreakdownRow(BaseModel):
 
 class AdBlock(BaseModel):
     total_spend: float
-    drr_pct: float | None
+    drr_pct: float | None       # legacy = drr_overall_pct (для обратной совмест.)
+    # ДРР разделён, юзер: «Ozon ДРР 1.1% (рекламный) vs наш 2.94% (общий)»
+    drr_advertising_pct: float | None  # spend(PA) / revenue_from_ads(PA) — как у Ozon
+    drr_overall_pct: float | None      # spend(tx) / total_revenue (доля в обороте)
+    ad_revenue: float           # выручка ИЗ рекламы (ad_statistics.revenue)
     breakdown: list[AdBreakdownRow]
     has_data: bool
 
@@ -229,7 +233,11 @@ async def _ad_breakdown(
     revenue: float,
 ) -> AdBlock:
     if not accs:
-        return AdBlock(total_spend=0, drr_pct=None, breakdown=[], has_data=False)
+        return AdBlock(
+            total_spend=0, drr_pct=None,
+            drr_advertising_pct=None, drr_overall_pct=None, ad_revenue=0,
+            breakdown=[], has_data=False,
+        )
     dt_from = datetime.combine(date_from, datetime.min.time(), tzinfo=UTC)
     dt_to = datetime.combine(date_to + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
 
@@ -263,10 +271,31 @@ async def _ad_breakdown(
                 model=model,
             ))
     breakdown.sort(key=lambda x: x.amount, reverse=True)
-    drr = (total / revenue * 100) if revenue else None
+
+    drr_overall = (total / revenue * 100) if revenue else None
+
+    # Рекламный ДРР как у Ozon: spend / revenue ТОЛЬКО от рекламы.
+    # Источник = ad_statistics (PA daily), он покрывает SKU+search_promo.
+    ad_pa_row = (await db.execute(
+        select(
+            func.coalesce(func.sum(AdStatistics.spend), 0).label("spend"),
+            func.coalesce(func.sum(AdStatistics.revenue), 0).label("rev"),
+        ).where(
+            AdStatistics.ozon_account_id.in_(accs),
+            AdStatistics.date >= date_from,
+            AdStatistics.date <= date_to,
+        )
+    )).one()
+    pa_spend = float(ad_pa_row.spend or 0)
+    pa_rev = float(ad_pa_row.rev or 0)
+    drr_ad = (pa_spend / pa_rev * 100) if pa_rev else None
+
     return AdBlock(
         total_spend=round(total, 2),
-        drr_pct=round(drr, 2) if drr is not None else None,
+        drr_pct=round(drr_overall, 2) if drr_overall is not None else None,
+        drr_advertising_pct=round(drr_ad, 2) if drr_ad is not None else None,
+        drr_overall_pct=round(drr_overall, 2) if drr_overall is not None else None,
+        ad_revenue=round(pa_rev, 2),
         breakdown=breakdown,
         has_data=total > 0,
     )
@@ -309,7 +338,11 @@ async def get_funnel_v2(
             delivery_conv_pct=None, overall_conv_pct=None,
             ctr_pct=None, click_to_cart_pct=None,
         )
-        empty_ad = AdBlock(total_spend=0, drr_pct=None, breakdown=[], has_data=False)
+        empty_ad = AdBlock(
+            total_spend=0, drr_pct=None,
+            drr_advertising_pct=None, drr_overall_pct=None, ad_revenue=0,
+            breakdown=[], has_data=False,
+        )
         return FunnelV2Resp(
             period_from=date_from.isoformat(), period_to=date_to.isoformat(),
             product_id=product_id, product_name=prod_name,

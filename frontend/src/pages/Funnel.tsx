@@ -16,11 +16,15 @@ import { useCabinetStore } from '@/stores/cabinet'
 
 interface FunnelKPI {
   impressions: number
+  impressions_search?: number       // Показы в поиске (для 6-ступенчатой воронки Ozon)
+  card_visits?: number              // Посещения карточки (= clicks для legacy)
   clicks: number
   to_cart: number
   orders: number
   delivered: number
   revenue: number
+  search_to_card_pct?: number | null   // конверсия из поиска в карточку (~22% у Ozon)
+  card_to_cart_pct?: number | null     // конверсия карточка → корзина (~9% у Ozon)
   cart_conv_pct: number | null
   order_conv_pct: number | null
   delivery_conv_pct: number | null
@@ -39,7 +43,10 @@ interface AdBreakdownRow {
 
 interface AdBlock {
   total_spend: number
-  drr_pct: number | null
+  drr_pct: number | null            // legacy = drr_overall_pct
+  drr_advertising_pct: number | null  // как у Ozon — spend/ad_revenue
+  drr_overall_pct: number | null      // spend/total_revenue (доля в обороте)
+  ad_revenue: number
   breakdown: AdBreakdownRow[]
   has_data: boolean
 }
@@ -116,11 +123,12 @@ const PRESETS = [
   { key: '514', label: '17 мес' },
 ]
 
-type DrillStep = 'impressions' | 'clicks' | 'to_cart' | 'orders' | 'delivered' | null
+type DrillStep = 'impressions' | 'impressions_search' | 'clicks' | 'to_cart' | 'orders' | 'delivered' | null
 type BWMetric = 'overall' | 'cart' | 'order' | 'delivery'
 
 const DRILL_TITLES: Record<Exclude<DrillStep, null>, string> = {
   impressions: 'Детализация: Показы по дням',
+  impressions_search: 'Детализация: Показы в поиске по дням',
   clicks: 'Детализация: Посещения карточки по дням',
   to_cart: 'Детализация: В корзину по дням',
   orders: 'Детализация: Заказы по дням',
@@ -241,17 +249,25 @@ export function Funnel() {
   const ad = data?.ad
   const maxValue = useMemo(() => {
     if (!kpi) return 1
-    return Math.max(1, kpi.impressions, kpi.clicks, kpi.to_cart, kpi.orders, kpi.delivered)
+    return Math.max(1, kpi.impressions, (kpi as any).impressions_search ?? 0,
+      kpi.clicks, kpi.to_cart, kpi.orders, kpi.delivered)
   }, [kpi])
 
+  // 6 ступеней по эталону Ozon (Аналитика → Воронка продаж):
+  //   Показы всего → [конверсия поиск→карточка] → Посещения карточки →
+  //   [карточка→корзина] → Корзина → [корзина→заказ] → Заказы →
+  //   [заказ→выкуп] → Доставлено
+  // Между шагами — ↳ конверсия отдельной строкой.
   const steps = useMemo(() => {
     if (!kpi) return []
+    const k = kpi as any
     return [
-      { key: 'impressions' as const, label: 'Показы',     icon: Eye,                value: kpi.impressions, conv: null,                   convLabel: null,        color: 'bg-indigo-400'  },
-      { key: 'clicks'      as const, label: 'Карточка',   icon: MousePointerClick,  value: kpi.clicks,      conv: kpi.ctr_pct,            convLabel: 'в карточку', color: 'bg-blue-400'    },
-      { key: 'to_cart'     as const, label: 'В корзину',  icon: ShoppingCart,       value: kpi.to_cart,     conv: kpi.click_to_cart_pct,  convLabel: 'в корзину', color: 'bg-violet-400'  },
-      { key: 'orders'      as const, label: 'Заказы',     icon: ShoppingBag,        value: kpi.orders,      conv: kpi.order_conv_pct,     convLabel: 'в заказ',   color: 'bg-emerald-400' },
-      { key: 'delivered'   as const, label: 'Доставлено', icon: CheckCircle2,       value: kpi.delivered,   conv: kpi.delivery_conv_pct,  convLabel: 'выкуп',     color: 'bg-amber-400'   },
+      { key: 'impressions'        as const, label: 'Показы всего',           icon: Eye,                value: kpi.impressions,             conv: null,                          convLabel: null,                  color: 'bg-slate-400'   },
+      { key: 'impressions_search' as const, label: 'Показы в поиске',        icon: Eye,                value: k.impressions_search ?? 0,    conv: null,                          convLabel: 'из общих показов',    color: 'bg-indigo-400'  },
+      { key: 'clicks'             as const, label: 'Посещения карточки',     icon: MousePointerClick,  value: kpi.clicks,                   conv: k.search_to_card_pct ?? kpi.ctr_pct, convLabel: 'поиск → карточка', color: 'bg-blue-400'    },
+      { key: 'to_cart'            as const, label: 'В корзину',              icon: ShoppingCart,       value: kpi.to_cart,                  conv: k.card_to_cart_pct ?? kpi.click_to_cart_pct, convLabel: 'карточка → корзина', color: 'bg-violet-400'  },
+      { key: 'orders'             as const, label: 'Заказы',                 icon: ShoppingBag,        value: kpi.orders,                   conv: kpi.order_conv_pct,            convLabel: 'корзина → заказ',     color: 'bg-emerald-400' },
+      { key: 'delivered'          as const, label: 'Доставлено',             icon: CheckCircle2,       value: kpi.delivered,                conv: kpi.delivery_conv_pct,         convLabel: 'заказ → выкуп',       color: 'bg-amber-400'   },
     ]
   }, [kpi])
 
@@ -389,16 +405,49 @@ export function Funnel() {
         </Card>
       ) : (
         <>
-          {/* === 6 KPI === */}
+          {/* === KPI (Ozon-эталон + раздельный ДРР) === */}
           <div className={cn('grid grid-cols-2 lg:grid-cols-6 gap-3 transition-opacity', isFetching && 'opacity-50')}>
             <ConvCard label="Сквозная" curr={kpi!.overall_conv_pct} prev={prev?.overall_conv_pct} />
-            <ConvCard label="Показ→карточка" curr={kpi!.ctr_pct} prev={prev?.ctr_pct} />
-            <ConvCard label="В корзину" curr={kpi!.cart_conv_pct} prev={prev?.cart_conv_pct} />
-            <ConvCard label="Корзина → заказ" curr={kpi!.order_conv_pct} prev={prev?.order_conv_pct} />
-            <ConvCard label="Заказ → выкуп" curr={kpi!.delivery_conv_pct} prev={prev?.delivery_conv_pct} />
-            <ConvCard label="ДРР" curr={ad?.drr_pct ?? null} prev={null}
-              tooltip={!ad?.has_data ? 'Нет рекламных расходов в transactions за период' : undefined} />
+            <ConvCard label="Поиск → карточка"
+              curr={kpi!.search_to_card_pct ?? kpi!.ctr_pct}
+              prev={prev?.search_to_card_pct ?? prev?.ctr_pct}
+              tooltip="Конверсия из поиска/каталога в карточку. Эталон Ozon: ~22%." />
+            <ConvCard label="Карточка → корзина"
+              curr={kpi!.card_to_cart_pct ?? kpi!.click_to_cart_pct}
+              prev={prev?.card_to_cart_pct ?? prev?.click_to_cart_pct}
+              tooltip="Конверсия посещений карточки в добавления в корзину. Эталон Ozon: ~9%." />
+            <ConvCard label="Корзина → заказ" curr={kpi!.order_conv_pct} prev={prev?.order_conv_pct}
+              tooltip="Эталон Ozon: ~35%." />
+            <ConvCard label="Выкуп" curr={kpi!.delivery_conv_pct} prev={prev?.delivery_conv_pct}
+              tooltip="Заказ → доставлено. Эталон Ozon: ~90%." />
+            <ConvCard label="ДРР рекламный"
+              curr={ad?.drr_advertising_pct ?? null} prev={null}
+              tooltip={`Spend(PA) / выручка из рекламы (ad_statistics). Это та же формула что у Ozon в кабинете. ad_revenue: ${ad?.ad_revenue?.toLocaleString() || 0}₽`} />
           </div>
+
+          {/* === Два ДРР отдельно — юзер: «Ozon показывает 1.1% рекл., наш был 2.94% общий» === */}
+          {ad?.has_data && (
+            <Card className="p-3 flex flex-wrap items-stretch gap-4 text-xs">
+              <div className="flex-1 min-w-[200px]">
+                <div className="text-fg-muted uppercase text-[10px] tracking-wider">ДРР рекламный (как в кабинете Ozon)</div>
+                <div className="text-lg font-semibold text-fg tabular-nums">
+                  {ad.drr_advertising_pct !== null ? `${ad.drr_advertising_pct.toFixed(2)}%` : '—'}
+                </div>
+                <div className="text-fg-subtle mt-0.5">
+                  Эффективность рекламы как канала: расход / выручка ИЗ рекламы ({formatCurrency(ad.ad_revenue || 0)})
+                </div>
+              </div>
+              <div className="flex-1 min-w-[200px]">
+                <div className="text-fg-muted uppercase text-[10px] tracking-wider">ДРР общий</div>
+                <div className="text-lg font-semibold text-fg tabular-nums">
+                  {ad.drr_overall_pct !== null ? `${ad.drr_overall_pct.toFixed(2)}%` : '—'}
+                </div>
+                <div className="text-fg-subtle mt-0.5">
+                  Доля рекламы в обороте: расход / ВСЯ выручка (вкл. органику)
+                </div>
+              </div>
+            </Card>
+          )}
 
           {/* === 5 ШАГОВ ВОРОНКИ + КОНВЕРСИИ КРУПНО + 2 КОЛОНКИ === */}
           <Card className={cn('p-5 transition-opacity', isFetching && 'opacity-50')}>
