@@ -260,7 +260,7 @@ async def explain_day(
             func.coalesce(func.sum(AdStatistics.clicks), 0).label("clicks"),
             func.coalesce(func.sum(AdStatistics.orders), 0).label("orders"),
             func.coalesce(func.sum(AdStatistics.revenue), 0).label("revenue"),
-            func.coalesce(func.sum(AdStatistics.money_spent), 0).label("spent"),
+            func.coalesce(func.sum(AdStatistics.spend), 0).label("spent"),
         ).where(*ad_query_where)
     )).first()
 
@@ -294,17 +294,19 @@ async def explain_day(
     stock_total = 0
     stockout = False
     if product_id is not None:
+        # asyncpg не любит `:d::date` подряд — передаём готовый datetime upper-bound
+        end_dt = datetime.combine(date + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
         stk_row = (await db.execute(text("""
           WITH last_snap AS (
             SELECT MAX(time) t FROM stocks
-            WHERE product_id = :pid AND time < (:d::date + interval '1 day')
+            WHERE product_id = :pid AND time < :end_dt
               AND warehouse_type IN ('FBO_WH', 'FBO', 'AGG')
           )
           SELECT COALESCE(SUM(GREATEST(s.free_to_sell - s.reserved, 0)), 0) total
           FROM stocks s, last_snap l
           WHERE s.product_id = :pid AND s.time = l.t
             AND s.warehouse_type IN ('FBO_WH', 'FBO', 'AGG')
-        """), {"pid": str(product_id), "d": date})).first()
+        """), {"pid": str(product_id), "end_dt": end_dt})).first()
         stock_total = int(stk_row.total or 0) if stk_row else 0
         stockout = stock_total == 0
 
@@ -360,7 +362,7 @@ async def explain_day(
         if product_id is not None:
             avg_ad_where.append(AdStatistics.product_id.in_(product_ids))
         avg_ad = (await db.execute(
-            select(func.coalesce(func.sum(AdStatistics.money_spent), 0)).where(*avg_ad_where)
+            select(func.coalesce(func.sum(AdStatistics.spend), 0)).where(*avg_ad_where)
         )).scalar()
         avg_ad_spend_period = float(avg_ad or 0) / max(period_days - 1, 1)
 
