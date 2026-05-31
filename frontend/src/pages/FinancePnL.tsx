@@ -23,7 +23,9 @@ interface PnLResp {
   period_to: string
   has_missing_costs: boolean
   missing_costs_count: number
-  revenue: number
+  seller_revenue: number       // что Ozon начислил (accruals_for_sale)
+  buyer_revenue: number        // что заплатил покупатель (Order.total_amount)
+  revenue: number              // = seller_revenue (legacy alias)
   returned_revenue: number
   effective_revenue: number
   cogs: number
@@ -100,16 +102,29 @@ export function FinancePnL() {
         <CostWarningBanner count={data.missing_costs_count} context="profit" />
       )}
 
+      {data && (data.seller_revenue - data.buyer_revenue) > 1 && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm">
+          <p className="font-semibold text-emerald-900">Методика выручки исправлена</p>
+          <p className="text-emerald-800 mt-1">
+            Top-line теперь = <strong>Выручка продавца</strong> (Ozon начислил, accruals_for_sale).
+            Включает «Баллы за скидки» и «Программы партнёров» — это деньги, которые
+            Ozon доплачивает за участие в СПП. От этой цифры считается комиссия и маржа.
+          </p>
+          <p className="text-emerald-800 mt-1">
+            За период: продавец получил <span className="font-mono font-semibold">{formatCurrency(data.seller_revenue)}</span>,
+            покупатели заплатили <span className="font-mono">{formatCurrency(data.buyer_revenue)}</span>,
+            Ozon доплатил <span className="font-mono font-semibold text-emerald-900">
+              +{formatCurrency(data.seller_revenue - data.buyer_revenue)}
+            </span>.
+          </p>
+        </div>
+      )}
       {data && data.returned_revenue > 0 && (
         <div className="rounded-md border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm">
-          <p className="font-semibold text-amber-900">Методика учёта обновлена</p>
+          <p className="font-semibold text-amber-900">Возвраты — отдельной строкой</p>
           <p className="text-amber-800 mt-1">
-            Выручка теперь показывается «как в кабинете Ozon» (brut), возвраты —
-            отдельной строкой ниже. Налог считается от эффективной выручки
-            (revenue − возвраты). За этот период:
-            возвраты <span className="font-mono font-semibold">{formatCurrency(data.returned_revenue)}</span>
-            {' '}({data.revenue ? ((data.returned_revenue / data.revenue) * 100).toFixed(1) : '0'}%
-            от brut выручки).
+            Возвраты {formatCurrency(data.returned_revenue)} вычитаются из выручки.
+            Налог считается от эффективной выручки.
           </p>
         </div>
       )}

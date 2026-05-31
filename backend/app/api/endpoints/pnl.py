@@ -55,9 +55,17 @@ class PnLResponse(BaseModel):
     has_missing_costs: bool
     missing_costs_count: int
 
-    revenue: float                # brut — то что показано в кабинете Ozon (delivered)
+    # Две модели выручки (принцип «2 модели финансов»):
+    # - seller_revenue: что Ozon реально НАЧИСЛИЛ продавцу
+    #   (accruals_for_sale из транзакций). Главная цифра — от неё маржа и налог.
+    # - buyer_revenue: что заплатил покупатель (Order.total_amount, после СПП).
+    #   Справочно, для понимания «скидки за счёт Ozon».
+    # Разница = «Баллы за скидки» + «Программы партнёров» (Ozon доплачивает за СПП).
+    seller_revenue: float
+    buyer_revenue: float
+    revenue: float                # = seller_revenue (legacy alias для frontend)
     returned_revenue: float       # сумма возвратов по return_date в периоде
-    effective_revenue: float      # revenue − returned_revenue (база для расчётов и налога)
+    effective_revenue: float      # seller_revenue − returned_revenue (база для расчётов и налога)
     cogs: float
     gross_profit: float           # effective_revenue − cogs
     total_ozon_expenses: float
@@ -105,9 +113,10 @@ async def _account_ids(
     return [r[0] for r in (await db.execute(q)).all()]
 
 
-async def _revenue_for_window(
+async def _buyer_revenue_for_window(
     db: AsyncSession, *, accs: list[uuid.UUID], dt_from: datetime, dt_to: datetime
 ) -> float:
+    """Что заплатил покупатель (Order.total_amount). Справочно."""
     if not accs:
         return 0.0
     row = await db.execute(
@@ -117,6 +126,33 @@ async def _revenue_for_window(
             Order.order_created_at >= dt_from,
             Order.order_created_at < dt_to,
             Order.status == "delivered",
+        )
+    )
+    return float(row.scalar() or 0)
+
+
+async def _seller_revenue_for_window(
+    db: AsyncSession, *, accs: list[uuid.UUID], dt_from: datetime, dt_to: datetime
+) -> float:
+    """
+    Главная выручка — accruals_for_sale из transactions, по operation_date.
+
+    Включает компенсацию «Баллов за скидки» и «Программы партнёров» —
+    это деньги, которые Ozon ДОПЛАЧИВАЕТ продавцу за участие в скидках.
+    На эту цифру Ozon начисляет комиссию, от неё считается маржа продавца.
+
+    Источник истины — Ozon /v3/finance/transaction/list, operation_type
+    OperationAgentDeliveredToCustomer.
+    """
+    if not accs:
+        return 0.0
+    row = await db.execute(
+        select(func.coalesce(func.sum(Transaction.accruals_for_sale), 0))
+        .where(
+            Transaction.ozon_account_id.in_(accs),
+            Transaction.operation_date >= dt_from,
+            Transaction.operation_date < dt_to,
+            Transaction.operation_type == "OperationAgentDeliveredToCustomer",
         )
     )
     return float(row.scalar() or 0)
@@ -232,7 +268,10 @@ async def get_pnl(
 
     accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
 
-    revenue = await _revenue_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    seller_revenue = await _seller_revenue_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    buyer_revenue = await _buyer_revenue_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    # Top-line = seller_revenue. Это что Ozon начислил продавцу (incl. компенсации СПП).
+    revenue = seller_revenue
     returned_revenue = await _returned_revenue(db, accs=accs, dt_from=period_from, dt_to=period_to)
     effective_revenue = revenue - returned_revenue
     cogs = await _cogs_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
@@ -252,9 +291,23 @@ async def get_pnl(
         return round(v / revenue * 100, 2)
 
     rows: list[PnLRow] = [
-        PnLRow(label="Выручка (в кабинете Ozon)", amount=round(revenue, 2),
-               pct_of_revenue=100.0 if revenue else None),
+        PnLRow(label="Выручка продавца (Ozon начислил)", amount=round(seller_revenue, 2),
+               pct_of_revenue=100.0 if seller_revenue else None),
     ]
+    # Доплата Ozon за СПП = seller_revenue − buyer_revenue. Положительная разница =
+    # часть выручки, которую Ozon доплатил продавцу за скидку покупателю.
+    spp_compensation = seller_revenue - buyer_revenue
+    if abs(spp_compensation) > 1:
+        rows.append(PnLRow(
+            label=f"   в т.ч. компенсация СПП от Ozon",
+            amount=round(spp_compensation, 2),
+            pct_of_revenue=pct(spp_compensation),
+        ))
+        rows.append(PnLRow(
+            label=f"   справочно — заплатил покупатель",
+            amount=round(buyer_revenue, 2),
+            pct_of_revenue=pct(buyer_revenue),
+        ))
     if returned_revenue > 0:
         rows.append(PnLRow(
             label="− Возвраты покупателям",
@@ -335,7 +388,7 @@ async def get_pnl(
     if compare:
         prev_from = period_from - timedelta(days=days)
         prev_to = period_from
-        pr_rev = await _revenue_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
+        pr_rev = await _seller_revenue_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
         pr_returned = await _returned_revenue(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
         pr_eff = pr_rev - pr_returned
         pr_cogs = await _cogs_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
@@ -354,6 +407,8 @@ async def get_pnl(
         period_to=period_to.date().isoformat(),
         has_missing_costs=has_missing,
         missing_costs_count=missing_n,
+        seller_revenue=round(seller_revenue, 2),
+        buyer_revenue=round(buyer_revenue, 2),
         revenue=round(revenue, 2),
         returned_revenue=round(returned_revenue, 2),
         effective_revenue=round(effective_revenue, 2),
