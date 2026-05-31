@@ -350,10 +350,20 @@ async def compute_product_recommendation(
             f"(lead_time={lead_time}, safety={safety} дней)"
         )
 
+    # Учёт «груза в пути» от поставщика — SupplierOrder со статусом paid/in_transit
+    in_transit_supplier_row = (await db.execute(text("""
+        SELECT COALESCE(SUM(qty), 0) qty,
+               MIN(expected_date) earliest_arrival
+        FROM supplier_orders
+        WHERE product_id = :pid AND status IN ('paid','in_transit')
+    """), {"pid": str(product.id)})).first()
+    in_transit_supplier = int(in_transit_supplier_row.qty or 0) if in_transit_supplier_row else 0
+    earliest_arrival = in_transit_supplier_row.earliest_arrival if in_transit_supplier_row else None
+
     procurement_result = recommend_procurement(
         today=today,
         current_stock=current_stock,
-        in_transit_from_supplier=0,  # TODO: SupplierOrder с status='in_transit'
+        in_transit_from_supplier=in_transit_supplier,
         in_transit_from_customer=in_transit_to_customer,
         velocity=velocity,
         buyout=buyout,
@@ -366,6 +376,14 @@ async def compute_product_recommendation(
     signal = _classify_reorder_signal(
         procurement_result.days_left, lead_time, safety
     )
+    # Если есть «в пути» — статус "🚚 в пути" вместо «заказать»
+    incoming_label: str | None = None
+    if in_transit_supplier > 0:
+        arr = earliest_arrival.isoformat() if earliest_arrival else None
+        incoming_label = (
+            f"🚚 в пути {in_transit_supplier} шт, прибудет {arr}" if arr
+            else f"🚚 в пути {in_transit_supplier} шт"
+        )
     # Hard override: физический остаток 0/1 — это всегда тревога, независимо от velocity.
     # Если скорости нет (товар не продаётся) — days_left=∞ → signal='ok', но 0/1 на складе
     # = «ничего не отгрузить если попросят», статус 'ok' вводит в заблуждение.
@@ -375,6 +393,9 @@ async def compute_product_recommendation(
         signal = "reorder_now"
     procurement: dict[str, Any] = asdict(procurement_result)
     procurement["signal"] = signal               # stockout / reorder_now / ok
+    procurement["in_transit_supplier"] = in_transit_supplier
+    procurement["earliest_arrival"] = earliest_arrival.isoformat() if earliest_arrival else None
+    procurement["incoming_label"] = incoming_label
     procurement["lead_time_days"] = lead_time
     procurement["safety_stock_days"] = safety
     procurement["moq"] = moq
@@ -449,6 +470,10 @@ async def compute_product_recommendation(
         "sales_percent_fbo": float(product.sales_percent_fbo) if product.sales_percent_fbo is not None else None,
         "cost_price": float(product.cost_price) if product.cost_price is not None else None,
         "is_archived": bool(product.is_archived),
+        "category_id": product.category_id,
+        "category_name": product.category_name,
+        "tags": product.tags or [],
+        "is_hot": bool(product.is_hot),
         "image_url": image_url,
         "current_stock": current_stock,
         "in_transit_to_customer": in_transit_to_customer,

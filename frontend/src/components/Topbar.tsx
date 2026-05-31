@@ -18,6 +18,7 @@ import { logout, useCurrentUser } from '@/lib/auth'
 import { useCabinetStore, type OzonAccountSummary } from '@/stores/cabinet'
 import { Logo } from './ui/Logo'
 import { ReconcileBadge } from './ReconcileBadge'
+import { DataFreshnessBadge } from './DataFreshnessBadge'
 
 interface TopbarProps {
   onOpenSidebar: () => void
@@ -231,8 +232,9 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
           </div>
         </div>
 
-        {/* Reconcile badge — статус сверки с Ozon */}
-        <div className="hidden md:block">
+        {/* Бейджи статуса данных */}
+        <div className="hidden md:flex items-center gap-2">
+          <DataFreshnessBadge />
           <ReconcileBadge />
         </div>
 

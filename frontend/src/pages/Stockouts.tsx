@@ -65,13 +65,35 @@ export function Stockouts() {
   const { data, isLoading } = useRecommendations()
   const [filter, setFilter] = useState<SignalFilter>('all')
   const [showArchived, setShowArchived] = useState(false)
+  // Доп. фильтры (категория/тег/горячие/без себестоимости)
+  const [categoryId, setCategoryId] = useState<number | 'all'>('all')
+  const [selectedTag, setSelectedTag] = useState<string>('')
+  const [onlyHot, setOnlyHot] = useState(false)
+  const [onlyMissingCost, setOnlyMissingCost] = useState(false)
+
+  // Список уникальных категорий/тегов из подгруженных рекомендаций
+  const { categories, allTags } = useMemo(() => {
+    if (!data) return { categories: [], allTags: [] }
+    const cats = new Map<number, string>()
+    const tagSet = new Set<string>()
+    data.forEach((p) => {
+      if (p.category_id && p.category_name) cats.set(p.category_id, p.category_name)
+      ;(p.tags || []).forEach((t) => tagSet.add(t))
+    })
+    return {
+      categories: Array.from(cats.entries()).sort((a, b) => a[1].localeCompare(b[1])),
+      allTags: Array.from(tagSet).sort(),
+    }
+  }, [data])
 
   const rows = useMemo(() => {
     if (!data) return []
     let r = data.filter((p) => p.procurement)
-    if (!showArchived) {
-      r = r.filter((p) => !p.is_archived)
-    }
+    if (!showArchived) r = r.filter((p) => !p.is_archived)
+    if (categoryId !== 'all') r = r.filter((p) => p.category_id === categoryId)
+    if (selectedTag) r = r.filter((p) => (p.tags || []).includes(selectedTag))
+    if (onlyHot) r = r.filter((p) => p.is_hot)
+    if (onlyMissingCost) r = r.filter((p) => p.cost_price == null)
     if (filter !== 'all') {
       r = r.filter((p) => p.procurement!.signal === filter)
     }
@@ -84,7 +106,7 @@ export function Stockouts() {
       return va - vb
     })
     return r
-  }, [data, filter, showArchived])
+  }, [data, filter, showArchived, categoryId, selectedTag, onlyHot, onlyMissingCost])
 
   const counts = useMemo(() => {
     const init = { stockout: 0, reorder_now: 0, ok: 0, archived: 0 }
@@ -157,6 +179,50 @@ export function Stockouts() {
           />
           Показать архивные <span className="opacity-60">({counts.archived})</span>
         </label>
+      </div>
+
+      {/* Доп. фильтры: категории / теги / горячие / null'ы */}
+      <div className="flex items-center gap-3 flex-wrap text-xs">
+        <select
+          value={categoryId === 'all' ? '' : String(categoryId)}
+          onChange={(e) => setCategoryId(e.target.value ? Number(e.target.value) : 'all')}
+          className="px-2 py-1 rounded border border-border-subtle bg-bg text-fg"
+        >
+          <option value="">Все категории</option>
+          {categories.map(([id, name]) => (
+            <option key={id} value={id}>{name}</option>
+          ))}
+        </select>
+        <select
+          value={selectedTag}
+          onChange={(e) => setSelectedTag(e.target.value)}
+          className="px-2 py-1 rounded border border-border-subtle bg-bg text-fg"
+        >
+          <option value="">Все теги</option>
+          {allTags.map((t) => (<option key={t} value={t}>{t}</option>))}
+        </select>
+        <label className="flex items-center gap-1.5 cursor-pointer select-none text-fg-muted">
+          <input type="checkbox" checked={onlyHot} onChange={(e) => setOnlyHot(e.target.checked)} />
+          🔥 Только горячие
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer select-none text-fg-muted">
+          <input type="checkbox" checked={onlyMissingCost} onChange={(e) => setOnlyMissingCost(e.target.checked)} />
+          Только без себестоимости
+        </label>
+        {/* Быстрые пресеты */}
+        <span className="text-fg-subtle ml-2">пресеты:</span>
+        <button onClick={() => { setFilter('stockout'); setOnlyHot(true); setShowArchived(false); setOnlyMissingCost(false) }}
+                className="px-2 py-1 rounded bg-rose-50 text-rose-700 hover:bg-rose-100">
+          🔥 + 🔴 горящее
+        </button>
+        <button onClick={() => { setFilter('all'); setOnlyHot(false); setOnlyMissingCost(true); setShowArchived(false) }}
+                className="px-2 py-1 rounded bg-amber-50 text-amber-700 hover:bg-amber-100">
+          ⚠ без себест.
+        </button>
+        <button onClick={() => { setFilter('all'); setOnlyHot(false); setOnlyMissingCost(false); setCategoryId('all'); setSelectedTag(''); setShowArchived(false) }}
+                className="px-2 py-1 rounded bg-bg-subtle text-fg-muted hover:text-fg">
+          сброс
+        </button>
       </div>
 
       <Card className="overflow-hidden">
@@ -250,7 +316,16 @@ export function Stockouts() {
                         <SignalBadge signal={pr.signal} currentStock={p.current_stock} isArchived={!!p.is_archived} />
                       </td>
                       <td className="py-2.5 px-4 text-right tabular-nums">
-                        {pr.recommended_qty > 0 ? (
+                        {pr.in_transit_supplier && pr.in_transit_supplier > 0 ? (
+                          <div className="text-blue-700 text-[11px]" title={pr.incoming_label || ''}>
+                            🚚 {formatNumber(pr.in_transit_supplier)} в пути
+                            {pr.earliest_arrival && (
+                              <div className="text-[10px] text-blue-500">
+                                ~{pr.earliest_arrival}
+                              </div>
+                            )}
+                          </div>
+                        ) : pr.recommended_qty > 0 ? (
                           <span className="font-semibold text-fg">{formatNumber(pr.recommended_qty)}</span>
                         ) : (
                           <span className="text-fg-subtle">—</span>

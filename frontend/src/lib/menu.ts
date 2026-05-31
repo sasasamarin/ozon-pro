@@ -143,6 +143,16 @@ export const NAV_GROUPS: NavGroup[] = [
         },
       },
       {
+        path: '/analytics/metrics-matrix',
+        label: 'Матрица метрик',
+        icon: Grid3x3,
+      },
+      {
+        path: '/analytics/builder',
+        label: 'Конструктор графиков',
+        icon: TrendingUp,
+      },
+      {
         path: '/analytics/heatmap',
         label: 'Карта товаров',
         icon: Grid3x3,
@@ -374,6 +384,11 @@ export const NAV_GROUPS: NavGroup[] = [
             'Экспорт в Excel со всеми разрезами',
           ],
         },
+      },
+      {
+        path: '/finance/balance',
+        label: 'Товарный баланс',
+        icon: Wallet,
       },
       {
         path: '/finance/cashflow',

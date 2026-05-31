@@ -67,6 +67,10 @@ class ProductRecommendation(BaseModel):
     sales_percent_fbo: float | None    # реальная %-комиссия Ozon
     cost_price: float | None
     is_archived: bool = False
+    category_id: int | None = None
+    category_name: str | None = None
+    tags: list[str] = []
+    is_hot: bool = False
     image_url: str | None = None
     current_stock: int
     in_transit_to_customer: int

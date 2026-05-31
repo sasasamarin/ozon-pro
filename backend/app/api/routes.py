@@ -23,6 +23,9 @@ from app.api.endpoints import (
     reconciliation,
     company_settings,
     product_economics,
+    system_health,
+    inventory_balance,
+    metrics_matrix,
     markers,
     orders,
     ozon_accounts,
@@ -73,6 +76,15 @@ api_router.include_router(
 )
 api_router.include_router(
     product_economics.router, prefix="/products/economics", tags=["products"]
+)
+api_router.include_router(
+    system_health.router, prefix="/system", tags=["system"]
+)
+api_router.include_router(
+    inventory_balance.router, prefix="/inventory", tags=["inventory"]
+)
+api_router.include_router(
+    metrics_matrix.router, prefix="/analytics/metrics-matrix", tags=["analytics"]
 )
 api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
 api_router.include_router(

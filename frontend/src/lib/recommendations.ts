@@ -40,6 +40,9 @@ export interface ProcurementMetric {
   safety_stock_days: number
   moq: number
   supply_params_set: boolean
+  in_transit_supplier?: number          // qty в пути от поставщика
+  earliest_arrival?: string | null      // YYYY-MM-DD когда придёт
+  incoming_label?: string | null        // «🚚 в пути 50 шт, прибудет 2026-06-05»
 }
 
 export interface ROIMetric {
@@ -70,6 +73,10 @@ export interface ProductRecommendation {
   sales_percent_fbo?: number | null    // реальная %-комиссия Ozon
   cost_price: number | null
   is_archived?: boolean
+  category_id?: number | null
+  category_name?: string | null
+  tags?: string[]
+  is_hot?: boolean
   image_url: string | null
   current_stock: number
   in_transit_to_customer: number
