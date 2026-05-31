@@ -19,7 +19,7 @@ from dataclasses import asdict
 from datetime import UTC, date as date_cls, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AnalyticsDaily, Order, OrderItem, Product, Stock
