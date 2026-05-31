@@ -30,6 +30,11 @@ interface KPI {
   cancelled_count: number
   gross_profit: number
   gross_profit_change_pct: number | null
+  net_profit: number
+  net_profit_change_pct: number | null
+  tax_amount: number
+  tax_regime_label: string
+  tax_rate_pct: number
   orders_count: number
   orders_change_pct: number | null
   aov: number
@@ -301,12 +306,23 @@ export function Dashboard() {
                 clickTo={`/finance/transactions?date_from=${data?.period_from || ''}&date_to=${data?.period_to || ''}`}
               />
               <KpiCard
-                label="Прибыль валовая"
+                label="Прибыль (до налога)"
                 value={formatCurrency(kpi?.gross_profit ?? 0)}
                 change={kpi?.gross_profit_change_pct}
                 spark={kpi?.sparkline || []}
                 icon={Package}
                 iconBg="from-indigo-50 to-white text-indigo-600"
+                subtitle="выручка − себест − комиссия"
+                clickTo="/finance/pnl"
+              />
+              <KpiCard
+                label={`Чистая (${kpi?.tax_regime_label ?? 'УСН'} ${kpi?.tax_rate_pct ?? 6}%)`}
+                value={formatCurrency(kpi?.net_profit ?? 0)}
+                change={kpi?.net_profit_change_pct}
+                spark={kpi?.sparkline || []}
+                icon={Wallet}
+                iconBg="from-emerald-50 to-white text-emerald-700"
+                subtitle={kpi?.tax_amount ? `− налог ${formatCurrency(kpi.tax_amount)}` : undefined}
                 clickTo="/finance/pnl"
               />
               <KpiCard

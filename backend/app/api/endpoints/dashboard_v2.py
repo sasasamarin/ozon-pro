@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import Order, OrderItem, OzonAccount, Product, Transaction, User
+from app.models import Company, Order, OrderItem, OzonAccount, Product, Transaction, User
+from app.services.tax import calc_tax
 
 router = APIRouter()
 UTC = timezone.utc
@@ -45,6 +46,12 @@ class KPIBlock(BaseModel):
 
     gross_profit: float
     gross_profit_change_pct: float | None
+    # Чистая прибыль после налога компании-режима (УСН/ОСНО)
+    net_profit: float
+    net_profit_change_pct: float | None
+    tax_amount: float
+    tax_regime_label: str
+    tax_rate_pct: float
     orders_count: int               # = delivered_count (legacy)
     orders_change_pct: float | None
     aov: float
@@ -555,6 +562,23 @@ async def get_dashboard_v2(
             )
         )).scalar() or 0)
 
+    # === Налог: считаем чистую прибыль ===
+    company = (await db.execute(
+        select(Company).where(Company.id == current_user.company_id)
+    )).scalar_one()
+    tax_regime = company.tax_regime or "usn_income"
+    tax_rate = float(company.tax_rate_pct or 6.0)
+    vat_rate = float(company.vat_rate_pct) if company.vat_rate_pct else None
+    # gross_profit здесь = маржинальная (выручка − cogs − ozon_exp)
+    tax_curr = calc_tax(revenue=revenue, gross_profit=gross_profit,
+                        tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate)
+    net_profit_curr = tax_curr.net_profit
+    net_profit_prev: float | None = None
+    if cmp:
+        tax_prev = calc_tax(revenue=p_rev, gross_profit=p_gross,
+                            tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate)
+        net_profit_prev = tax_prev.net_profit
+
     return DashboardV2Response(
         period_from=date_from.isoformat(),
         period_to=date_to.isoformat(),
@@ -574,6 +598,11 @@ async def get_dashboard_v2(
             cancelled_count=k["cancelled_count"],
             gross_profit=round(gross_profit, 2),
             gross_profit_change_pct=_pct(gross_profit, p_gross) if cmp else None,
+            net_profit=net_profit_curr,
+            net_profit_change_pct=_pct(net_profit_curr, net_profit_prev) if cmp and net_profit_prev is not None else None,
+            tax_amount=tax_curr.tax_amount + tax_curr.vat_amount,
+            tax_regime_label=tax_curr.regime_label,
+            tax_rate_pct=tax_rate,
             orders_count=orders,
             orders_change_pct=_pct(orders, p_ord) if cmp else None,
             aov=round(aov, 2),
