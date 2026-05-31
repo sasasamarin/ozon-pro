@@ -12,10 +12,10 @@ from __future__ import annotations
 from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import BaseModel
+from app.db.base import Base
 
 
-class OzonCategoryTree(BaseModel):
+class OzonCategoryTree(Base):
     """
     Один узел дерева категорий Ozon.
 
