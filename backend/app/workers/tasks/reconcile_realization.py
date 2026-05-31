@@ -28,6 +28,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_secret
 from app.models import OzonAccount
+from app.services.finance_consts import (
+    DEFAULT_COMMISSION_PCT,
+    LOGISTICS_PER_UNIT_DEFAULT,
+    get_commission_pct,
+)
 from app.services.ozon_client import OzonSellerClient
 from app.workers.tasks._helpers import run_celery_async
 
@@ -132,8 +137,6 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
 
         # Модельный payout (Flowoi): selling_price × (1 − sales_percent_fbo / 100) − logistics
         # logistics ≈ 306 ₽/qty (deliver + last-mile, средние по Жирафу)
-        LOGISTICS_PER_UNIT = 306.0
-
         total_revenue = total_real = total_model = total_qty = 0.0
         sku_diffs: list[dict] = []
         for sku, a in by_sku.items():
@@ -143,9 +146,12 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
                 FROM products WHERE ozon_sku = :sku AND ozon_account_id = :acc
                 LIMIT 1
             """), {"sku": sku, "acc": str(account.id)})).first()
-            comm_pct = float(prod.comm) if prod and prod.comm else 41.0  # fallback 41% (Жираф default)
+            # Fallback из единого источника (25%, не 41% — раньше был легаси Жирафа).
+            comm_pct = get_commission_pct(
+                product_sales_percent_fbo=prod.comm if prod else None,
+            )
 
-            model_payout = a["revenue"] * (1 - comm_pct / 100) - a["qty"] * LOGISTICS_PER_UNIT
+            model_payout = a["revenue"] * (1 - comm_pct / 100) - a["qty"] * LOGISTICS_PER_UNIT_DEFAULT
             diff = a["payout_real"] - model_payout
             diff_pct = (diff / a["payout_real"] * 100) if a["payout_real"] else None
 

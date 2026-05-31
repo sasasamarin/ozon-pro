@@ -27,13 +27,16 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Company, Product
+from app.services.finance_consts import (
+    DEFAULT_COMMISSION_PCT,
+    LOGISTICS_PER_UNIT,  # для отображения как «эвристика»
+    calc_acquiring,
+    calc_logistics,
+    get_commission_pct,
+)
 from app.services.tax import calc_tax
 
 UTC = timezone.utc
-
-LOGISTICS_PER_UNIT = 306.0
-ACQUIRING_PCT = 1.5
-DEFAULT_COMMISSION_PCT = 25.0
 
 
 async def get_full_context(
@@ -58,7 +61,8 @@ async def get_full_context(
 
     seller_price = float(prod.marketing_price or prod.current_price or 0)
     cost = float(prod.cost_price) if prod.cost_price else None
-    commission_pct = float(prod.sales_percent_fbo) if prod.sales_percent_fbo else DEFAULT_COMMISSION_PCT
+    commission_pct = get_commission_pct(product_sales_percent_fbo=prod.sales_percent_fbo)
+    prod_acq_amount = float(prod.acquiring_amount) if getattr(prod, "acquiring_amount", None) else None
 
     # ─── Продажи за период ───
     sales = (await db.execute(text("""
@@ -95,8 +99,15 @@ async def get_full_context(
     # ─── Расходы ───
     cost_total = (cost or 0) * qty
     comm_total = revenue * commission_pct / 100
-    log_total = LOGISTICS_PER_UNIT * qty
-    acq_total = revenue * ACQUIRING_PCT / 100
+    # База эквайринга/логистики — средняя seller_price × qty. Тождественно revenue
+    # для одного товара, но через helper остаётся явная точка перехода на Product.acquiring_amount/Transaction.
+    log_calc = calc_logistics(qty=qty)
+    acq_calc = calc_acquiring(
+        seller_price=avg_seller or seller_price, qty=qty,
+        product_acquiring_amount=prod_acq_amount,
+    )
+    log_total = log_calc.amount
+    acq_total = acq_calc.amount
     op_profit = revenue - cost_total - comm_total - log_total - acq_total - ad_spend
     tax_res = calc_tax(
         revenue=revenue, gross_profit=op_profit,
@@ -168,7 +179,9 @@ async def get_full_context(
             "cost_total": round(cost_total, 2),
             "commission_total": round(comm_total, 2),
             "logistics_total": round(log_total, 2),
+            "logistics_source": log_calc.source,  # "real" / "estimate"
             "acquiring_total": round(acq_total, 2),
+            "acquiring_source": acq_calc.source,  # "api" / "estimate"
             "ad_spend": round(ad_spend, 2),
         },
         "profit": {

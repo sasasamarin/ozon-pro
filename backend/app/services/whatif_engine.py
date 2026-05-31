@@ -319,8 +319,11 @@ def simulate_scenario(
 
     revenue = delivered * new_price
     commission = revenue * commission_pct / 100
-    logistics = delivered * 306.0
-    acquiring = revenue * 0.015
+    # Логистика/эквайринг через единые helper'ы (см. finance_consts).
+    # База эквайринга — seller_price × qty (= revenue для одного товара).
+    from app.services.finance_consts import calc_acquiring, calc_logistics
+    logistics = calc_logistics(qty=delivered).amount
+    acquiring = calc_acquiring(seller_price=new_price, qty=delivered).amount
     cost_total = delivered * new_cost
     op_profit = revenue - commission - logistics - acquiring - cost_total - new_ad_spend
     tax = calc_tax(revenue=revenue, gross_profit=op_profit,

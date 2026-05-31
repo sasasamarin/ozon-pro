@@ -29,15 +29,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import Company, OzonAccount, Product, User
+from app.services.finance_consts import (
+    ACQUIRING_PCT,
+    DEFAULT_COMMISSION_PCT,
+    LOGISTICS_PER_UNIT,
+    calc_acquiring,
+    calc_logistics,
+    get_commission_pct,
+)
 from app.services.tax import calc_tax
 
 router = APIRouter()
 UTC = timezone.utc
-
-# Эвристики для расходов на единицу
-LOGISTICS_PER_UNIT = 306.0
-ACQUIRING_PCT = 1.5
-DEFAULT_COMMISSION_PCT = 25.0
 
 
 class EconomicsRow(BaseModel):
@@ -170,6 +173,7 @@ async def get_economics(
             p.ozon_account_id::text AS account_id,
             p.cost_price::float                AS cost_price,
             p.sales_percent_fbo::float         AS comm_pct,
+            p.acquiring_amount::float          AS prod_acq_amount,
             COUNT(*)                            AS qty_delivered,
             SUM(oi.price)::float                AS revenue,
             AVG(oi.price)::float                AS avg_seller_price,
@@ -219,16 +223,22 @@ async def get_economics(
             spp_pct = round((1 - avg_customer / avg_seller) * 100, 1)
 
         cost_per = float(r.cost_price) if r.cost_price else None
-        commission_pct = float(r.comm_pct) if r.comm_pct else DEFAULT_COMMISSION_PCT
+        commission_pct = get_commission_pct(product_sales_percent_fbo=r.comm_pct)
         comm_per = (avg_seller or 0) * commission_pct / 100
-        acq_per = (avg_seller or 0) * ACQUIRING_PCT / 100
+        prod_acq_amount = float(r.prod_acq_amount) if r.prod_acq_amount else None
+        acq_calc = calc_acquiring(
+            seller_price=avg_seller or 0, qty=qty,
+            product_acquiring_amount=prod_acq_amount,
+        )
+        log_calc = calc_logistics(qty=qty)
+        acq_per = acq_calc.amount / qty if qty else 0.0
         ad_total = ad_by_prod.get(r.product_id, 0.0)
         ad_per = ad_total / qty if qty else 0.0
 
         cost_total = (cost_per * qty) if cost_per else 0.0
         comm_total = comm_per * qty
-        log_total = LOGISTICS_PER_UNIT * qty
-        acq_total = acq_per * qty
+        log_total = log_calc.amount
+        acq_total = acq_calc.amount
 
         op_profit = revenue - cost_total - comm_total - log_total - acq_total - ad_total
         tax_res = calc_tax(
