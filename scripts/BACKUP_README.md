@@ -85,9 +85,66 @@ systemctl status flowoi-backup.timer
 автоматические, потом обычно вытесняются. Если нужно сохранить ручной снимок
 надолго — скопируй его в `/root/backups/keep/`, ротация туда не лезет.
 
+## Восстановление — критические зависимости
+
+**Прод-БД:** PostgreSQL 17.10 + TimescaleDB **2.20.0** (managed Selectel).
+
+Дампы можно восстановить **только в Postgres 17 с TimescaleDB ≥ 2.20.0,
+< следующая мажорная версия каталога**. Локальный dev-контейнер на PG 16 + TS 2.27.1
+**не возьмёт** прод-дамп.
+
+Проверенный образ для восстановления: `timescale/timescaledb:2.20.0-pg17`.
+
+Процедура восстановления:
+```sql
+CREATE DATABASE restore_target;
+\c restore_target
+CREATE EXTENSION timescaledb;
+SELECT timescaledb_pre_restore();
+\i /path/to/dump.sql            -- или: gunzip -c file.sql.gz | psql ...
+SELECT timescaledb_post_restore();
+```
+
+Без `pre_restore()` восстановятся таблицы, но фоновые джобы TimescaleDB начнут
+лазить в пустые гипертаблицы во время накатывания → ошибки.
+
+**Если Selectel обновит TimescaleDB на проде** (2.20 → 2.30+), старые дампы
+могут перестать восстанавливаться без промежуточного апгрейда. Перед таким
+обновлением — сделать тестовый restore на новой версии и проверить совместимость.
+
+## S3 offsite backup (Selectel Object Storage)
+
+`/root/backups/auto/` живёт только на VPS — если диск/VPS умрёт, backup умрёт
+вместе. Поэтому подключена выгрузка в Selectel Object Storage (S3-совместимый).
+
+Установка:
+```bash
+# 1. На VPS — поставить aws CLI
+apt-get install -y awscli
+
+# 2. Создать bucket «flowoi-backups» в Selectel + сервисного юзера с правами
+#    на read/write/list ТОЛЬКО этого bucket'а. Подробно в s3.env.example.
+
+# 3. Скопировать конфиг с реальными ключами
+cp /home/ozonpro/app/scripts/s3.env.example /etc/flowoi/s3.env
+chmod 600 /etc/flowoi/s3.env
+nano /etc/flowoi/s3.env  # вписать S3_ACCESS_KEY, S3_SECRET_KEY
+
+# 4. Установить s3-upload скрипт
+install -m 0755 /home/ozonpro/app/scripts/backup_s3_upload.sh /usr/local/bin/flowoi-backup-s3.sh
+
+# 5. Переустановить service unit (в нём уже прописан ExecStartPost для S3)
+install -m 0644 /home/ozonpro/app/scripts/flowoi-backup.service /etc/systemd/system/
+systemctl daemon-reload
+```
+
+Если `/etc/flowoi/s3.env` отсутствует, `backup_s3_upload.sh` выйдет с кодом 0 и
+запишет warning в journal — основной backup продолжит работать локально.
+
 ## Что НЕ делаем сейчас (явно отложено)
 
-- S3/Selectel Object Storage — `/root/backups/auto/` живёт только на VPS;
-  если диск умрёт, backup умрёт вместе. Следующий шаг — синк в Selectel S3.
 - Шифрование архивов (GPG) — потенциальная PII (имена покупателей в
-  `transactions.raw_response`) лежит в дампе открытым текстом.
+  `transactions.raw_response`) лежит в дампе открытым текстом. Шифровать
+  перед S3 upload через `gpg --symmetric` с ключом из vault.
+- Двухсторонняя репликация (logical replication к standby) — пока не нужно
+  при объёме 15 МБ/дамп.

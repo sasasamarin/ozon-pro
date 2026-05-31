@@ -1,5 +1,5 @@
 [Unit]
-Description=Flowoi DB backup (pg_dump + rotate)
+Description=Flowoi DB backup (pg_dump + rotate + S3 upload)
 Wants=network-online.target
 After=network-online.target
 
@@ -7,10 +7,12 @@ After=network-online.target
 Type=oneshot
 User=root
 ExecStart=/usr/local/bin/flowoi-backup.sh auto
+# S3 upload в той же service-unit — если /etc/flowoi/s3.env нет,
+# скрипт молча выйдет с кодом 0 (см. backup_s3_upload.sh).
+ExecStartPost=/usr/local/bin/flowoi-backup-s3.sh
 StandardOutput=journal
 StandardError=journal
-# Ограничения: не убивать всю систему если pg_dump зависнет
-TimeoutStartSec=900
+TimeoutStartSec=1200
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=5
