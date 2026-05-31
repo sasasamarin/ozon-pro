@@ -86,7 +86,9 @@ class ScenarioRequest(BaseModel):
     impressions_pct: float = 0.0
     cr_cart_to_order_pct: float = 0.0
     cost_pct: float = 0.0
+    spp_pct: float | None = None
     override_beta_price: float | None = None
+    override_beta_customer_price: float | None = None
     override_beta_ad_to_imp: float | None = None
 
 
@@ -142,7 +144,9 @@ async def post_simulate(
             impressions_pct=sc_req.impressions_pct,
             cr_cart_to_order_pct=sc_req.cr_cart_to_order_pct,
             cost_pct=sc_req.cost_pct,
+            spp_pct=sc_req.spp_pct,
             override_beta_price=sc_req.override_beta_price,
+            override_beta_customer_price=sc_req.override_beta_customer_price,
             override_beta_ad_to_imp=sc_req.override_beta_ad_to_imp,
         )
         out = simulate_scenario(

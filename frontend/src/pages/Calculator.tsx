@@ -20,6 +20,8 @@ interface CalcResult {
   margin_pct: number
   roi_pct: number | null
   breakeven_price: number
+  customer_price: number
+  spp_amount: number
   tax_regime: string
   tax_regime_label: string
   tax_rate_pct: number
@@ -38,6 +40,7 @@ export function Calculator() {
   const [logistics, setLogistics] = useState('250')
   const [adSpend, setAdSpend] = useState('150')
   const [packaging, setPackaging] = useState('50')
+  const [spp, setSpp] = useState('0')
 
   const { data: settings } = useQuery<CompanySettings>({
     queryKey: ['company', 'settings'],
@@ -47,15 +50,15 @@ export function Calculator() {
 
   // Debounced input — чтобы не дёргать backend на каждый символ
   const [debouncedInput, setDebouncedInput] = useState({
-    price, cost, commission, logistics, adSpend, packaging,
+    price, cost, commission, logistics, adSpend, packaging, spp,
   })
 
   useEffect(() => {
     const t = setTimeout(() => {
-      setDebouncedInput({ price, cost, commission, logistics, adSpend, packaging })
+      setDebouncedInput({ price, cost, commission, logistics, adSpend, packaging, spp })
     }, 250)
     return () => clearTimeout(t)
-  }, [price, cost, commission, logistics, adSpend, packaging])
+  }, [price, cost, commission, logistics, adSpend, packaging, spp])
 
   const { data: result, isLoading } = useQuery<CalcResult>({
     queryKey: ['calculator', debouncedInput],
@@ -67,6 +70,7 @@ export function Calculator() {
         logistics: parseFloat(debouncedInput.logistics) || 0,
         ad_spend: parseFloat(debouncedInput.adSpend) || 0,
         packaging: parseFloat(debouncedInput.packaging) || 0,
+        spp_pct: parseFloat(debouncedInput.spp) || 0,
       }
       return (await api.post('/products/calculator/calc', payload)).data
     },
@@ -103,13 +107,32 @@ export function Calculator() {
             Входные данные
           </h2>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Цена продажи ₽" value={price} onChange={setPrice} highlight="emerald" />
+            <Field label="Цена продавца ₽" value={price} onChange={setPrice} highlight="emerald" />
             <Field label="Себестоимость ₽" value={cost} onChange={setCost} />
             <Field label="Комиссия Ozon %" value={commission} onChange={setCommission} />
             <Field label="Логистика ₽" value={logistics} onChange={setLogistics} />
             <Field label="Упаковка ₽" value={packaging} onChange={setPackaging} />
             <Field label="Реклама ₽" value={adSpend} onChange={setAdSpend} />
+            <Field label="СПП % (скидка Ozon)" value={spp} onChange={setSpp} />
           </div>
+          {result && parseFloat(spp) > 0 && (
+            <div className="mt-4 p-3 rounded-md bg-bg-subtle/50 border border-border-subtle">
+              <div className="text-[11px] text-fg-muted uppercase tracking-wider mb-1">
+                Цена для покупателя
+              </div>
+              <div className="flex items-baseline justify-between gap-2 text-sm">
+                <span className="font-mono tabular-nums text-fg font-semibold text-base">
+                  {formatCurrency(result.customer_price)}
+                </span>
+                <span className="text-xs text-fg-muted">
+                  Ozon доплачивает {formatCurrency(result.spp_amount)}
+                </span>
+              </div>
+              <div className="text-[11px] text-fg-muted mt-1.5">
+                СПП на твою прибыль не влияет — продавец получает «Цена продавца» {formatCurrency(parseFloat(price) || 0)}.
+              </div>
+            </div>
+          )}
         </Card>
 
         <Card className="p-5">

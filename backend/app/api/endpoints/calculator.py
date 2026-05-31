@@ -24,12 +24,15 @@ router = APIRouter()
 
 
 class CalcInput(BaseModel):
-    price: float = Field(..., ge=0, description="Цена продажи ₽")
+    price: float = Field(..., ge=0, description="Цена продавца ₽ (seller_price — то что реально получает продавец)")
     cost: float = Field(..., ge=0, description="Себестоимость ₽")
     commission_pct: float = Field(..., ge=0, le=100, description="Комиссия Ozon %")
     logistics: float = Field(..., ge=0)
     ad_spend: float = Field(..., ge=0)
     packaging: float = Field(0, ge=0)
+    # СПП — скидка за счёт Ozon. На прибыль продавца НЕ влияет (Ozon доплачивает покупателю),
+    # показывается для понимания цены, которую видит покупатель.
+    spp_pct: float = Field(0, ge=0, le=80, description="СПП % — скидка от Ozon, влияет на customer_price")
     # Опциональный override налога — если юзер хочет посмотреть «что если ОСНО»
     tax_regime: str | None = None
     tax_rate_pct: float | None = None
@@ -47,6 +50,9 @@ class CalcResult(BaseModel):
     margin_pct: float            # net_margin / price * 100
     roi_pct: float | None        # net_margin / cost * 100 (None если cost=0)
     breakeven_price: float       # цена при которой net_margin = 0
+    # Цена для покупателя
+    customer_price: float        # price × (1 - spp/100)
+    spp_amount: float            # сколько ₽ Ozon доплачивает покупателю
     # Метаданные для UI
     tax_regime: str
     tax_regime_label: str
@@ -124,6 +130,9 @@ async def calculate(
     roi_pct = (tax_res.net_profit / inp.cost * 100) if inp.cost > 0 else None
     breakeven = _find_breakeven(inp, regime, float(rate), float(vat_rate) if vat_rate else None)
 
+    customer_price = inp.price * (1 - inp.spp_pct / 100)
+    spp_amount = inp.price - customer_price
+
     return CalcResult(
         commission_amount=round(comm_amount, 2),
         gross_margin=round(gross_margin, 2),
@@ -134,6 +143,8 @@ async def calculate(
         margin_pct=round(margin_pct, 2),
         roi_pct=round(roi_pct, 2) if roi_pct is not None else None,
         breakeven_price=breakeven,
+        customer_price=round(customer_price, 2),
+        spp_amount=round(spp_amount, 2),
         tax_regime=tax_res.regime,
         tax_regime_label=tax_res.regime_label,
         tax_rate_pct=tax_res.rate_pct,

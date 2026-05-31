@@ -195,8 +195,13 @@ class ScenarioInput:
     impressions_pct: float = 0.0        # %-изменение трафика (помимо рекламы)
     cr_cart_to_order_pct: float = 0.0   # ручная правка конверсии
     cost_pct: float = 0.0               # %-изменение себестоимости
+    # СПП — гипотеза «что если Ozon даст +10% СПП покупателям».
+    # Если None → берём текущее СПП из данных (avg_customer/avg_seller).
+    # Если задано → перерасчёт customer_price → эффект на спрос через β_customer.
+    spp_pct: float | None = None
     # Гипотезы эластичностей (если юзер хочет поиграть)
     override_beta_price: float | None = None
+    override_beta_customer_price: float | None = None
     override_beta_ad_to_imp: float | None = None
 
 
@@ -259,18 +264,39 @@ def simulate_scenario(
     if scenario.impressions_pct != 0:
         explain.append(f"трафик ×{1+scenario.impressions_pct/100:.2f}")
 
-    # 3. Цена → спрос (демпфер: если β есть и надёжный, иначе игнорируем)
+    # 3a. Цена продавца → спрос
     new_price = seller_price * (1 + scenario.seller_price_pct / 100)
-    β_price = (scenario.override_beta_price
-               if scenario.override_beta_price is not None
-               else None)
-    # Используем override юзера — если не задан, эффекта цены НЕТ (мы не подсовываем -1.0)
+    β_price = scenario.override_beta_price  # None если юзер не задал гипотезу
     demand_mult_price = 1.0
     if β_price is not None and scenario.seller_price_pct != 0:
         demand_mult_price = (seller_price / new_price) ** β_price if new_price > 0 else 1
         explain.append(f"цена ×{1+scenario.seller_price_pct/100:.2f} → спрос ×{demand_mult_price:.2f} (твоя гипотеза β={β_price:.2f})")
     elif scenario.seller_price_pct != 0:
         explain.append(f"цена ×{1+scenario.seller_price_pct/100:.2f} — без эффекта на спрос (β цены на твоих данных не определима)")
+
+    # 3b. СПП → customer_price → спрос (отдельный рычаг от цены продавца)
+    # baseline СПП из истории; new СПП — гипотеза юзера (если задана)
+    base_customer = base.get("avg_customer_price") or seller_price
+    base_seller = base.get("avg_seller_price") or seller_price
+    current_spp_pct = (1 - base_customer / base_seller) * 100 if base_seller > 0 else 0
+    demand_mult_customer = 1.0
+    if scenario.spp_pct is not None:
+        new_customer = new_price * (1 - scenario.spp_pct / 100)
+        β_customer = (scenario.override_beta_customer_price
+                      if scenario.override_beta_customer_price is not None
+                      else (betas.customer_price_to_orders.beta
+                            if betas.customer_price_to_orders.beta else None))
+        if β_customer is not None and abs(scenario.spp_pct - current_spp_pct) > 0.1:
+            demand_mult_customer = (base_customer / new_customer) ** β_customer if new_customer > 0 else 1
+            explain.append(
+                f"СПП {current_spp_pct:.1f}% → {scenario.spp_pct:.1f}% "
+                f"(цена покупателю {base_customer:.0f} → {new_customer:.0f} ₽) → "
+                f"спрос ×{demand_mult_customer:.2f} (β_customer={β_customer:+.2f})"
+            )
+        elif abs(scenario.spp_pct - current_spp_pct) > 0.1:
+            explain.append(f"СПП {current_spp_pct:.1f}% → {scenario.spp_pct:.1f}% — без эффекта (β customer не определима)")
+    # Перемножаем оба ценовых эффекта (если оба заданы)
+    demand_mult_total = demand_mult_price * demand_mult_customer
 
     # 4. Прогон по воронке (используем РЕАЛЬНЫЕ конверсии Жирафа)
     cr1 = base["cr_imp_to_visit"] or 0
@@ -280,7 +306,7 @@ def simulate_scenario(
 
     visits = new_imp * cr1
     carts = visits * cr2
-    orders = carts * cr3 * demand_mult_price
+    orders = carts * cr3 * demand_mult_total
     delivered = orders * cr4
 
     if scenario.cr_cart_to_order_pct != 0:

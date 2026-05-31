@@ -41,7 +41,9 @@ interface Scenario {
   impressions_pct: number
   cr_cart_to_order_pct: number
   cost_pct: number
+  spp_pct: number | null            // null = брать фактическое СПП из истории
   override_beta_price: number | null
+  override_beta_customer_price: number | null
 }
 
 interface ScenarioResult {
@@ -60,7 +62,8 @@ interface ScenarioResult {
 const EMPTY_SCENARIO = (name: string): Scenario => ({
   name,
   ad_spend_pct: 0, seller_price_pct: 0, impressions_pct: 0,
-  cr_cart_to_order_pct: 0, cost_pct: 0, override_beta_price: null,
+  cr_cart_to_order_pct: 0, cost_pct: 0,
+  spp_pct: null, override_beta_price: null, override_beta_customer_price: null,
 })
 
 export function WhatIf() {
@@ -265,6 +268,49 @@ function ScenarioColumn({
           {sliderRow('Себестоимость', scenario.cost_pct,
                      (v) => onChange({ ...scenario, cost_pct: v }),
                      -30, 30, 1, '%')}
+
+          {/* СПП — отдельный рычаг от цены продавца */}
+          <div>
+            <label className="flex items-center gap-1.5 text-[11px] text-fg-muted">
+              <input type="checkbox"
+                     checked={scenario.spp_pct !== null}
+                     onChange={(e) => {
+                       const factSpp = betas && betas.base.avg_seller_price && betas.base.avg_customer_price
+                         ? Math.round((1 - betas.base.avg_customer_price / betas.base.avg_seller_price) * 1000) / 10
+                         : 0
+                       onChange({ ...scenario, spp_pct: e.target.checked ? factSpp : null })
+                     }} />
+              Включить гипотезу по СПП
+              {betas?.base.avg_seller_price && betas?.base.avg_customer_price && (
+                <span className="text-fg-subtle ml-1">
+                  (факт: {((1 - betas.base.avg_customer_price / betas.base.avg_seller_price) * 100).toFixed(1)}%)
+                </span>
+              )}
+            </label>
+            {scenario.spp_pct !== null && (
+              <>
+                {sliderRow('  СПП %', scenario.spp_pct,
+                           (v) => onChange({ ...scenario, spp_pct: v }),
+                           0, 60, 1, '%',
+                           betas?.betas.price.customer_price_to_orders.confidence === 'low'
+                             ? `β customer-цены на твоих данных слабая (R²=${betas.betas.price.customer_price_to_orders.r2}). Эффект на спрос будет мал.`
+                             : undefined)}
+                <label className="flex items-center gap-1.5 text-[10px] text-fg-muted mt-1">
+                  <input type="checkbox"
+                         checked={scenario.override_beta_customer_price !== null}
+                         onChange={(e) => onChange({ ...scenario,
+                           override_beta_customer_price: e.target.checked ? -1.5 : null })} />
+                  Своя β для customer-цены
+                </label>
+                {scenario.override_beta_customer_price !== null && (
+                  sliderRow('    β customer', scenario.override_beta_customer_price,
+                            (v) => onChange({ ...scenario, override_beta_customer_price: v }),
+                            -3, 0, 0.1, '',
+                            'Обычно отрицательное: цена выше → меньше заказов')
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 
