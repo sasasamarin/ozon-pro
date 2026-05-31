@@ -36,6 +36,7 @@ import { AccountBalance } from '@/pages/AccountBalance'
 import { Credit } from '@/pages/Credit'
 import { Email } from '@/pages/Email'
 import { Settings } from '@/pages/Settings'
+import { SettingsReconciliation } from '@/pages/SettingsReconciliation'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { PagePlaceholder } from '@/components/PagePlaceholder'
@@ -104,6 +105,7 @@ export default function App() {
         <Route path="/email/log" element={<Email />} />
         <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/settings/reconciliation" element={<SettingsReconciliation />} />
 
         {placeholderItems
           .filter(

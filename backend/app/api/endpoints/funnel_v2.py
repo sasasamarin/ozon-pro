@@ -1238,10 +1238,19 @@ async def funnel_sankey(
         date_from = date_to - timedelta(days=days)
 
     accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    # 5 основных узлов + 4 drop-узла («Ушли»). Без drop-узлов recharts равняет
+    # узел источника к величине единственного outflow, и Показы визуально =
+    # Клики (юзер: «Показы 5945 = Клики 5945, невозможно при CTR 9.92%»).
     nodes = [
-        SankeyNode(name="Показы"), SankeyNode(name="Клики"),
-        SankeyNode(name="Корзина"), SankeyNode(name="Заказы"),
-        SankeyNode(name="Доставлено"),
+        SankeyNode(name="Показы"),       # 0
+        SankeyNode(name="Клики"),        # 1
+        SankeyNode(name="Корзина"),      # 2
+        SankeyNode(name="Заказы"),       # 3
+        SankeyNode(name="Доставлено"),   # 4
+        SankeyNode(name="Ушли без клика"),       # 5
+        SankeyNode(name="Не добавили в корзину"),# 6
+        SankeyNode(name="Бросили корзину"),      # 7
+        SankeyNode(name="Не дошли"),             # 8
     ]
     if not accs:
         return SankeyResp(period_from=date_from.isoformat(), period_to=date_to.isoformat(),
@@ -1250,8 +1259,6 @@ async def funnel_sankey(
     pids = _parse_product_ids(product_id, product_ids)
     row = await _aggregate(db, accs=accs, product_ids=pids, date_from=date_from, date_to=date_to)
     imp = int(row.imp or 0)
-    # после фикса "не клики, а посещения карточки" поле row.clicks нет,
-    # есть row.card_visits — используем его в sankey как промежуточный уровень.
     clicks = int(row.card_visits or 0)
     cart = int(row.cart or 0)
     orders = int(row.orders or 0)
@@ -1263,37 +1270,52 @@ async def funnel_sankey(
     orders = min(orders, cart if cart else clicks)
     deliv = min(deliv, orders if orders else cart)
 
-    steps = [
-        ("Показы", imp, "Клики", clicks, "CTR"),
-        ("Клики", clicks, "Корзина", cart, "% в корзину"),
-        ("Корзина", cart, "Заказы", orders, "% в заказ"),
-        ("Заказы", orders, "Доставлено", deliv, "выкуп"),
+    # Основные «успешные» переходы — толщина = passed_to_next
+    # + drop-link «осталось» — толщина = source - passed, чтобы recharts корректно
+    # отрисовал узел источника во всю его величину.
+    main_steps = [
+        # (src_idx, src_value, tgt_idx, tgt_value, drop_idx, metric_label)
+        (0, imp,    1, clicks, 5, "CTR"),
+        (1, clicks, 2, cart,   6, "% в корзину"),
+        (2, cart,   3, orders, 7, "% в заказ"),
+        (3, orders, 4, deliv,  8, "выкуп"),
     ]
-    raw_links: list[dict] = []
-    for src_name, src_v, tgt_name, tgt_v, metric_name in steps:
+    raw_main: list[dict] = []
+    for src_idx, src_v, tgt_idx, tgt_v, drop_idx, metric_name in main_steps:
         conv = (tgt_v / src_v * 100) if src_v else None
-        raw_links.append({
-            "src_name": src_name, "tgt_name": tgt_name,
-            "value": tgt_v, "conv": conv, "metric": metric_name,
+        raw_main.append({
+            "src_idx": src_idx, "tgt_idx": tgt_idx, "drop_idx": drop_idx,
+            "src_v": src_v, "tgt_v": tgt_v,
+            "conv": conv, "metric": metric_name,
         })
 
     # Узкое горлышко — переход с минимальной конверсией (но > 0)
-    valid = [(i, l["conv"]) for i, l in enumerate(raw_links) if l["conv"] and l["conv"] > 0]
+    valid = [(i, l["conv"]) for i, l in enumerate(raw_main) if l["conv"] and l["conv"] > 0]
     bottleneck_idx = min(valid, key=lambda x: x[1])[0] if valid else None
     bottleneck_step = (
-        f"{raw_links[bottleneck_idx]['src_name']} → {raw_links[bottleneck_idx]['tgt_name']}"
+        f"{nodes[raw_main[bottleneck_idx]['src_idx']].name} → {nodes[raw_main[bottleneck_idx]['tgt_idx']].name}"
         if bottleneck_idx is not None else None
     )
 
     links: list[SankeyLink] = []
-    for i, l in enumerate(raw_links):
+    for i, l in enumerate(raw_main):
         pct_str = f"{l['conv']:.2f}%" if l['conv'] is not None else "—"
+        # Основной поток: src → tgt со значением tgt_v (= сколько прошло)
         links.append(SankeyLink(
-            source=i, target=i + 1, value=l["value"],
+            source=l["src_idx"], target=l["tgt_idx"], value=max(l["tgt_v"], 0),
             conv_pct=round(l["conv"], 2) if l["conv"] is not None else None,
             label=f"{l['metric']} {pct_str}",
             is_bottleneck=(i == bottleneck_idx),
         ))
+        # Drop-поток: src → «Ушли» со значением (src_v - tgt_v)
+        dropped = max(l["src_v"] - l["tgt_v"], 0)
+        if dropped > 0:
+            links.append(SankeyLink(
+                source=l["src_idx"], target=l["drop_idx"], value=dropped,
+                conv_pct=None,
+                label=f"ушло {dropped:,}".replace(",", " "),
+                is_bottleneck=False,
+            ))
 
     return SankeyResp(period_from=date_from.isoformat(), period_to=date_to.isoformat(),
                       nodes=nodes, links=links, bottleneck_step=bottleneck_step)

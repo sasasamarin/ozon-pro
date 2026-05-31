@@ -35,6 +35,7 @@ celery_app = Celery(
         "app.workers.tasks.maintenance",
         "app.workers.tasks.recompute_recommendations",
         "app.workers.tasks.enrich_customer_price",
+        "app.workers.tasks.reconcile_realization",
     ],
 )
 
@@ -86,6 +87,14 @@ celery_app.conf.beat_schedule = {
         "task": "enrich_customer_price",
         "schedule": crontab(minute=10),
         "kwargs": {"max_postings": 500},
+    },
+    # Авто-сверка финмодели с отчётом Ozon /v2/finance/realization.
+    # Раз в неделю по понедельникам в 06:00 — берём предыдущий месяц.
+    # Realization Ozon формирует с лагом ~15 дней, так что свежий отчёт
+    # подхватится в начале следующего месяца.
+    "reconcile-realization-weekly": {
+        "task": "reconcile_realization",
+        "schedule": crontab(hour=6, minute=0, day_of_week=1),
     },
     "sync-transactions-daily": {
         "task": "app.workers.tasks.sync_finance.sync_all_transactions",

@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { logout, useCurrentUser } from '@/lib/auth'
 import { useCabinetStore, type OzonAccountSummary } from '@/stores/cabinet'
 import { Logo } from './ui/Logo'
+import { ReconcileBadge } from './ReconcileBadge'
 
 interface TopbarProps {
   onOpenSidebar: () => void
@@ -228,6 +229,11 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
               </div>
             )}
           </div>
+        </div>
+
+        {/* Reconcile badge — статус сверки с Ozon */}
+        <div className="hidden md:block">
+          <ReconcileBadge />
         </div>
 
         {/* User menu */}
