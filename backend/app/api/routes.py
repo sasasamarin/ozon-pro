@@ -38,6 +38,7 @@ from app.api.endpoints import (
     products,
     recommendations,
     returns,
+    unit_economy,
     summary,
     supplier_orders,
     supply_params,
@@ -99,6 +100,9 @@ api_router.include_router(
     calculator.router, prefix="/products/calculator", tags=["products"]
 )
 api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
+api_router.include_router(
+    unit_economy.router, prefix="/finance/unit-economy", tags=["finance"]
+)
 api_router.include_router(
     cashflow.router, prefix="/finance/cashflow", tags=["finance"]
 )

@@ -105,6 +105,7 @@ from app.models.reports import (  # noqa: F401
 )
 from app.models.category_tree import OzonCategoryTree  # noqa: F401
 from app.models.sync_state import SyncState  # noqa: F401
+from app.models.unit_economy import MonthlyUnitEconomy  # noqa: F401
 from app.models.team import (  # noqa: F401
     CompanyMember,
     InvitationStatus,

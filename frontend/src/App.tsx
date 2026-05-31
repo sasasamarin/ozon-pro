@@ -38,6 +38,7 @@ import { Email } from '@/pages/Email'
 import { Settings } from '@/pages/Settings'
 import { SettingsReconciliation } from '@/pages/SettingsReconciliation'
 import { ProductEconomics } from '@/pages/ProductEconomics'
+import { UnitEconomyImport } from '@/pages/UnitEconomyImport'
 import { InventoryBalance } from '@/pages/InventoryBalance'
 import { MetricsMatrix } from '@/pages/MetricsMatrix'
 import { MetricsBuilder } from '@/pages/MetricsBuilder'
@@ -89,6 +90,7 @@ export default function App() {
         <Route path="/products/calculator" element={<Calculator />} />
         <Route path="/products/economics" element={<ProductEconomics />} />
         <Route path="/finance/balance" element={<InventoryBalance />} />
+        <Route path="/finance/unit-economy/import" element={<UnitEconomyImport />} />
         <Route path="/analytics/metrics-matrix" element={<MetricsMatrix />} />
         <Route path="/analytics/builder" element={<MetricsBuilder />} />
         <Route path="/whatif" element={<WhatIf />} />

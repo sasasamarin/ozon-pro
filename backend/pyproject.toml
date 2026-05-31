@@ -45,4 +45,7 @@ dependencies = [
     "pytz>=2024.2",
     "email-validator>=2.2.0",
     "aiosmtplib>=3.0.2",
+
+    # XLSX parsing — импорт отчётов Ozon «Экономика магазина»
+    "openpyxl>=3.1.5",
 ]
