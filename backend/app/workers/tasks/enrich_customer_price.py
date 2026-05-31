@@ -96,8 +96,10 @@ async def _enrich_account(
     params: dict = {"acc": str(account.id)}
     since_clause = ""
     if since_date:
-        since_clause = "AND o.order_created_at >= CAST(:since AS timestamptz)"
-        params["since"] = f"{since_date} 00:00:00+00"
+        # asyncpg ждёт datetime, не строку — конвертим явно
+        from datetime import datetime as _dt
+        since_clause = "AND o.order_created_at >= :since"
+        params["since"] = _dt.fromisoformat(f"{since_date}T00:00:00+00:00")
     rows = (await db.execute(text(f"""
         SELECT o.posting_number, MAX(o.order_created_at) max_dt
         FROM orders o
