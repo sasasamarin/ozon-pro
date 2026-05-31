@@ -27,8 +27,10 @@ class SyncState(Base):
         primary_key=True,
     )
     endpoint: Mapped[str] = mapped_column(String(100), primary_key=True)
-    # Универсальный курсор: для analytics — это ISO дата до которой всё синкнуто;
-    # для orders/transactions — last_id / offset; формат зависит от эндпоинта.
+    # Окно покрытия [last_synced_from .. last_cursor].
+    # last_synced_from — нижняя граница окна (для какого диапазона делали ре-проверку);
+    # last_cursor — верхняя граница, ISO даты/datetime в зависимости от эндпоинта.
+    last_synced_from: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_cursor: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,

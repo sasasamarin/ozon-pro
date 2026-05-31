@@ -70,7 +70,10 @@ async def _sync_all_orders_async(
     return {"total": len(accounts), "success": success, "failed": len(results) - success}
 
 
-_ORDERS_ENDPOINT = "/v3/posting/fbo/list"  # ключ в sync_state (общий FBO+FBS)
+_ORDERS_ENDPOINT = "/v3/posting/fbo/list"  # ключ в sync_state
+# Rolling-окно: статусы заказов (delivered/cancelled/returned) едут задним числом
+# до 3 дней. Каждый run пересинкаем последние 3 дня даже если cursor свежее.
+_ORDERS_REPROCESS_TAIL_DAYS = 3 (общий FBO+FBS)
 
 
 async def _sync_orders_for_account(
@@ -108,8 +111,8 @@ async def _sync_orders_for_account(
             cursor_dt = datetime.fromisoformat(saved_cursor.replace("Z", "+00:00"))
             if cursor_dt.tzinfo is None:
                 cursor_dt = cursor_dt.replace(tzinfo=UTC)
-            # Перекрытие 3 дня — статусы могут меняться задним числом
-            recheck_from = date_to - timedelta(days=3)
+            # Rolling-окно: всегда перепроверяем последние N дней.
+            recheck_from = date_to - timedelta(days=_ORDERS_REPROCESS_TAIL_DAYS)
             effective_from = min(cursor_dt, recheck_from)
             if effective_from > date_from:
                 date_from = effective_from
@@ -188,10 +191,12 @@ async def _sync_orders_for_account(
                 account.status = OzonAccountStatus.ACTIVE.value
             await db.commit()
 
-            # Сдвигаем cursor — date_to является границей "до которой синкнули"
+            # Сдвигаем окно [date_from, date_to] — что покрыто этим прогоном
             await save_sync_cursor(
                 SessionLocal, cabinet_id=account_id, endpoint=_ORDERS_ENDPOINT,
-                cursor=date_to.isoformat(), status="ok",
+                cursor=date_to.isoformat(),
+                synced_from=date_from.isoformat(),
+                status="ok",
             )
             return {"status": "success", "rows": stats.processed}
         except OzonAPIError as e:

@@ -136,9 +136,9 @@ async def get_sync_cursor(
     SessionFactory: async_sessionmaker[AsyncSession],
     *, cabinet_id: uuid.UUID, endpoint: str,
 ) -> str | None:
-    """Читает sync_state.last_cursor для (cabinet, endpoint). None если нет.
+    """Читает sync_state.last_cursor (верхняя граница окна). Backwards-совместим.
 
-    Универсальный курсор-API для всех sync-task'ов:
+    Универсальный курсор-API:
     - analytics: ISO дата ("2026-05-31") — до какого дня всё синкнуто
     - orders/transactions: ISO datetime — до какого момента всё синкнуто
     - returns: ISO дата — last return_date
@@ -155,28 +155,64 @@ async def get_sync_cursor(
     return row.last_cursor if row else None
 
 
+async def get_sync_window(
+    SessionFactory: async_sessionmaker[AsyncSession],
+    *, cabinet_id: uuid.UUID, endpoint: str,
+) -> tuple[str | None, str | None, datetime | None]:
+    """
+    Возвращает (last_synced_from, last_cursor, last_synced_at) — полное окно
+    покрытия. Используется для UI freshness и для rolling-overlap логики.
+    """
+    from app.models import SyncState
+    from sqlalchemy import select
+    async with SessionFactory() as db:
+        row = (await db.execute(
+            select(
+                SyncState.last_synced_from,
+                SyncState.last_cursor,
+                SyncState.last_synced_at,
+            ).where(
+                SyncState.cabinet_id == cabinet_id,
+                SyncState.endpoint == endpoint,
+            )
+        )).first()
+    if not row:
+        return None, None, None
+    return row.last_synced_from, row.last_cursor, row.last_synced_at
+
+
 async def save_sync_cursor(
     SessionFactory: async_sessionmaker[AsyncSession],
     *, cabinet_id: uuid.UUID, endpoint: str, cursor: str,
+    synced_from: str | None = None,
     status: str = "ok", error: str | None = None,
 ) -> None:
-    """Upsert sync_state.last_cursor для (cabinet, endpoint)."""
+    """
+    Upsert sync_state. cursor = верхняя граница окна (last_cursor).
+    synced_from = нижняя граница (опционально — сохраняем для UI/анализа).
+    """
     from app.models import SyncState
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     async with SessionFactory() as db:
-        stmt = pg_insert(SyncState).values(
+        values = dict(
             cabinet_id=cabinet_id, endpoint=endpoint,
             last_cursor=cursor, last_synced_at=datetime.now(UTC),
             status=status, error_message=(error[:500] if error else None),
         )
+        if synced_from is not None:
+            values["last_synced_from"] = synced_from
+        stmt = pg_insert(SyncState).values(**values)
+        update_set = {
+            "last_cursor": stmt.excluded.last_cursor,
+            "last_synced_at": stmt.excluded.last_synced_at,
+            "status": stmt.excluded.status,
+            "error_message": stmt.excluded.error_message,
+        }
+        if synced_from is not None:
+            update_set["last_synced_from"] = stmt.excluded.last_synced_from
         stmt = stmt.on_conflict_do_update(
             index_elements=["cabinet_id", "endpoint"],
-            set_={
-                "last_cursor": stmt.excluded.last_cursor,
-                "last_synced_at": stmt.excluded.last_synced_at,
-                "status": stmt.excluded.status,
-                "error_message": stmt.excluded.error_message,
-            },
+            set_=update_set,
         )
         await db.execute(stmt)
         await db.commit()

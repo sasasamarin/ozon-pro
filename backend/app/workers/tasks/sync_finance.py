@@ -62,6 +62,10 @@ def sync_all_transactions(
 
 
 _TX_ENDPOINT = "/v3/finance/transaction/list"  # ключ в sync_state
+# Rolling-окно: проводки/комиссии Ozon могут приходить задним числом.
+# Особенно для возвратов — комиссия за возврат может прийти через 1-2 недели
+# после фактического возврата товара. 14 дней — консервативное окно.
+_TX_REPROCESS_TAIL_DAYS = 14
 
 
 async def _orchestrate(
@@ -134,7 +138,7 @@ async def _sync_account(
     override_from: bool,
 ) -> dict:
     """Один кабинет — последовательно по чанкам, с cursor-resume."""
-    # Resume from cursor (если юзер не передал явный date_from)
+    # Resume from cursor с rolling-окном (если юзер не передал явный date_from)
     if not override_from:
         saved = await get_sync_cursor(
             SessionLocal, cabinet_id=acc.id, endpoint=_TX_ENDPOINT,
@@ -143,10 +147,15 @@ async def _sync_account(
             try:
                 cur = datetime.fromisoformat(saved.replace("Z", "+00:00"))
                 if cur.tzinfo is None: cur = cur.replace(tzinfo=UTC)
-                if cur > date_from:
-                    date_from = cur
+                # Rolling-окно: пересинк последних _TX_REPROCESS_TAIL_DAYS дней.
+                # Комиссии возврата приходят с задержкой → надо перепроверять.
+                rolling_lower = date_to - timedelta(days=_TX_REPROCESS_TAIL_DAYS)
+                effective = min(cur, rolling_lower)
+                if effective > date_from:
+                    date_from = effective
                     log.info("tx_resume_from_cursor",
-                             account=str(acc.id), cursor=saved)
+                             account=str(acc.id), cursor=saved,
+                             effective=date_from.isoformat())
             except ValueError:
                 pass
 
@@ -171,10 +180,13 @@ async def _sync_account(
         if status == "success":
             per_acc["success"] += 1
             per_acc["records"] += int(result.get("records", 0))
-            # Двигаем курсор только после успешного чанка
+            # Окно покрытия: from=date_from (начало запрошенного диапазона),
+            # to=chunk_to (двигается по мере успехов).
             await save_sync_cursor(
                 SessionLocal, cabinet_id=acc.id, endpoint=_TX_ENDPOINT,
-                cursor=chunk_to.isoformat(), status="ok",
+                cursor=chunk_to.isoformat(),
+                synced_from=date_from.isoformat(),
+                status="ok",
             )
         elif status == "skipped":
             per_acc["skipped"] += 1
@@ -182,7 +194,9 @@ async def _sync_account(
             per_acc["failed"] += 1
             await save_sync_cursor(
                 SessionLocal, cabinet_id=acc.id, endpoint=_TX_ENDPOINT,
-                cursor=chunk_from.isoformat(), status="error",
+                cursor=chunk_from.isoformat(),
+                synced_from=date_from.isoformat(),
+                status="error",
                 error=result.get("error") if isinstance(result, dict) else None,
             )
             break  # стоп при первом фейле, следующий run возобновится

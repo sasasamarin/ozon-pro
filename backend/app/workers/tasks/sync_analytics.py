@@ -62,6 +62,10 @@ _PAGE_SLEEP_S = 2.0          # Дросселируем /v1/analytics/data (rate
 _RATE_LIMIT_BASE_S = 5.0     # База для exp backoff при 429 без Retry-After
 _RATE_LIMIT_MAX_S = 120.0    # Потолок одного sleep при 429
 _MAX_RETRIES_ON_429 = 6
+# Rolling-окно: последние N дней пересинхриваем даже если cursor >= today.
+# /v1/analytics/data Ozon может пересчитать агрегаты последних 7 дней
+# (досчёт сессий, конверсий по поздним продажам).
+_REPROCESS_TAIL_DAYS = 7
 
 
 # ============================================================
@@ -174,12 +178,14 @@ async def _save_cursor(
     SessionLocal: async_sessionmaker[AsyncSession],
     cabinet_id: uuid.UUID,
     cursor: date_cls,
+    *,
+    synced_from: date_cls | None = None,
     status: str = "ok",
     error: str | None = None,
 ) -> None:
-    """Upsert sync_state.last_cursor для (cabinet, analytics)."""
+    """Upsert sync_state.last_cursor + опционально last_synced_from."""
     async with SessionLocal() as db:
-        stmt = pg_insert(SyncState).values(
+        values = dict(
             cabinet_id=cabinet_id,
             endpoint=_ANALYTICS_ENDPOINT,
             last_cursor=cursor.isoformat(),
@@ -187,14 +193,20 @@ async def _save_cursor(
             status=status,
             error_message=error[:500] if error else None,
         )
+        if synced_from is not None:
+            values["last_synced_from"] = synced_from.isoformat()
+        stmt = pg_insert(SyncState).values(**values)
+        update_set = {
+            "last_cursor": stmt.excluded.last_cursor,
+            "last_synced_at": stmt.excluded.last_synced_at,
+            "status": stmt.excluded.status,
+            "error_message": stmt.excluded.error_message,
+        }
+        if synced_from is not None:
+            update_set["last_synced_from"] = stmt.excluded.last_synced_from
         stmt = stmt.on_conflict_do_update(
             index_elements=["cabinet_id", "endpoint"],
-            set_={
-                "last_cursor": stmt.excluded.last_cursor,
-                "last_synced_at": stmt.excluded.last_synced_at,
-                "status": stmt.excluded.status,
-                "error_message": stmt.excluded.error_message,
-            },
+            set_=update_set,
         )
         await db.execute(stmt)
         await db.commit()
@@ -211,13 +223,24 @@ async def _sync_cabinet_chunks(
     Возобновляемость через sync_state: при втором прогоне начнём с
     cursor+1day, а не с requested date_from.
     """
-    # Resume from cursor if any
+    # Rolling-окно: даже если cursor=today, пересинкаем последние _REPROCESS_TAIL_DAYS.
+    # Ozon может пересчитать метрики постфактум (досчёт сессий, late-conversions).
     cursor = await _get_resume_cursor(SessionLocal, acc.id)
-    if cursor and cursor >= date_from:
-        effective_from = cursor + timedelta(days=1)
-        if effective_from >= today:
-            log.info("analytics_account_up_to_date", account=str(acc.id), cursor=cursor.isoformat())
+    rolling_lower = today - timedelta(days=_REPROCESS_TAIL_DAYS)
+    if cursor:
+        # эффективный from = min(cursor+1, rolling_lower) если cursor >= rolling_lower,
+        # иначе cursor+1 (мы ещё не догнали rolling-окно).
+        if cursor >= rolling_lower:
+            effective_from = rolling_lower
+        else:
+            effective_from = cursor + timedelta(days=1)
+        if effective_from > today:
+            log.info("analytics_account_up_to_date",
+                     account=str(acc.id), cursor=cursor.isoformat())
             return {"chunks": 0, "success": 0, "failed": 0, "skipped": 0, "records": 0}
+        # Не идём раньше изначального date_from
+        if effective_from < date_from:
+            effective_from = date_from
     else:
         effective_from = date_from
 
@@ -242,13 +265,15 @@ async def _sync_cabinet_chunks(
         if status == "success":
             stats["success"] += 1
             stats["records"] += int(res.get("rows", 0))
-            # Двигаем курсор только после успешного чанка
-            await _save_cursor(SessionLocal, acc.id, chunk_to, status="ok")
+            # Двигаем курсор + сохраняем нижнюю границу окна для UI freshness
+            await _save_cursor(SessionLocal, acc.id, chunk_to,
+                               synced_from=effective_from, status="ok")
         elif status == "skipped":
             stats["skipped"] += 1
         else:
             stats["failed"] += 1
             await _save_cursor(SessionLocal, acc.id, chunk_from,
+                               synced_from=effective_from,
                                status="error", error=res.get("error"))
             # При фейле останавливаемся — следующий прогон возобновится с курсора
             break
