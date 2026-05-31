@@ -671,6 +671,21 @@ class OzonSellerClient:
         """
         return await self._request("GET", "/v1/finance/payouts/total")
 
+    # ============================================
+    # КАТЕГОРИИ
+    # ============================================
+
+    async def get_description_category_tree(self, language: str = "DEFAULT") -> dict:
+        """Полное дерево категорий каталога Ozon.
+
+        Endpoint: POST /v1/description-category/tree.
+        Возвращает вложенную структуру: description_category → children + types (листья).
+        Глобальный справочник (один на весь Ozon), не зависит от кабинета.
+        """
+        return await self._request(
+            "POST", "/v1/description-category/tree", json={"language": language}
+        )
+
     async def test_credentials(self) -> bool:
         """
         Проверка что API ключи валидные.

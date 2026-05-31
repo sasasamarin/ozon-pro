@@ -36,6 +36,7 @@ celery_app = Celery(
         "app.workers.tasks.recompute_recommendations",
         "app.workers.tasks.enrich_customer_price",
         "app.workers.tasks.reconcile_realization",
+        "app.workers.tasks.sync_category_tree",
     ],
 )
 
@@ -159,6 +160,11 @@ celery_app.conf.beat_schedule = {
     "cleanup-old-logs-weekly": {
         "task": "app.workers.tasks.maintenance.cleanup_old_logs",
         "schedule": crontab(day_of_week=0, hour=2, minute=0),  # вс 2:00
+    },
+    # Дерево категорий Ozon — каталог стабильный, раз в неделю достаточно
+    "sync-category-tree-weekly": {
+        "task": "app.workers.tasks.sync_category_tree.sync_category_tree",
+        "schedule": crontab(day_of_week=0, hour=1, minute=0),  # вс 01:00 UTC
     },
     # Backup БД работает на хосте VPS через systemd timer (scripts/backup_db.sh).
     # Решение принято осознанно: pg_dump на хосте не зависит от Docker rebuild

@@ -103,6 +103,7 @@ from app.models.reports import (  # noqa: F401
     ReconciliationLineStatus,
     ReconciliationStatus,
 )
+from app.models.category_tree import OzonCategoryTree  # noqa: F401
 from app.models.team import (  # noqa: F401
     CompanyMember,
     InvitationStatus,
