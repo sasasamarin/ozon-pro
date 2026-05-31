@@ -26,6 +26,7 @@ from app.api.endpoints import (
     system_health,
     inventory_balance,
     metrics_matrix,
+    ai_context,
     markers,
     orders,
     ozon_accounts,
@@ -85,6 +86,9 @@ api_router.include_router(
 )
 api_router.include_router(
     metrics_matrix.router, prefix="/analytics/metrics-matrix", tags=["analytics"]
+)
+api_router.include_router(
+    ai_context.router, prefix="/ai", tags=["ai"]
 )
 api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
 api_router.include_router(
