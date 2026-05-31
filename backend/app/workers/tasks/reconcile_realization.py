@@ -167,19 +167,21 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
         total_diff = total_real - total_model
         total_diff_pct = (total_diff / total_real * 100) if total_real else None
 
-        # Сохраняем в БД одной строкой
+        # Сохраняем в БД. asyncpg не любит `:param::type` (двоеточие параметра
+        # + двоеточия каста подряд) → используем CAST(:brk AS jsonb).
         await db.execute(text("""
             INSERT INTO realization_reconciliation
               (id, ozon_account_id, year, month, total_revenue, total_payout_real,
                total_payout_model, diff_pct, sku_breakdown, created_at)
-            VALUES (gen_random_uuid(), :acc, :y, :m, :rev, :real, :model, :diff, :brk::jsonb, now())
+            VALUES (gen_random_uuid(), :acc, :y, :m, :rev, :real_p, :model_p, :diff,
+                    CAST(:brk AS jsonb), now())
             ON CONFLICT (ozon_account_id, year, month) DO UPDATE
-              SET total_revenue = :rev, total_payout_real = :real,
-                  total_payout_model = :model, diff_pct = :diff,
-                  sku_breakdown = :brk::jsonb, created_at = now()
+              SET total_revenue = :rev, total_payout_real = :real_p,
+                  total_payout_model = :model_p, diff_pct = :diff,
+                  sku_breakdown = CAST(:brk AS jsonb), created_at = now()
         """), {
             "acc": str(account.id), "y": year, "m": month,
-            "rev": total_revenue, "real": total_real, "model": total_model,
+            "rev": total_revenue, "real_p": total_real, "model_p": total_model,
             "diff": round(total_diff_pct, 2) if total_diff_pct is not None else None,
             "brk": __import__("json").dumps(sku_diffs, ensure_ascii=False),
         })
