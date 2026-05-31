@@ -41,6 +41,7 @@ import { ProductEconomics } from '@/pages/ProductEconomics'
 import { InventoryBalance } from '@/pages/InventoryBalance'
 import { MetricsMatrix } from '@/pages/MetricsMatrix'
 import { MetricsBuilder } from '@/pages/MetricsBuilder'
+import { WhatIf } from '@/pages/WhatIf'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { PagePlaceholder } from '@/components/PagePlaceholder'
@@ -90,6 +91,7 @@ export default function App() {
         <Route path="/finance/balance" element={<InventoryBalance />} />
         <Route path="/analytics/metrics-matrix" element={<MetricsMatrix />} />
         <Route path="/analytics/builder" element={<MetricsBuilder />} />
+        <Route path="/whatif" element={<WhatIf />} />
         <Route path="/finance/expenses" element={<Expenses />} />
         <Route path="/procurement/orders" element={<SupplierOrders />} />
         <Route path="/communications/reviews" element={<Reviews />} />
@@ -137,6 +139,7 @@ export default function App() {
               item.path !== '/finance/balance' &&
               item.path !== '/analytics/metrics-matrix' &&
               item.path !== '/analytics/builder' &&
+              item.path !== '/whatif' &&
               item.path !== '/finance/expenses' &&
               item.path !== '/procurement/orders' &&
               item.path !== '/communications/reviews' &&
