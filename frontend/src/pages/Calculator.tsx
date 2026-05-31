@@ -1,8 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Calculator as CalcIcon, Save } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { formatCurrency, cn } from '@/lib/utils'
+import { api } from '@/lib/api'
+
+interface CompanySettings {
+  tax: { tax_regime: string; tax_rate_pct: number; vat_rate_pct: number | null }
+}
 
 /** Юнит-калькулятор: цена → себестоимость → комиссия → логистика → прибыль */
 export function Calculator() {
@@ -13,6 +19,27 @@ export function Calculator() {
   const [adSpend, setAdSpend] = useState('150')
   const [packaging, setPackaging] = useState('50')
   const [tax, setTax] = useState('6')
+  const [taxLabel, setTaxLabel] = useState('УСН')
+
+  // Подтягиваем ставку из настроек компании (если юзер не редактировал ещё)
+  const { data: settings } = useQuery<CompanySettings>({
+    queryKey: ['company', 'settings'],
+    queryFn: async () => (await api.get('/company/settings/')).data,
+    staleTime: Infinity,
+  })
+
+  useEffect(() => {
+    if (settings) {
+      setTax(String(settings.tax.tax_rate_pct))
+      const label = {
+        usn_income: 'УСН Доходы',
+        usn_income_minus: 'УСН Дох-Расх',
+        osno: 'ОСНО',
+        none: 'Без налога',
+      }[settings.tax.tax_regime] || 'налог'
+      setTaxLabel(label)
+    }
+  }, [settings])
 
   const result = useMemo(() => {
     const p = parseFloat(price) || 0
@@ -58,7 +85,7 @@ export function Calculator() {
             <Field label="Логистика ₽" value={logistics} onChange={setLogistics} />
             <Field label="Упаковка ₽" value={packaging} onChange={setPackaging} />
             <Field label="Реклама ₽" value={adSpend} onChange={setAdSpend} />
-            <Field label="Налог УСН %" value={tax} onChange={setTax} />
+            <Field label={`Налог ${taxLabel} %`} value={tax} onChange={setTax} />
           </div>
         </Card>
 
@@ -72,7 +99,7 @@ export function Calculator() {
             <Row label="− Упаковка" value={-(parseFloat(packaging) || 0)} negative />
             <Row label="ВАЛОВАЯ ПРИБЫЛЬ" value={r.grossMargin} subtotal />
             <Row label="− Реклама" value={-(parseFloat(adSpend) || 0)} negative />
-            <Row label={`− Налог УСН (${tax}%)`} value={-r.taxAmount} negative />
+            <Row label={`− Налог ${taxLabel} (${tax}%)`} value={-r.taxAmount} negative />
             <Row label="ЧИСТАЯ ПРИБЫЛЬ" value={r.netMargin} subtotal />
           </div>
 
