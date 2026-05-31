@@ -40,6 +40,13 @@ from app.workers.tasks._helpers import (
 
 
 _PAGE_SIZE_RETURNS = 500
+# Hard cap: 50 страниц × 500 = 25000 возвратов max за прогон. У реального
+# селлера за 1.5 года столько не бывает; если упёрлись — pagination Ozon
+# зациклилась (offset игнорируется). Лучше прервать чем гонять часами.
+_MAX_RETURN_PAGES = 50
+# Промежуточный commit каждые N страниц чтобы не терять прогресс
+# и не копить тысячи рядов в одной транзакции (OOM risk).
+_RETURN_COMMIT_EVERY_PAGES = 5
 _PAGE_SIZE_POSTINGS = 1000
 _MAX_PAGES = 1000
 
@@ -104,10 +111,15 @@ async def _sync_returns_for_account(
                     ):
                         offset = 0
                         page = 0
+                        seen_return_ids: set[int] = set()
                         while True:
                             page += 1
-                            if page > _MAX_PAGES:
-                                log.error("pagination_runaway", method=f"returns_{kind}", account=str(account_id))
+                            # Hard cap чтобы не зациклиться при опаковой
+                            # пагинации (Ozon игнорирует offset > 20k).
+                            if page > _MAX_RETURN_PAGES:
+                                log.warning("returns_max_pages_hit",
+                                            method=f"returns_{kind}",
+                                            account=str(account_id), page=page)
                                 break
                             response = await fetcher(offset=offset, limit=_PAGE_SIZE_RETURNS)
                             returns = (
@@ -115,14 +127,37 @@ async def _sync_returns_for_account(
                                 or response.get("result", {}).get("returns")
                                 or []
                             )
-                            log.info("returns_page", account=str(account_id), kind=kind, page=page, items=len(returns))
+                            log.info("returns_page", account=str(account_id),
+                                     kind=kind, page=page, items=len(returns))
                             if not returns:
                                 break
+
+                            # Защита от циклической пагинации: если все ID
+                            # этой страницы уже видели — выходим (Ozon крутит).
+                            page_ids = {
+                                int(r.get("id") or r.get("return_id") or 0)
+                                for r in returns if isinstance(r, dict)
+                            }
+                            new_ids = page_ids - seen_return_ids
+                            if not new_ids and page > 1:
+                                log.warning("returns_pagination_loop",
+                                            account=str(account_id), kind=kind,
+                                            page=page)
+                                break
+                            seen_return_ids.update(page_ids)
+
                             for r in returns:
                                 if not isinstance(r, dict):
                                     continue
-                                await _upsert_return(db, account_id=account.id, raw=r, sku_to_id=sku_to_id)
+                                await _upsert_return(db, account_id=account.id,
+                                                     raw=r, sku_to_id=sku_to_id)
                                 stats.processed += 1
+                            # Промежуточный commit чтобы не терять прогресс
+                            if page % _RETURN_COMMIT_EVERY_PAGES == 0:
+                                await db.commit()
+                                log.info("returns_intermediate_commit",
+                                         account=str(account_id), page=page,
+                                         saved=stats.processed)
                             if len(returns) < _PAGE_SIZE_RETURNS:
                                 break
                             offset += len(returns)
