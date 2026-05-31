@@ -30,8 +30,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import Order, OrderItem, OzonAccount, Product, Transaction, User
+from app.models import Company, Order, OrderItem, OzonAccount, Product, Transaction, User
 from app.models.cost import CostConfidence, ProductCostHistory
+from app.services.tax import calc_tax
 
 router = APIRouter()
 UTC = timezone.utc
@@ -59,11 +60,21 @@ class PnLResponse(BaseModel):
     total_ozon_expenses: float
     marginal_profit: float
 
+    # === Налог + чистая прибыль ===
+    tax_regime: str
+    tax_regime_label: str
+    tax_rate_pct: float
+    tax_amount: float
+    vat_amount: float
+    net_profit: float            # marginal_profit − tax − vat
+    net_margin_pct: float | None
+
     rows: list[PnLRow]
 
     # сравнение с прошлым
     prev_revenue: float | None = None
     prev_marginal_profit: float | None = None
+    prev_net_profit: float | None = None
 
 
 _EXPENSE_BUCKETS = [
@@ -236,8 +247,40 @@ async def get_pnl(
         is_subtotal=True,
     ))
 
+    # === Налог по компании-режиму ===
+    company = (await db.execute(
+        select(Company).where(Company.id == current_user.company_id)
+    )).scalar_one()
+    tax_regime = company.tax_regime or "usn_income"
+    tax_rate = float(company.tax_rate_pct or 6.0)
+    vat_rate = float(company.vat_rate_pct) if company.vat_rate_pct else None
+    tax_res = calc_tax(
+        revenue=revenue, gross_profit=marginal_profit,
+        tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
+    )
+    if tax_res.vat_amount > 0:
+        rows.append(PnLRow(
+            label=f"− НДС ({vat_rate}%)",
+            amount=round(-tax_res.vat_amount, 2),
+            pct_of_revenue=pct(-tax_res.vat_amount),
+            is_negative=True,
+        ))
+    rows.append(PnLRow(
+        label=f"− Налог {tax_res.regime_label} ({tax_res.rate_pct}% от {tax_res.base_label})",
+        amount=round(-tax_res.tax_amount, 2),
+        pct_of_revenue=pct(-tax_res.tax_amount),
+        is_negative=True,
+    ))
+    rows.append(PnLRow(
+        label="ЧИСТАЯ ПРИБЫЛЬ",
+        amount=tax_res.net_profit,
+        pct_of_revenue=pct(tax_res.net_profit),
+        is_subtotal=True,
+    ))
+
     prev_revenue: float | None = None
     prev_marginal: float | None = None
+    prev_net: float | None = None
     if compare:
         prev_from = period_from - timedelta(days=days)
         prev_to = period_from
@@ -246,7 +289,13 @@ async def get_pnl(
         pr_exp = await _expenses_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
         prev_revenue = pr_rev
         prev_marginal = pr_rev - pr_cogs - sum(pr_exp.values())
+        prev_tax = calc_tax(
+            revenue=pr_rev, gross_profit=prev_marginal,
+            tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
+        )
+        prev_net = prev_tax.net_profit
 
+    net_margin = (tax_res.net_profit / revenue * 100) if revenue else None
     return PnLResponse(
         period_from=period_from.date().isoformat(),
         period_to=period_to.date().isoformat(),
@@ -257,7 +306,15 @@ async def get_pnl(
         gross_profit=round(gross_profit, 2),
         total_ozon_expenses=round(total_expenses, 2),
         marginal_profit=round(marginal_profit, 2),
+        tax_regime=tax_regime,
+        tax_regime_label=tax_res.regime_label,
+        tax_rate_pct=tax_rate,
+        tax_amount=tax_res.tax_amount,
+        vat_amount=tax_res.vat_amount,
+        net_profit=tax_res.net_profit,
+        net_margin_pct=round(net_margin, 2) if net_margin is not None else None,
         rows=rows,
         prev_revenue=round(prev_revenue, 2) if prev_revenue is not None else None,
         prev_marginal_profit=round(prev_marginal, 2) if prev_marginal is not None else None,
+        prev_net_profit=round(prev_net, 2) if prev_net is not None else None,
     )

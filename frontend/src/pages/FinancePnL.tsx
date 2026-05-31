@@ -27,9 +27,17 @@ interface PnLResp {
   gross_profit: number
   total_ozon_expenses: number
   marginal_profit: number
+  tax_regime: string
+  tax_regime_label: string
+  tax_rate_pct: number
+  tax_amount: number
+  vat_amount: number
+  net_profit: number
+  net_margin_pct: number | null
   rows: PnLRow[]
   prev_revenue: number | null
   prev_marginal_profit: number | null
+  prev_net_profit: number | null
 }
 
 export function FinancePnL() {
@@ -90,18 +98,28 @@ export function FinancePnL() {
       )}
 
       {/* Header KPI */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KpiTile label="Выручка" value={data?.revenue ?? 0} prev={data?.prev_revenue ?? null} />
         <KpiTile label="Себестоимость" value={-(data?.cogs ?? 0)} prev={null} negative />
         <KpiTile label="Расходы Ozon" value={-(data?.total_ozon_expenses ?? 0)} prev={null} negative />
         <KpiTile
-          label="Маржинальная прибыль"
+          label="Маржинальная (до налога)"
           value={data?.marginal_profit ?? 0}
           prev={data?.prev_marginal_profit ?? null}
-          accent
           subtitle={
             marginPct != null
-              ? `маржа ${marginPct.toFixed(1)}%${marginDelta != null ? ` (${marginDelta >= 0 ? '+' : ''}${marginDelta.toFixed(1)} п.п.)` : ''}`
+              ? `${marginPct.toFixed(1)}%${marginDelta != null ? ` (${marginDelta >= 0 ? '+' : ''}${marginDelta.toFixed(1)} п.п.)` : ''}`
+              : undefined
+          }
+        />
+        <KpiTile
+          label={`Чистая (после налога${data ? ` ${data.tax_regime_label} ${data.tax_rate_pct}%` : ''})`}
+          value={data?.net_profit ?? 0}
+          prev={data?.prev_net_profit ?? null}
+          accent
+          subtitle={
+            data?.net_margin_pct != null
+              ? `маржа ${data.net_margin_pct.toFixed(1)}%`
               : undefined
           }
         />
