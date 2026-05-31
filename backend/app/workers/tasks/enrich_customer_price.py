@@ -102,17 +102,27 @@ async def _enrich_account(
             batch = postings[batch_start:batch_start + _BATCH]
             for p_num in batch:
                 try:
-                    customer_price = await _fetch_customer_price(client, p_num)
-                    if customer_price is None:
+                    # Возвращает {ozon_sku: customer_price} — для матчинга per-item.
+                    # Раньше брали products[0].customer_price и писали ВСЕМ позициям
+                    # посту → если в посту >1 товара с разными ценами, Жирафу
+                    # присваивалось значение чужого товара (видели 81419, 86946).
+                    sku_to_cp = await _fetch_customer_prices_by_sku(client, p_num)
+                    if not sku_to_cp:
                         stats["skipped"] += 1
                         continue
-                    res = await db.execute(text("""
-                        UPDATE order_items
-                        SET customer_price = :cp
-                        WHERE order_id IN (SELECT id FROM orders WHERE posting_number = :p)
-                          AND customer_price IS NULL
-                    """), {"cp": customer_price, "p": p_num})
-                    if res.rowcount > 0:
+                    rows_updated = 0
+                    for sku, cp in sku_to_cp.items():
+                        res = await db.execute(text("""
+                            UPDATE order_items oi
+                            SET customer_price = :cp
+                            FROM orders o
+                            WHERE oi.order_id = o.id
+                              AND o.posting_number = :p
+                              AND oi.ozon_sku = :sku
+                              AND oi.customer_price IS NULL
+                        """), {"cp": cp, "p": p_num, "sku": sku})
+                        rows_updated += res.rowcount
+                    if rows_updated > 0:
                         stats["updated"] += 1
                     stats["processed"] += 1
                 except Exception:
@@ -135,8 +145,11 @@ async def _enrich_account(
                 await asyncio.sleep(_BATCH_SLEEP_SEC)
 
 
-async def _fetch_customer_price(client: OzonSellerClient, posting_number: str) -> float | None:
-    """Дёргаем /v2/posting/fbo/get → достаём customer_price первого товара."""
+async def _fetch_customer_prices_by_sku(client: OzonSellerClient, posting_number: str) -> dict[int, float]:
+    """Дёргаем /v2/posting/fbo/get → возвращаем {ozon_sku: customer_price}
+    для КАЖДОГО товара в посту. Матчим в БД по sku, чтобы при posting'е с
+    несколькими разными товарами каждой позиции писалась ЕЁ цена покупателя.
+    """
     r = await client._request(
         "POST",
         "/v2/posting/fbo/get",
@@ -148,12 +161,14 @@ async def _fetch_customer_price(client: OzonSellerClient, posting_number: str) -
     result = r.get("result") or {}
     fd = result.get("financial_data") or {}
     products = fd.get("products") or []
-    if not products:
-        return None
-    cp = products[0].get("customer_price")
-    if cp is None:
-        return None
-    try:
-        return float(cp)
-    except (TypeError, ValueError):
-        return None
+    out: dict[int, float] = {}
+    for fp in products:
+        sku = fp.get("product_id")
+        cp = fp.get("customer_price")
+        if sku is None or cp is None:
+            continue
+        try:
+            out[int(sku)] = float(cp)
+        except (TypeError, ValueError):
+            continue
+    return out

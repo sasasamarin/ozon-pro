@@ -363,8 +363,7 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
         <div>
           <h3 className="text-sm font-medium text-fg mb-1">Точечный график</h3>
           <p className="text-[11px] text-fg-muted mb-2">
-            Каждая точка = один день. Правее — больше показов, выше — больше заказов.
-            Точки в линию ↗ = показы хорошо конвертятся. Разброс = заказы зависят не только от показов.
+            <strong>Каждая точка = один день.</strong> Правее = больше показов в тот день, выше = больше заказов.
           </p>
           <div className="h-[180px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -383,12 +382,34 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
               </ScatterChart>
             </ResponsiveContainer>
           </div>
+          <div className="text-[11px] mt-2 p-2 rounded bg-bg-subtle/60 leading-relaxed">
+            <strong>Как читать:</strong>
+            <ul className="list-disc list-inside mt-1 space-y-0.5 text-fg-muted">
+              <li>Точки выстроились по диагонали ↗ → <span className="text-emerald-700">реклама работает</span>:
+                  больше показов = больше заказов.</li>
+              <li>Точки в кучу или зигзагом → заказы зависят НЕ от показов
+                  (цена, сезон, отзывы, остаток).</li>
+            </ul>
+            {r !== null && (
+              <div className="mt-1.5 pt-1.5 border-t border-border-subtle/40">
+                <strong>Вывод по этому графику:</strong>{' '}
+                <span className={strengthColor}>
+                  {r >= 0.7 ? 'сильная связь — гнать показы стоит' :
+                   r >= 0.4 ? 'средняя связь — показы влияют, но не главное' :
+                   r >= 0.2 ? 'слабая связь — больше показов мало даёт' :
+                   r >= -0.2 ? 'связи нет — показы НЕ драйвер заказов' :
+                   'обратная связь — лишние показы скорее мешают'}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         <div>
           <h3 className="text-sm font-medium text-fg mb-2">Лаг-анализ (до 14 дней)</h3>
           <p className="text-[11px] text-fg-muted mb-2">
-            r = связь «показы сегодня → заказы через N дней». Зелёный = лучший положительный лаг.
+            Когда сегодняшние показы превращаются в заказы — сегодня, завтра, через неделю?
+            Зелёный = самый сильный «отклик».
           </p>
           <div className="space-y-1">
             {data.lags.map((l) => {
@@ -413,6 +434,26 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
                 </div>
               )
             })}
+          </div>
+          <div className="text-[11px] mt-3 p-2 rounded bg-bg-subtle/60 leading-relaxed">
+            <strong>Что значат цифры:</strong>
+            <ul className="list-disc list-inside mt-1 space-y-0.5 text-fg-muted">
+              <li><span className="font-semibold">0.7-1.0</span> — сильная связь, показы → заказы почти 1:1</li>
+              <li><span className="font-semibold">0.4-0.7</span> — умеренная (показы помогают, но не одни)</li>
+              <li><span className="font-semibold">0.2-0.4</span> — слабая (мало зависит от показов)</li>
+              <li><span className="font-semibold">0.0-0.2</span> — нет связи</li>
+              <li><span className="font-semibold">отрицательная</span> — обратная связь (редко)</li>
+            </ul>
+            {data.best_lag_days !== null && (
+              <div className="mt-1.5 pt-1.5 border-t border-border-subtle/40">
+                <strong>Вывод:</strong>{' '}
+                {data.best_lag_days === 0
+                  ? 'показы конвертятся в заказы в тот же день — быстрый отклик'
+                  : `показы дают эффект через ${data.best_lag_days} ${
+                      data.best_lag_days === 1 ? 'день' : 'дн'
+                    } — реклама работает с лагом, планируй заранее`}
+              </div>
+            )}
           </div>
         </div>
       </div>
