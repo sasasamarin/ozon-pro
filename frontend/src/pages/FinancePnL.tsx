@@ -24,6 +24,8 @@ interface PnLResp {
   has_missing_costs: boolean
   missing_costs_count: number
   revenue: number
+  returned_revenue: number
+  effective_revenue: number
   cogs: number
   gross_profit: number
   total_ozon_expenses: number
@@ -96,6 +98,20 @@ export function FinancePnL() {
 
       {data?.has_missing_costs && (
         <CostWarningBanner count={data.missing_costs_count} context="profit" />
+      )}
+
+      {data && data.returned_revenue > 0 && (
+        <div className="rounded-md border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm">
+          <p className="font-semibold text-amber-900">Методика учёта обновлена</p>
+          <p className="text-amber-800 mt-1">
+            Выручка теперь показывается «как в кабинете Ozon» (brut), возвраты —
+            отдельной строкой ниже. Налог считается от эффективной выручки
+            (revenue − возвраты). За этот период:
+            возвраты <span className="font-mono font-semibold">{formatCurrency(data.returned_revenue)}</span>
+            {' '}({data.revenue ? ((data.returned_revenue / data.revenue) * 100).toFixed(1) : '0'}%
+            от brut выручки).
+          </p>
+        </div>
       )}
 
       <SelectedProductBanner />

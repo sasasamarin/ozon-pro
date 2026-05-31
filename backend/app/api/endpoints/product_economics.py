@@ -52,7 +52,9 @@ class EconomicsRow(BaseModel):
     is_archived: bool
 
     qty_delivered: int
-    revenue: float
+    revenue: float                 # brut — то что показывает Ozon как продано
+    returned_revenue: float        # сумма возвратов по этому товару в периоде
+    effective_revenue: float       # revenue − returned_revenue
 
     # На единицу — для сравнения товаров
     avg_seller_price: float | None
@@ -86,6 +88,8 @@ class EconomicsRow(BaseModel):
 class EconomicsTotals(BaseModel):
     qty_delivered: int
     revenue: float
+    returned_revenue: float
+    effective_revenue: float
     cost_total: float
     commission_total: float
     logistics_total: float
@@ -203,10 +207,22 @@ async def get_economics(
     """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
     ad_by_prod: dict[str, float] = {r.pid: float(r.spend or 0) for r in ad_rows}
 
+    # returns per-product за тот же период (по return_date — «зеркало Ozon»)
+    ret_rows = (await db.execute(text("""
+        SELECT product_id::text pid, COALESCE(SUM(return_amount), 0)::float ret_sum
+        FROM returns
+        WHERE ozon_account_id = ANY(:accs)
+          AND return_date >= :df
+          AND return_date < (CAST(:dt AS date) + interval '1 day')
+        GROUP BY product_id
+    """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
+    ret_by_prod: dict[str, float] = {r.pid: float(r.ret_sum or 0) for r in ret_rows}
+
     # Построение строк
     out_rows: list[EconomicsRow] = []
     tot_qty = 0
-    tot_revenue = tot_cost = tot_comm = tot_log = tot_acq = tot_ad = 0.0
+    tot_revenue = tot_returned = tot_eff_rev = 0.0
+    tot_cost = tot_comm = tot_log = tot_acq = tot_ad = 0.0
     tot_op = tot_tax = tot_vat = tot_net = 0.0
     p_with_cost = 0
 
@@ -240,13 +256,18 @@ async def get_economics(
         log_total = log_calc.amount
         acq_total = acq_calc.amount
 
-        op_profit = revenue - cost_total - comm_total - log_total - acq_total - ad_total
+        returned_revenue = ret_by_prod.get(r.product_id, 0.0)
+        effective_revenue = revenue - returned_revenue
+
+        # Налог и op_profit считаются от effective_revenue (post-returns)
+        op_profit = effective_revenue - cost_total - comm_total - log_total - acq_total - ad_total
         tax_res = calc_tax(
-            revenue=revenue, gross_profit=op_profit,
+            revenue=effective_revenue, gross_profit=op_profit,
             tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
         )
 
         net = tax_res.net_profit
+        # % считаем от brut revenue (= что в кабинете Ozon)
         net_margin = (net / revenue * 100) if revenue else None
         op_margin = (op_profit / revenue * 100) if revenue else None
 
@@ -259,6 +280,8 @@ async def get_economics(
             is_archived=bool(r.is_archived),
             qty_delivered=qty,
             revenue=round(revenue, 2),
+            returned_revenue=round(returned_revenue, 2),
+            effective_revenue=round(effective_revenue, 2),
             avg_seller_price=round(avg_seller, 2) if avg_seller else None,
             avg_customer_price=round(avg_customer, 2) if avg_customer else None,
             spp_pct=spp_pct,
@@ -284,6 +307,8 @@ async def get_economics(
 
         tot_qty += qty
         tot_revenue += revenue
+        tot_returned += returned_revenue
+        tot_eff_rev += effective_revenue
         tot_cost += cost_total
         tot_comm += comm_total
         tot_log += log_total
@@ -299,6 +324,8 @@ async def get_economics(
     totals = EconomicsTotals(
         qty_delivered=tot_qty,
         revenue=round(tot_revenue, 2),
+        returned_revenue=round(tot_returned, 2),
+        effective_revenue=round(tot_eff_rev, 2),
         cost_total=round(tot_cost, 2),
         commission_total=round(tot_comm, 2),
         logistics_total=round(tot_log, 2),
@@ -331,7 +358,8 @@ async def get_economics(
 
 def _empty_totals() -> EconomicsTotals:
     return EconomicsTotals(
-        qty_delivered=0, revenue=0, cost_total=0, commission_total=0,
+        qty_delivered=0, revenue=0, returned_revenue=0, effective_revenue=0,
+        cost_total=0, commission_total=0,
         logistics_total=0, acquiring_total=0, ad_spend_total=0,
         operating_profit=0, tax_amount=0, vat_amount=0, net_profit=0,
         net_margin_pct=None, products_total=0,

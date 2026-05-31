@@ -96,6 +96,16 @@ async def get_full_context(
     """), {"pid": str(product_id), "df": date_from})).first()
     ad_spend = float(ad.spend or 0) if ad else 0.0
 
+    # ─── Возвраты за период (по return_date — "зеркало Ozon") ───
+    returned_revenue_row = (await db.execute(text("""
+        SELECT COALESCE(SUM(return_amount), 0)::float
+        FROM returns
+        WHERE product_id = :pid
+          AND return_date >= :df
+    """), {"pid": str(product_id), "df": date_from})).scalar() or 0
+    returned_revenue = float(returned_revenue_row)
+    effective_revenue = revenue - returned_revenue
+
     # ─── Расходы ───
     cost_total = (cost or 0) * qty
     comm_total = revenue * commission_pct / 100
@@ -108,9 +118,10 @@ async def get_full_context(
     )
     log_total = log_calc.amount
     acq_total = acq_calc.amount
-    op_profit = revenue - cost_total - comm_total - log_total - acq_total - ad_spend
+    # ВАЖНО: op_profit и налог считаются от effective_revenue (после возвратов)
+    op_profit = effective_revenue - cost_total - comm_total - log_total - acq_total - ad_spend
     tax_res = calc_tax(
-        revenue=revenue, gross_profit=op_profit,
+        revenue=effective_revenue, gross_profit=op_profit,
         tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
     )
 
@@ -174,6 +185,10 @@ async def get_full_context(
             "avg_seller_price": round(avg_seller, 2) if avg_seller else None,
             "customer_price_data_coverage_pct": round(
                 100 * (sales.cust_price_n or 0) / qty, 1) if qty else None,
+        },
+        "returns": {
+            "returned_revenue": round(returned_revenue, 2),
+            "effective_revenue": round(effective_revenue, 2),
         },
         "expenses": {
             "cost_total": round(cost_total, 2),
