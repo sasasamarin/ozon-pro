@@ -32,9 +32,11 @@ interface CorrPoint {
   date: string
   impressions: number
   orders: number
-  price?: number | null
-  marketing_price?: number | null
-  customer_price?: number | null   // средняя customer_price дня (СПП-цена покупателя)
+  price?: number | null              // current_price (зачёркнутая до скидки)
+  marketing_price?: number | null    // marketing_seller_price (цена продавца)
+  customer_price?: number | null     // средняя customer_price дня (СПП-цена покупателя)
+  ad_spend?: number | null           // расход на рекламу за день
+  stock_total?: number | null        // остаток на конец дня
   is_stockout?: boolean
 }
 interface LagCorr { lag_days: number; r: number | null }
@@ -143,6 +145,18 @@ export function FunnelInsights({
 // =====================================================================
 
 function ShowsToOrdersChart({ qs }: { qs: string }) {
+  // Состояние выбора overlay-метрик. Юзер может наложить произвольный набор.
+  const [overlays, setOverlays] = useState<Set<string>>(
+    () => new Set(['impressions', 'orders', 'customer'])
+  )
+  const toggle = (k: string) =>
+    setOverlays((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
+
   const { data, isLoading } = useQuery<CorrelationsResp>({
     queryKey: ['funnel', 'correlations', qs],
     queryFn: async () => (await api.get(`/analytics/funnel/v2/correlations?${qs}`)).data,
@@ -161,6 +175,8 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
     price: p.price ?? null,
     spp: p.marketing_price ?? null,
     customer: p.customer_price ?? null,
+    ad_spend: p.ad_spend ?? null,
+    stock: p.stock_total ?? null,
     is_stockout: p.is_stockout || false,
   }))
 
@@ -211,6 +227,37 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
         <span>{data.explanation}</span>
       </div>
 
+      {/* Выбор overlay-метрик. Юзер сам строит «свою зависимость». */}
+      <div className="mb-3 flex flex-wrap gap-1.5 text-xs">
+        <span className="text-fg-muted self-center mr-1">Слои:</span>
+        {([
+          ['impressions', 'Показы',          'bg-slate-400'],
+          ['orders',      'Заказы',          'bg-red-500'],
+          ['customer',    'СПП покупателю',  'bg-blue-600'],
+          ['spp',         'Цена продавца',   'bg-purple-500'],
+          ['price',       'До скидки',       'bg-emerald-500'],
+          ['ad_spend',    'Реклама ₽',       'bg-amber-500'],
+          ['stock',       'Остаток',         'bg-cyan-500'],
+        ] as Array<[string, string, string]>).map(([key, label, color]) => {
+          const active = overlays.has(key)
+          return (
+            <button
+              key={key}
+              onClick={() => toggle(key)}
+              className={cn(
+                'px-2 py-1 rounded-md border transition-colors flex items-center gap-1.5',
+                active
+                  ? 'border-fg/40 bg-bg-subtle text-fg'
+                  : 'border-border-subtle text-fg-muted hover:bg-bg-subtle/50'
+              )}
+            >
+              <span className={cn('w-2 h-2 rounded-full', color, !active && 'opacity-30')} />
+              {label}
+            </button>
+          )
+        })}
+      </div>
+
       <div className="h-[300px]">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={chartData}>
@@ -224,9 +271,16 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
             )}
             <Tooltip
               formatter={(v: number, name: string) => {
-                if (name === 'spp')  return [v ? `${formatNumber(v)} ₽` : '—', 'СПП (карточка)']
-                if (name === 'price') return [v ? `${formatNumber(v)} ₽` : '—', 'Цена продавца']
-                if (name === 'customer') return [v ? `${formatNumber(v)} ₽` : '—', 'Покупатель факт.']
+                // ВНИМАНИЕ: в данных
+                //   price = current_price = 33000 (зачёркнутая, ДО скидки)
+                //   spp   = marketing_price = 19958 (цена продавца, ОТ неё считается выручка)
+                //   customer = avg customer_price = 11000 (СПП-цена покупателя)
+                // ПОДПИСИ ВЫРОВНЕНЫ под истинный смысл (юзер: 19958 ≠ СПП).
+                if (name === 'price')    return [v ? `${formatNumber(v)} ₽` : '—', 'До скидки']
+                if (name === 'spp')      return [v ? `${formatNumber(v)} ₽` : '—', 'Цена продавца']
+                if (name === 'customer') return [v ? `${formatNumber(v)} ₽` : '—', 'СПП покупателю']
+                if (name === 'ad_spend') return [v ? `${formatCurrency(v)}` : '—', 'Реклама ₽']
+                if (name === 'stock')    return [v != null ? formatNumber(v) : '—', 'Остаток']
                 if (name === 'orders') return [formatNumber(v), 'Заказы']
                 if (name === 'impressions') return [formatNumber(v), 'Показы']
                 return [formatNumber(v), name]
@@ -236,28 +290,44 @@ function ShowsToOrdersChart({ qs }: { qs: string }) {
                     formatter={(v: string) => (
                       v === 'impressions' ? 'Показы' :
                       v === 'orders' ? 'Заказы' :
-                      v === 'spp' ? 'СПП (карточка)' :
-                      v === 'customer' ? 'Покупатель факт.' :
-                      v === 'price' ? 'Цена продавца' : v
+                      v === 'price' ? 'До скидки' :
+                      v === 'spp' ? 'Цена продавца' :
+                      v === 'customer' ? 'СПП покупателю' :
+                      v === 'ad_spend' ? 'Реклама ₽' :
+                      v === 'stock' ? 'Остаток' : v
                     )} />
             {/* Красные зоны стокаута поверх */}
             {stockoutSpans.map((s, i) => (
               <ReferenceArea key={i} yAxisId="left" x1={s.x1} x2={s.x2}
                              fill="#fecaca" fillOpacity={0.4} ifOverflow="visible" />
             ))}
-            <Bar yAxisId="left" dataKey="impressions" fill="#cbd5e1" name="impressions" />
-            <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#dc2626"
-                  strokeWidth={2} dot={false} name="orders" />
-            {data.has_price_overlay && (
-              <>
-                <Line yAxisId="price" type="monotone" dataKey="price" stroke="#10b981"
-                      strokeWidth={1.5} strokeDasharray="4 3" dot={false} name="price" />
-                <Line yAxisId="price" type="monotone" dataKey="spp" stroke="#a855f7"
-                      strokeWidth={2} dot={false} name="spp" />
-                {/* Реальная цена покупателя с СПП по дням — драйвер спроса */}
-                <Line yAxisId="price" type="monotone" dataKey="customer" stroke="#2563eb"
-                      strokeWidth={2} dot={{ r: 2 }} connectNulls name="customer" />
-              </>
+            {overlays.has('impressions') && (
+              <Bar yAxisId="left" dataKey="impressions" fill="#cbd5e1" name="impressions" />
+            )}
+            {overlays.has('orders') && (
+              <Line yAxisId="right" type="monotone" dataKey="orders" stroke="#dc2626"
+                    strokeWidth={2} dot={false} name="orders" />
+            )}
+            {overlays.has('ad_spend') && (
+              <Line yAxisId="right" type="monotone" dataKey="ad_spend" stroke="#f59e0b"
+                    strokeWidth={2} strokeDasharray="3 2" dot={false} name="ad_spend"
+                    connectNulls />
+            )}
+            {overlays.has('stock') && (
+              <Line yAxisId="left" type="monotone" dataKey="stock" stroke="#06b6d4"
+                    strokeWidth={1.5} dot={false} name="stock" connectNulls />
+            )}
+            {data.has_price_overlay && overlays.has('price') && (
+              <Line yAxisId="price" type="monotone" dataKey="price" stroke="#10b981"
+                    strokeWidth={1.5} strokeDasharray="4 3" dot={false} name="price" />
+            )}
+            {data.has_price_overlay && overlays.has('spp') && (
+              <Line yAxisId="price" type="monotone" dataKey="spp" stroke="#a855f7"
+                    strokeWidth={2} dot={false} name="spp" />
+            )}
+            {data.has_price_overlay && overlays.has('customer') && (
+              <Line yAxisId="price" type="monotone" dataKey="customer" stroke="#2563eb"
+                    strokeWidth={2} dot={{ r: 2 }} connectNulls name="customer" />
             )}
           </ComposedChart>
         </ResponsiveContainer>

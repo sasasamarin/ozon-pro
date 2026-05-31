@@ -71,17 +71,20 @@ async def _enrich_account(
     max_postings: int | None,
 ) -> None:
     """Обогащаем postings одного кабинета."""
-    # Берём posting_number'ы где customer_price пуст хотя бы у одного OrderItem
-    # И сам order — FBO (там есть customer_price; FBS не отдаёт)
+    # Берём posting_number'ы где customer_price пуст. Сортируем по order_created_at DESC —
+    # свежие postings первыми, чтобы аналитика последних дней сразу появлялась.
+    # Раньше было ORDER BY posting_number DESC — лексикографическая сортировка
+    # (не по дате) → свежие 28-30 мая с меньшими posting_number не попадали в выборку.
     limit_sql = f"LIMIT {int(max_postings)}" if max_postings else ""
     rows = (await db.execute(text(f"""
-        SELECT DISTINCT o.posting_number
+        SELECT o.posting_number, MAX(o.order_created_at) max_dt
         FROM orders o
         JOIN order_items oi ON oi.order_id = o.id
         WHERE o.ozon_account_id = :acc
           AND o.order_type = 'fbo'
           AND oi.customer_price IS NULL
-        ORDER BY o.posting_number DESC
+        GROUP BY o.posting_number
+        ORDER BY MAX(o.order_created_at) DESC
         {limit_sql}
     """), {"acc": str(account.id)})).all()
     postings = [r[0] for r in rows]

@@ -655,9 +655,13 @@ class CorrPoint(BaseModel):
     date: str
     impressions: int
     orders: int
-    price: float | None = None              # текущая цена в этот день
-    marketing_price: float | None = None    # СПП — реальная цена для покупателя
-    customer_price: float | None = None     # средняя «оплачено покупателем» с СПП за этот день
+    # === Цены ===
+    price: float | None = None              # current_price (= 33000, зачёркнутая «до скидки»)
+    marketing_price: float | None = None    # marketing_seller_price (= 19958, цена продавца)
+    customer_price: float | None = None     # средняя «оплачено покупателем» с СПП (= 11000)
+    # === Прочие drivers ===
+    ad_spend: float | None = None           # расход на рекламу за этот день
+    stock_total: int | None = None          # остаток на конец дня (для per-product)
     is_stockout: bool = False               # был ли товар в стокауте
 
 
@@ -791,6 +795,33 @@ async def funnel_correlations(
                 if p.date in cp_by_day:
                     p.customer_price = cp_by_day[p.date]
                     has_price_overlay = True
+
+            # Остаток на конец каждого дня (для overlay)
+            stock_total_by_day = {r.d.isoformat(): int(r.free or 0) for r in stk_rows}
+            last_stock = None
+            for p in series:
+                if p.date in stock_total_by_day:
+                    last_stock = stock_total_by_day[p.date]
+                p.stock_total = last_stock
+
+    # ad_spend по дням (для overlay) — для всех товаров или одного
+    ad_where = [
+        AdStatistics.ozon_account_id.in_(accs),
+        AdStatistics.date >= date_from,
+        AdStatistics.date <= date_to,
+    ]
+    if pids:
+        ad_where.append(AdStatistics.product_id.in_(pids))
+    ad_rows = (await db.execute(
+        select(
+            AdStatistics.date.label("d"),
+            func.coalesce(func.sum(AdStatistics.spend), 0).label("spend"),
+        ).where(*ad_where).group_by(AdStatistics.date)
+    )).all()
+    ad_spend_by_day = {r.d.isoformat(): float(r.spend or 0) for r in ad_rows}
+    for p in series:
+        if p.date in ad_spend_by_day:
+            p.ad_spend = ad_spend_by_day[p.date]
 
     imps = [float(p.impressions) for p in series]
     ords = [float(p.orders) for p in series]
