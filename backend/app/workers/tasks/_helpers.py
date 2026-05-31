@@ -132,6 +132,56 @@ async def track_sync_log(
         await db.flush()
 
 
+async def get_sync_cursor(
+    SessionFactory: async_sessionmaker[AsyncSession],
+    *, cabinet_id: uuid.UUID, endpoint: str,
+) -> str | None:
+    """Читает sync_state.last_cursor для (cabinet, endpoint). None если нет.
+
+    Универсальный курсор-API для всех sync-task'ов:
+    - analytics: ISO дата ("2026-05-31") — до какого дня всё синкнуто
+    - orders/transactions: ISO datetime — до какого момента всё синкнуто
+    - returns: ISO дата — last return_date
+    """
+    from app.models import SyncState
+    from sqlalchemy import select
+    async with SessionFactory() as db:
+        row = (await db.execute(
+            select(SyncState.last_cursor).where(
+                SyncState.cabinet_id == cabinet_id,
+                SyncState.endpoint == endpoint,
+            )
+        )).first()
+    return row.last_cursor if row else None
+
+
+async def save_sync_cursor(
+    SessionFactory: async_sessionmaker[AsyncSession],
+    *, cabinet_id: uuid.UUID, endpoint: str, cursor: str,
+    status: str = "ok", error: str | None = None,
+) -> None:
+    """Upsert sync_state.last_cursor для (cabinet, endpoint)."""
+    from app.models import SyncState
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    async with SessionFactory() as db:
+        stmt = pg_insert(SyncState).values(
+            cabinet_id=cabinet_id, endpoint=endpoint,
+            last_cursor=cursor, last_synced_at=datetime.now(UTC),
+            status=status, error_message=(error[:500] if error else None),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["cabinet_id", "endpoint"],
+            set_={
+                "last_cursor": stmt.excluded.last_cursor,
+                "last_synced_at": stmt.excluded.last_synced_at,
+                "status": stmt.excluded.status,
+                "error_message": stmt.excluded.error_message,
+            },
+        )
+        await db.execute(stmt)
+        await db.commit()
+
+
 async def load_sku_map(
     db: AsyncSession, account_id: uuid.UUID
 ) -> dict[int, uuid.UUID]:

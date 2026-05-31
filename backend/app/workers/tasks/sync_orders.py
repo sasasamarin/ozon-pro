@@ -21,9 +21,11 @@ from app.services.ozon_client import OzonAPIError, OzonSellerClient
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
+    get_sync_cursor,
     load_offer_id_map,
     load_sku_map,
     run_celery_async,
+    save_sync_cursor,
     track_sync_log,
 )
 
@@ -68,6 +70,9 @@ async def _sync_all_orders_async(
     return {"total": len(accounts), "success": success, "failed": len(results) - success}
 
 
+_ORDERS_ENDPOINT = "/v3/posting/fbo/list"  # ключ в sync_state (общий FBO+FBS)
+
+
 async def _sync_orders_for_account(
     SessionLocal: async_sessionmaker[AsyncSession],
     account_id: uuid.UUID,
@@ -91,6 +96,35 @@ async def _sync_orders_for_account(
                 return {"status": "failed", "error": f"invalid date_from={date_from_iso}"}
         else:
             date_from = date_to - timedelta(days=days_window)
+
+    # Resume from cursor (выполняем вне async-with чтобы не держать сессию)
+    # Окно date_from..date_to сдвигаем вперёд если cursor свежее, но не пропускаем
+    # последние 3 дня (статусы заказов ещё едут — их перепроверяем всегда).
+    saved_cursor = await get_sync_cursor(
+        SessionLocal, cabinet_id=account_id, endpoint=_ORDERS_ENDPOINT,
+    )
+    if saved_cursor and not date_from_iso:
+        try:
+            cursor_dt = datetime.fromisoformat(saved_cursor.replace("Z", "+00:00"))
+            if cursor_dt.tzinfo is None:
+                cursor_dt = cursor_dt.replace(tzinfo=UTC)
+            # Перекрытие 3 дня — статусы могут меняться задним числом
+            recheck_from = date_to - timedelta(days=3)
+            effective_from = min(cursor_dt, recheck_from)
+            if effective_from > date_from:
+                date_from = effective_from
+                log.info("orders_resume_from_cursor",
+                         account=str(account_id),
+                         saved=saved_cursor, effective=date_from.isoformat())
+        except ValueError:
+            pass
+
+    async with SessionLocal() as db:
+        account = (
+            await db.execute(select(OzonAccount).where(OzonAccount.id == account_id))
+        ).scalar_one_or_none()
+        if not account:
+            return {"status": "failed", "error": "account_not_found"}
 
         # Бьём весь интервал на 30-дневные окна — внутри окна offset стартует
         # с 0, что обходит MAX_OFFSET_EXCEEDED у Ozon (порог ~20 000).
@@ -153,6 +187,12 @@ async def _sync_orders_for_account(
                 account.last_sync_error = None
                 account.status = OzonAccountStatus.ACTIVE.value
             await db.commit()
+
+            # Сдвигаем cursor — date_to является границей "до которой синкнули"
+            await save_sync_cursor(
+                SessionLocal, cabinet_id=account_id, endpoint=_ORDERS_ENDPOINT,
+                cursor=date_to.isoformat(), status="ok",
+            )
             return {"status": "success", "rows": stats.processed}
         except OzonAPIError as e:
             account.status = OzonAccountStatus.ERROR.value

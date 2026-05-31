@@ -34,7 +34,9 @@ from app.services.transaction_classifier import aggregate_services
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
+    get_sync_cursor,
     run_celery_async,
+    save_sync_cursor,
     track_sync_log,
 )
 
@@ -57,6 +59,9 @@ def sync_all_transactions(
 ) -> dict:
     """Транзакции: orchestrator → sub-tasks по 7-дневным чанкам."""
     return run_celery_async(_orchestrate, days_window, date_from, account_id)
+
+
+_TX_ENDPOINT = "/v3/finance/transaction/list"  # ключ в sync_state
 
 
 async def _orchestrate(
@@ -90,64 +95,28 @@ async def _orchestrate(
     else:
         date_from = date_to - timedelta(days=days_window)
 
+    # Кабинеты параллельно (как в sync_orders и обновлённом sync_analytics)
+    results = await asyncio.gather(*[
+        _sync_account(SessionLocal, acc, date_from, date_to, override_from=bool(date_from_iso))
+        for acc in accounts
+    ], return_exceptions=True)
+
     summary = {
-        "total_chunks": 0,
-        "success": 0,
-        "failed": 0,
-        "skipped": 0,
-        "records": 0,
-        "by_account": {},
+        "total_chunks": 0, "success": 0, "failed": 0, "skipped": 0,
+        "records": 0, "by_account": {},
     }
-
-    for acc in accounts:
-        chunks = _build_chunks(date_from, date_to, days=_CHUNK_DAYS)
-        log.info(
-            "transactions_backfill_start",
-            account=str(acc.id),
-            account_name=acc.name,
-            date_from=date_from.isoformat(),
-            date_to=date_to.isoformat(),
-            chunks=len(chunks),
-        )
-
-        per_acc = {"chunks": len(chunks), "success": 0, "failed": 0, "skipped": 0, "records": 0}
-
-        for (chunk_from, chunk_to) in chunks:
-            df_iso = chunk_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            dt_iso = chunk_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            ar = sync_transactions_chunk.delay(str(acc.id), df_iso, dt_iso)
-            try:
-                # Каждый чанк не должен идти дольше 5 мин (мы делим по 7 дней)
-                result = ar.get(timeout=600, disable_sync_subtasks=False)
-            except Exception as e:
-                log.error(
-                    "tx_chunk_dispatch_failed",
-                    account=str(acc.id),
-                    date_from=df_iso,
-                    date_to=dt_iso,
-                    error=str(e),
-                )
-                summary["total_chunks"] += 1
-                summary["failed"] += 1
-                per_acc["failed"] += 1
-                continue
-
-            summary["total_chunks"] += 1
-            status = result.get("status") if isinstance(result, dict) else "failed"
-            if status == "success":
-                summary["success"] += 1
-                per_acc["success"] += 1
-                records = int(result.get("records", 0))
-                summary["records"] += records
-                per_acc["records"] += records
-            elif status == "skipped":
-                summary["skipped"] += 1
-                per_acc["skipped"] += 1
-            else:
-                summary["failed"] += 1
-                per_acc["failed"] += 1
-
-        summary["by_account"][str(acc.id)] = per_acc
+    for acc, res in zip(accounts, results):
+        if isinstance(res, Exception):
+            log.exception("tx_account_crash", account=str(acc.id))
+            summary["by_account"][str(acc.id)] = {"error": str(res), "chunks": 0}
+            summary["failed"] += 1
+            continue
+        summary["total_chunks"] += res["chunks"]
+        summary["success"]      += res["success"]
+        summary["failed"]       += res["failed"]
+        summary["skipped"]      += res["skipped"]
+        summary["records"]      += res["records"]
+        summary["by_account"][str(acc.id)] = res
         log.info(
             "transactions_backfill_done",
             account=str(acc.id),
@@ -156,6 +125,68 @@ async def _orchestrate(
 
     log.info("transactions_backfill_summary", **{k: v for k, v in summary.items() if k != "by_account"})
     return summary
+
+
+async def _sync_account(
+    SessionLocal: async_sessionmaker[AsyncSession],
+    acc: OzonAccount,
+    date_from: datetime, date_to: datetime,
+    override_from: bool,
+) -> dict:
+    """Один кабинет — последовательно по чанкам, с cursor-resume."""
+    # Resume from cursor (если юзер не передал явный date_from)
+    if not override_from:
+        saved = await get_sync_cursor(
+            SessionLocal, cabinet_id=acc.id, endpoint=_TX_ENDPOINT,
+        )
+        if saved:
+            try:
+                cur = datetime.fromisoformat(saved.replace("Z", "+00:00"))
+                if cur.tzinfo is None: cur = cur.replace(tzinfo=UTC)
+                if cur > date_from:
+                    date_from = cur
+                    log.info("tx_resume_from_cursor",
+                             account=str(acc.id), cursor=saved)
+            except ValueError:
+                pass
+
+    chunks = _build_chunks(date_from, date_to, days=_CHUNK_DAYS)
+    log.info("transactions_backfill_start",
+             account=str(acc.id), account_name=acc.name,
+             date_from=date_from.isoformat(), date_to=date_to.isoformat(),
+             chunks=len(chunks))
+
+    per_acc = {"chunks": len(chunks), "success": 0, "failed": 0, "skipped": 0, "records": 0}
+
+    for (chunk_from, chunk_to) in chunks:
+        df_iso = chunk_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        dt_iso = chunk_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        try:
+            result = await _sync_chunk(SessionLocal, str(acc.id), df_iso, dt_iso)
+        except Exception as e:
+            log.exception("tx_chunk_crash", account=str(acc.id), df=df_iso)
+            result = {"status": "failed", "error": str(e)[:200]}
+
+        status = result.get("status") if isinstance(result, dict) else "failed"
+        if status == "success":
+            per_acc["success"] += 1
+            per_acc["records"] += int(result.get("records", 0))
+            # Двигаем курсор только после успешного чанка
+            await save_sync_cursor(
+                SessionLocal, cabinet_id=acc.id, endpoint=_TX_ENDPOINT,
+                cursor=chunk_to.isoformat(), status="ok",
+            )
+        elif status == "skipped":
+            per_acc["skipped"] += 1
+        else:
+            per_acc["failed"] += 1
+            await save_sync_cursor(
+                SessionLocal, cabinet_id=acc.id, endpoint=_TX_ENDPOINT,
+                cursor=chunk_from.isoformat(), status="error",
+                error=result.get("error") if isinstance(result, dict) else None,
+            )
+            break  # стоп при первом фейле, следующий run возобновится
+    return per_acc
 
 
 def _build_chunks(date_from: datetime, date_to: datetime, days: int) -> list[tuple[datetime, datetime]]:
