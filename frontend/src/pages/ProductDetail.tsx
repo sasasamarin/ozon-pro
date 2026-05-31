@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import { useProductFilter } from '@/stores/product_filter'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -65,6 +66,7 @@ const SIGNAL_META: Record<string, { dot: string; label: string }> = {
 export function ProductDetail() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
+  const { setSelectedProduct } = useProductFilter()
 
   const { data: warehouses, isLoading } = useQuery<ProductWarehouseStocks>({
     queryKey: ['warehouse-stocks', 'product', id],
@@ -72,6 +74,13 @@ export function ProductDetail() {
       (await api.get(`/warehouse-stocks/products/${id}`)).data,
     enabled: !!id,
   })
+
+  // Авто-синхронизация: при открытии карточки товара ставим его в глобальный фильтр
+  useEffect(() => {
+    if (id && warehouses?.product_name) {
+      setSelectedProduct(id, warehouses.product_name)
+    }
+  }, [id, warehouses?.product_name, setSelectedProduct])
 
   const { data: supplyAll } = useQuery<SupplyRow[]>({
     queryKey: ['supply-params', 'list'],

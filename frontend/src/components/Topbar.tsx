@@ -19,6 +19,7 @@ import { useCabinetStore, type OzonAccountSummary } from '@/stores/cabinet'
 import { Logo } from './ui/Logo'
 import { ReconcileBadge } from './ReconcileBadge'
 import { DataFreshnessBadge } from './DataFreshnessBadge'
+import { ProductPickerGlobal } from './ProductPickerGlobal'
 
 interface TopbarProps {
   onOpenSidebar: () => void
@@ -232,8 +233,11 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
           </div>
         </div>
 
+        {/* Global product picker — фильтрует все разделы */}
+        <ProductPickerGlobal />
+
         {/* Бейджи статуса данных */}
-        <div className="hidden md:flex items-center gap-2">
+        <div className="hidden lg:flex items-center gap-2">
           <DataFreshnessBadge />
           <ReconcileBadge />
         </div>

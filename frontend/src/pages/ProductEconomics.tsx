@@ -11,9 +11,11 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Loader2, AlertTriangle, Info, TrendingUp, TrendingDown } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
+import { useProductFilter } from '@/stores/product_filter'
 
 interface EcoRow {
   product_id: string
@@ -87,17 +89,19 @@ type SortBy = 'revenue' | 'net_profit' | 'net_margin' | 'qty' | 'op_profit' | 't
 
 export function ProductEconomics() {
   const { selectedCabinetIds } = useCabinetStore()
+  const { selectedProductId } = useProductFilter()
   const [days, setDays] = useState(30)
   const [sortBy, setSortBy] = useState<SortBy>('revenue')
   const [showArchived, setShowArchived] = useState(false)
   const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery<EcoResp>({
-    queryKey: ['products', 'economics', days, selectedCabinetIds, showArchived],
+    queryKey: ['products', 'economics', days, selectedCabinetIds, showArchived, selectedProductId],
     queryFn: async () => {
       const p = new URLSearchParams({ days: String(days) })
       selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
       if (showArchived) p.append('include_archived', 'true')
+      if (selectedProductId) p.append('product_id', selectedProductId)
       return (await api.get(`/products/economics/?${p.toString()}`, { timeout: 60_000 })).data
     },
   })
@@ -149,6 +153,8 @@ export function ProductEconomics() {
           ))}
         </div>
       </div>
+
+      <SelectedProductBanner supported />
 
       {/* Баннер «не заполнена себестоимость» */}
       {data && data.totals.products_missing_cost > 0 && (

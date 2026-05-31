@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { TrendingUp, ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { CostWarningBanner } from '@/components/ui/CostWarningBanner'
+import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
@@ -96,6 +97,8 @@ export function FinancePnL() {
       {data?.has_missing_costs && (
         <CostWarningBanner count={data.missing_costs_count} context="profit" />
       )}
+
+      <SelectedProductBanner />
 
       {/* Header KPI */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">

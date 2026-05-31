@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { CostWarningBanner } from '@/components/ui/CostWarningBanner'
+import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { Sparkline } from '@/components/ui/Sparkline'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
@@ -240,6 +241,8 @@ export function Dashboard() {
         {data?.has_missing_costs && (
           <CostWarningBanner count={data.missing_costs_count} context="profit" />
         )}
+
+        <SelectedProductBanner />
 
         {/* === KPI ROW === */}
         {isLoading ? (

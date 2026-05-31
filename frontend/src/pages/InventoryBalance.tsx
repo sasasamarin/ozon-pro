@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Loader2, Wallet, Info } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
@@ -74,6 +75,8 @@ export function InventoryBalance() {
           Показать архивные
         </label>
       </div>
+
+      <SelectedProductBanner />
 
       {/* KPI блок */}
       {data && (
