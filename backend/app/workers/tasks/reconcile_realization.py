@@ -136,17 +136,16 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
         GLOBAL_FALLBACK_PCT = 41.0  # последний резерв
 
         # ─── PER-CATEGORY MEDIAN FALLBACK ───
-        # Один запрос вместо N+1: за раз получаем per-SKU комиссию + median по
-        # category_id из ВСЕХ кабинетов компании юзера. Так fallback для category
-        # «Бытовое освещение» в home pro подтянет реальные ~20% из похожих
-        # товаров других кабинетов, а не глобальный 41% Жирафа.
-        sku_list = list(by_sku.keys())
+        # Realization API даёт OTHER SKU (отгрузочный), он НЕ матчится с
+        # products.ozon_sku (Ozon хранит разные SKU для product vs posting).
+        # Поэтому матчим по offer_id — он одинаковый в обоих API.
+        offer_ids = [a["offer_id"] for a in by_sku.values() if a["offer_id"]]
         rows = (await db.execute(text("""
-            WITH per_sku AS (
-                SELECT p.ozon_sku, p.sales_percent_fbo::float comm, p.category_id
+            WITH per_offer AS (
+                SELECT p.offer_id, p.sales_percent_fbo::float comm, p.category_id
                 FROM products p
                 WHERE p.ozon_account_id = :acc
-                  AND p.ozon_sku = ANY(:skus)
+                  AND p.offer_id = ANY(:offers)
             ),
             cat_median AS (
                 SELECT category_id,
@@ -160,13 +159,13 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
                   AND category_id IS NOT NULL
                 GROUP BY category_id
             )
-            SELECT s.ozon_sku, s.comm, s.category_id, m.median_comm
-            FROM per_sku s
+            SELECT s.offer_id, s.comm, s.category_id, m.median_comm
+            FROM per_offer s
             LEFT JOIN cat_median m ON m.category_id = s.category_id
-        """), {"acc": str(account.id), "skus": sku_list})).all()
-        sku_meta: dict[int, dict] = {}
+        """), {"acc": str(account.id), "offers": offer_ids})).all()
+        offer_meta: dict[str, dict] = {}
         for row in rows:
-            sku_meta[int(row.ozon_sku)] = {
+            offer_meta[row.offer_id] = {
                 "comm": float(row.comm) if row.comm else None,
                 "category_id": row.category_id,
                 "median_comm": float(row.median_comm) if row.median_comm else None,
@@ -175,7 +174,7 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
         total_revenue = total_real = total_model = total_qty = 0.0
         sku_diffs: list[dict] = []
         for sku, a in by_sku.items():
-            meta = sku_meta.get(int(sku), {})
+            meta = offer_meta.get(a["offer_id"], {}) if a["offer_id"] else {}
             comm_pct: float
             comm_source: str
             if meta.get("comm"):
