@@ -42,6 +42,9 @@ source "$ENV_FILE"
 : "${DB_USER:?DB_USER not set in $ENV_FILE}"
 : "${DB_PASSWORD:?DB_PASSWORD not set in $ENV_FILE}"
 : "${DB_NAME:?DB_NAME not set in $ENV_FILE}"
+# Managed Selectel требует SSL — задаём через PGSSLMODE
+DB_SSLMODE="${DB_SSLMODE:-require}"
+export PGSSLMODE="$DB_SSLMODE"
 
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
