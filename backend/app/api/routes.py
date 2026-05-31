@@ -21,6 +21,7 @@ from app.api.endpoints import (
     funnel,
     funnel_v2,
     reconciliation,
+    company_settings,
     markers,
     orders,
     ozon_accounts,
@@ -65,6 +66,9 @@ api_router.include_router(
 )
 api_router.include_router(
     reconciliation.router, prefix="/reconciliation", tags=["reconciliation"]
+)
+api_router.include_router(
+    company_settings.router, prefix="/company/settings", tags=["settings"]
 )
 api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
 api_router.include_router(

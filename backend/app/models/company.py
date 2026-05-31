@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -69,6 +69,22 @@ class Company(BaseModel, SoftDeleteMixin):
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # === НАЛОГОВЫЙ РЕЖИМ ===
+    # Применяется к чистой прибыли в Экономике/P&L/Cashflow.
+    # 'usn_income'        — УСН Доходы (% от выручки, обычно 6%)
+    # 'usn_income_minus'  — УСН Доходы-Расходы (% от прибыли, обычно 15%)
+    # 'osno'              — ОСНО на прибыль (20%) + НДС
+    # 'none'              — без налога (для тестов)
+    tax_regime: Mapped[str] = mapped_column(
+        String(20), default="usn_income", server_default="usn_income", nullable=False
+    )
+    tax_rate_pct: Mapped[float] = mapped_column(
+        Numeric(5, 2), default=6.0, server_default="6.0", nullable=False
+    )
+    vat_rate_pct: Mapped[float | None] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )  # NULL = НДС не применяем (УСН), 20 = стандарт ОСНО, 10/5/0 — льготные
 
     # Связи
     users: Mapped[list["User"]] = relationship(

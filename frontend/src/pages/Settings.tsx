@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { HelpHint } from '@/components/ui/HelpHint'
 import { logout, useCurrentUser, useUpdateProfile } from '@/lib/auth'
 import { getErrorMessage } from '@/lib/errors'
+import { TaxSettingsCard } from '@/components/TaxSettingsCard'
 
 type SaveState =
   | { kind: 'idle' }
@@ -93,6 +94,8 @@ export function Settings() {
             </div>
           </CardContent>
         </Card>
+
+        <TaxSettingsCard />
 
         <Card>
           <CardHeader>

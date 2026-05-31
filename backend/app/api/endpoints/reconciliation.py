@@ -49,8 +49,12 @@ class ReconcileStatus(BaseModel):
     title: str
     description: str
     last_reconciled_at: str | None
-    worst_diff_pct: float | None  # самое большое расхождение по последним сверкам
+    worst_diff_pct: float | None    # самое большое расхождение по последним сверкам
     rows_count: int
+    # ЗА КАКОЙ ПЕРИОД сверены данные (не дата прогона!)
+    data_period_year: int | None = None
+    data_period_month: int | None = None
+    data_period_label: str | None = None  # "Апрель 2026" — для UI
 
 
 @router.get("/realization", response_model=list[ReconcileRow])
@@ -145,20 +149,51 @@ async def reconciliation_status(
     worst = max(diffs) if diffs else None
     last_at = max(r.created_at for r in rows if r.created_at)
 
+    # Самый свежий ПЕРИОД сверки — за какой месяц данные.
+    # ВАЖНО: это НЕ дата прогона. Реализация Ozon формируется с лагом ~15 дней,
+    # так что свежий period обычно = «прошлый месяц». Текущий незакрытый месяц
+    # ещё нельзя сверить — данных в realization нет.
+    periods = [(r.year, r.month) for r in rows]
+    if periods:
+        max_y, max_m = max(periods)
+        MONTHS_RU = ["", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+                     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
+        period_label = f"{MONTHS_RU[max_m]} {max_y}"
+    else:
+        max_y = max_m = None
+        period_label = None
+
+    # Конец сверенного периода (последний день месяца) — чтобы юзер видел
+    # «данные актуальны по DD.MM», не путал с датой прогона.
+    period_end_str: str | None = None
+    if max_y and max_m:
+        from datetime import date as _d
+        from calendar import monthrange as _mr
+        period_end_str = _d(max_y, max_m, _mr(max_y, max_m)[1]).strftime("%d.%m.%Y")
+
     if worst is not None and worst > ALERT_THRESHOLD_PCT:
         return ReconcileStatus(
             status="warn",
             title=f"Расхождение с Ozon: {worst:.1f}%",
-            description=f"Наша оперативная модель отличается от отчёта Ozon. "
-                        f"Проверь Настройки → Сверка реализации для деталей по SKU.",
+            description=f"Наша модель отличается от отчёта Ozon за {period_label}. "
+                        f"Сверка покрывает данные ПО {period_end_str}. "
+                        f"Текущий месяц не сверен — отчёт Ozon формируется с лагом ~15 дней. "
+                        f"Подробности: Настройки → Сверка реализации.",
             last_reconciled_at=last_at.isoformat() if last_at else None,
             worst_diff_pct=worst, rows_count=len(rows),
+            data_period_year=max_y, data_period_month=max_m,
+            data_period_label=period_label,
         )
     return ReconcileStatus(
         status="ok",
-        title="Сверено с отчётом Ozon",
-        description=f"Модель совпадает с реализацией Ozon (худшее расхождение {worst or 0:.1f}%). "
-                    f"Можно доверять цифрам прибыли.",
+        title=f"Сверено · {period_label}" if period_label else "Сверено с Ozon",
+        description=f"Модель совпадает с реализацией Ozon за {period_label}"
+                    f" (худшее расхождение {worst or 0:.1f}%). "
+                    f"Данные актуальны ПО {period_end_str}. "
+                    f"Текущий месяц не сверен — отчёт Ozon формируется с лагом ~15 дней. "
+                    f"Можно доверять цифрам прибыли за прошлые месяцы.",
         last_reconciled_at=last_at.isoformat() if last_at else None,
         worst_diff_pct=worst, rows_count=len(rows),
+        data_period_year=max_y, data_period_month=max_m,
+        data_period_label=period_label,
     )

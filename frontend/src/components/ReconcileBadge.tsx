@@ -17,6 +17,9 @@ interface ReconcileStatus {
   last_reconciled_at: string | null
   worst_diff_pct: number | null
   rows_count: number
+  data_period_year?: number | null
+  data_period_month?: number | null
+  data_period_label?: string | null
 }
 
 export function ReconcileBadge({ compact = false }: { compact?: boolean }) {
@@ -34,9 +37,9 @@ export function ReconcileBadge({ compact = false }: { compact?: boolean }) {
     : data.status === 'warn' ? 'text-rose-700 bg-rose-50 border-rose-200'
     : 'text-slate-600 bg-slate-50 border-slate-200'
 
-  const formattedDate = data.last_reconciled_at
-    ? new Date(data.last_reconciled_at).toLocaleDateString('ru')
-    : null
+  // Подпись справа — ПЕРИОД сверенных данных, не дата прогона.
+  // «Сверено с Ozon · Апрель 2026» — юзер сразу понимает за какой месяц.
+  const subtitle = data.data_period_label || null
 
   return (
     <Link to="/settings/reconciliation"
@@ -51,8 +54,8 @@ export function ReconcileBadge({ compact = false }: { compact?: boolean }) {
       ) : (
         <>
           <span className="font-medium">{data.title}</span>
-          {formattedDate && (
-            <span className="opacity-60 text-[10px]">· {formattedDate}</span>
+          {subtitle && data.status !== 'ok' && (
+            <span className="opacity-60 text-[10px]">· данные по {subtitle}</span>
           )}
         </>
       )}
