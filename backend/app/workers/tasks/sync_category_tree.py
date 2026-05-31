@@ -57,7 +57,7 @@ async def _sync_category_tree_async(SessionLocal: async_sessionmaker[AsyncSessio
             log.warning("category_tree_no_account")
             return {"status": "skipped", "reason": "no active ozon account"}
 
-        client_id = account.client_id
+        client_id = decrypt_secret(account.client_id_encrypted)
         api_key = decrypt_secret(account.api_key_encrypted)
 
         async with OzonSellerClient(client_id, api_key) as client:
