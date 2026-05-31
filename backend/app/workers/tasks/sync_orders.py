@@ -73,7 +73,7 @@ async def _sync_all_orders_async(
 _ORDERS_ENDPOINT = "/v3/posting/fbo/list"  # ключ в sync_state
 # Rolling-окно: статусы заказов (delivered/cancelled/returned) едут задним числом
 # до 3 дней. Каждый run пересинкаем последние 3 дня даже если cursor свежее.
-_ORDERS_REPROCESS_TAIL_DAYS = 3 (общий FBO+FBS)
+_ORDERS_REPROCESS_TAIL_DAYS = 3
 
 
 async def _sync_orders_for_account(
