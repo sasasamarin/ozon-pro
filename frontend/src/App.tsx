@@ -37,6 +37,7 @@ import { Credit } from '@/pages/Credit'
 import { Email } from '@/pages/Email'
 import { Settings } from '@/pages/Settings'
 import { SettingsReconciliation } from '@/pages/SettingsReconciliation'
+import { ProductEconomics } from '@/pages/ProductEconomics'
 import { AppLayout } from '@/components/AppLayout'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { PagePlaceholder } from '@/components/PagePlaceholder'
@@ -82,6 +83,7 @@ export default function App() {
         <Route path="/analytics/heatmap" element={<Heatmap />} />
         <Route path="/products/categories" element={<Categories />} />
         <Route path="/products/calculator" element={<Calculator />} />
+        <Route path="/products/economics" element={<ProductEconomics />} />
         <Route path="/finance/expenses" element={<Expenses />} />
         <Route path="/procurement/orders" element={<SupplierOrders />} />
         <Route path="/communications/reviews" element={<Reviews />} />
@@ -125,6 +127,7 @@ export default function App() {
               item.path !== '/analytics/heatmap' &&
               item.path !== '/products/categories' &&
               item.path !== '/products/calculator' &&
+              item.path !== '/products/economics' &&
               item.path !== '/finance/expenses' &&
               item.path !== '/procurement/orders' &&
               item.path !== '/communications/reviews' &&

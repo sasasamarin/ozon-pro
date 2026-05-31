@@ -209,6 +209,11 @@ export const NAV_GROUPS: NavGroup[] = [
         },
       },
       {
+        path: '/products/economics',
+        label: 'Экономика продаж',
+        icon: TrendingUp,
+      },
+      {
         path: '/products/calculator',
         label: 'Юнит-калькулятор',
         icon: Calculator,
