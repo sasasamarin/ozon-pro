@@ -20,6 +20,8 @@ import { Logo } from './ui/Logo'
 import { ReconcileBadge } from './ReconcileBadge'
 import { DataFreshnessBadge } from './DataFreshnessBadge'
 import { ProductPickerGlobal } from './ProductPickerGlobal'
+import { CategoryPickerGlobal } from './CategoryPickerGlobal'
+import { TagPickerGlobal } from './TagPickerGlobal'
 
 interface TopbarProps {
   onOpenSidebar: () => void
@@ -233,8 +235,10 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
           </div>
         </div>
 
-        {/* Global product picker — фильтрует все разделы */}
+        {/* Глобальные фильтры — товар / категория / тег */}
         <ProductPickerGlobal />
+        <CategoryPickerGlobal />
+        <TagPickerGlobal />
 
         {/* Бейджи статуса данных */}
         <div className="hidden lg:flex items-center gap-2">
