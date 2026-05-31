@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from app.api.endpoints import (
     account_balance,
     auth,
+    calculator,
     cashflow,
     categories,
     communications,
@@ -93,6 +94,9 @@ api_router.include_router(
 )
 api_router.include_router(
     whatif.router, prefix="/whatif", tags=["whatif"]
+)
+api_router.include_router(
+    calculator.router, prefix="/products/calculator", tags=["products"]
 )
 api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
 api_router.include_router(

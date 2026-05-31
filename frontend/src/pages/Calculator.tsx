@@ -1,6 +1,6 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Calculator as CalcIcon, Save } from 'lucide-react'
+import { Calculator as CalcIcon } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { formatCurrency, cn } from '@/lib/utils'
@@ -10,7 +10,27 @@ interface CompanySettings {
   tax: { tax_regime: string; tax_rate_pct: number; vat_rate_pct: number | null }
 }
 
-/** Юнит-калькулятор: цена → себестоимость → комиссия → логистика → прибыль */
+interface CalcResult {
+  commission_amount: number
+  gross_margin: number
+  op_profit: number
+  tax_amount: number
+  vat_amount: number
+  net_margin: number
+  margin_pct: number
+  roi_pct: number | null
+  breakeven_price: number
+  tax_regime: string
+  tax_regime_label: string
+  tax_rate_pct: number
+  tax_base_label: string
+}
+
+/**
+ * Юнит-калькулятор: ввод → backend → раскладка.
+ * Налог считается на сервере через services.tax.calc_tax — правильно для всех режимов
+ * (УСН Доходы / УСН Дох-Расх с мин. 1% / ОСНО с НДС).
+ */
 export function Calculator() {
   const [price, setPrice] = useState('5000')
   const [cost, setCost] = useState('1500')
@@ -18,57 +38,61 @@ export function Calculator() {
   const [logistics, setLogistics] = useState('250')
   const [adSpend, setAdSpend] = useState('150')
   const [packaging, setPackaging] = useState('50')
-  const [tax, setTax] = useState('6')
-  const [taxLabel, setTaxLabel] = useState('УСН')
 
-  // Подтягиваем ставку из настроек компании (если юзер не редактировал ещё)
   const { data: settings } = useQuery<CompanySettings>({
     queryKey: ['company', 'settings'],
     queryFn: async () => (await api.get('/company/settings/')).data,
     staleTime: Infinity,
   })
 
+  // Debounced input — чтобы не дёргать backend на каждый символ
+  const [debouncedInput, setDebouncedInput] = useState({
+    price, cost, commission, logistics, adSpend, packaging,
+  })
+
   useEffect(() => {
-    if (settings) {
-      setTax(String(settings.tax.tax_rate_pct))
-      const label = {
-        usn_income: 'УСН Доходы',
-        usn_income_minus: 'УСН Дох-Расх',
-        osno: 'ОСНО',
-        none: 'Без налога',
-      }[settings.tax.tax_regime] || 'налог'
-      setTaxLabel(label)
-    }
-  }, [settings])
+    const t = setTimeout(() => {
+      setDebouncedInput({ price, cost, commission, logistics, adSpend, packaging })
+    }, 250)
+    return () => clearTimeout(t)
+  }, [price, cost, commission, logistics, adSpend, packaging])
 
-  const result = useMemo(() => {
-    const p = parseFloat(price) || 0
-    const c = parseFloat(cost) || 0
-    const commPct = parseFloat(commission) || 0
-    const lg = parseFloat(logistics) || 0
-    const ad = parseFloat(adSpend) || 0
-    const pk = parseFloat(packaging) || 0
-    const tx = parseFloat(tax) || 0
+  const { data: result, isLoading } = useQuery<CalcResult>({
+    queryKey: ['calculator', debouncedInput],
+    queryFn: async () => {
+      const payload = {
+        price: parseFloat(debouncedInput.price) || 0,
+        cost: parseFloat(debouncedInput.cost) || 0,
+        commission_pct: parseFloat(debouncedInput.commission) || 0,
+        logistics: parseFloat(debouncedInput.logistics) || 0,
+        ad_spend: parseFloat(debouncedInput.adSpend) || 0,
+        packaging: parseFloat(debouncedInput.packaging) || 0,
+      }
+      return (await api.post('/products/calculator/calc', payload)).data
+    },
+    enabled: parseFloat(debouncedInput.price) > 0,
+    staleTime: 60_000,
+  })
 
-    const commAmount = p * commPct / 100
-    const taxAmount = p * tx / 100
-    const grossMargin = p - c - commAmount - lg - pk
-    const netMargin = grossMargin - ad - taxAmount
-    const marginPct = p > 0 ? (netMargin / p) * 100 : 0
-    const roi = c > 0 ? (netMargin / c) * 100 : 0
-    const breakeven = (c + lg + pk + ad) / (1 - commPct / 100 - tx / 100)
+  const taxLabel = settings ? {
+    usn_income: 'УСН Доходы',
+    usn_income_minus: 'УСН Дох-Расх',
+    osno: 'ОСНО',
+    none: 'Без налога',
+  }[settings.tax.tax_regime] || 'налог' : 'налог'
 
-    return { commAmount, taxAmount, grossMargin, netMargin, marginPct, roi, breakeven }
-  }, [price, cost, commission, logistics, adSpend, packaging, tax])
-
-  const r = result
+  const taxRate = settings?.tax.tax_rate_pct ?? 0
+  const priceNum = parseFloat(price) || 0
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-3xl font-semibold text-fg tracking-tight">Юнит-калькулятор</h1>
         <p className="text-sm text-fg-muted mt-1.5">
-          Считай прибыль до того как закупать. Все значения в рублях.
+          Считай прибыль до закупки. Налог — по режиму{' '}
+          <span className="font-medium text-fg">{taxLabel}</span> ({taxRate}%),
+          база: <span className="font-medium text-fg">{result?.tax_base_label ?? '…'}</span>.
+          Изменить — в Настройках.
         </p>
       </div>
 
@@ -85,28 +109,50 @@ export function Calculator() {
             <Field label="Логистика ₽" value={logistics} onChange={setLogistics} />
             <Field label="Упаковка ₽" value={packaging} onChange={setPackaging} />
             <Field label="Реклама ₽" value={adSpend} onChange={setAdSpend} />
-            <Field label={`Налог ${taxLabel} %`} value={tax} onChange={setTax} />
           </div>
         </Card>
 
         <Card className="p-5">
-          <h2 className="text-base font-semibold text-fg mb-4">Расчёт</h2>
+          <h2 className="text-base font-semibold text-fg mb-4">
+            Расчёт {isLoading && <span className="text-xs text-fg-muted ml-2">обновление…</span>}
+          </h2>
           <div className="flex flex-col gap-2 text-sm">
-            <Row label="Цена" value={parseFloat(price) || 0} positive bold />
+            <Row label="Цена" value={priceNum} positive bold />
             <Row label="− Себестоимость" value={-(parseFloat(cost) || 0)} negative />
-            <Row label={`− Комиссия Ozon (${commission}%)`} value={-r.commAmount} negative />
+            <Row label={`− Комиссия Ozon (${commission}%)`} value={-(result?.commission_amount ?? 0)} negative />
             <Row label="− Логистика" value={-(parseFloat(logistics) || 0)} negative />
             <Row label="− Упаковка" value={-(parseFloat(packaging) || 0)} negative />
-            <Row label="ВАЛОВАЯ ПРИБЫЛЬ" value={r.grossMargin} subtotal />
+            <Row label="ВАЛОВАЯ ПРИБЫЛЬ" value={result?.gross_margin ?? 0} subtotal />
             <Row label="− Реклама" value={-(parseFloat(adSpend) || 0)} negative />
-            <Row label={`− Налог ${taxLabel} (${tax}%)`} value={-r.taxAmount} negative />
-            <Row label="ЧИСТАЯ ПРИБЫЛЬ" value={r.netMargin} subtotal />
+            <Row label="ПРИБЫЛЬ ДО НАЛОГА" value={result?.op_profit ?? 0} subtotal />
+            {settings?.tax.tax_regime === 'osno' && (result?.vat_amount ?? 0) > 0 && (
+              <Row label={`− НДС (${settings.tax.vat_rate_pct}%)`} value={-(result?.vat_amount ?? 0)} negative />
+            )}
+            <Row label={`− Налог ${taxLabel} (${taxRate}%, ${result?.tax_base_label ?? '…'})`}
+                 value={-(result?.tax_amount ?? 0)} negative />
+            <Row label="ЧИСТАЯ ПРИБЫЛЬ" value={result?.net_margin ?? 0} subtotal />
           </div>
 
           <div className="grid grid-cols-3 gap-3 mt-5 pt-5 border-t border-border-subtle">
-            <Metric label="Маржа" value={`${r.marginPct.toFixed(1)}%`} color={r.marginPct >= 20 ? 'emerald' : r.marginPct >= 0 ? 'amber' : 'rose'} />
-            <Metric label="ROI" value={`${r.roi.toFixed(1)}%`} color={r.roi >= 50 ? 'emerald' : r.roi >= 0 ? 'amber' : 'rose'} />
-            <Metric label="Точка безубыт." value={formatCurrency(r.breakeven)} color="fg" />
+            <Metric
+              label="Маржа"
+              value={`${(result?.margin_pct ?? 0).toFixed(1)}%`}
+              color={(result?.margin_pct ?? 0) >= 20 ? 'emerald' : (result?.margin_pct ?? 0) >= 0 ? 'amber' : 'rose'}
+            />
+            <Metric
+              label="ROI"
+              value={result?.roi_pct == null ? '—' : `${result.roi_pct.toFixed(1)}%`}
+              color={
+                result?.roi_pct == null ? 'fg'
+                  : result.roi_pct >= 50 ? 'emerald'
+                  : result.roi_pct >= 0 ? 'amber' : 'rose'
+              }
+            />
+            <Metric
+              label="Точка безубыт."
+              value={result?.breakeven_price ? formatCurrency(result.breakeven_price) : '—'}
+              color="fg"
+            />
           </div>
         </Card>
       </div>
