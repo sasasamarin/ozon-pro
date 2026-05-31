@@ -28,11 +28,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decrypt_secret
 from app.models import OzonAccount
-from app.services.finance_consts import (
-    DEFAULT_COMMISSION_PCT,
-    LOGISTICS_PER_UNIT_DEFAULT,
-    get_commission_pct,
-)
 from app.services.ozon_client import OzonSellerClient
 from app.workers.tasks._helpers import run_celery_async
 
@@ -137,6 +132,8 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
 
         # Модельный payout (Flowoi): selling_price × (1 − sales_percent_fbo / 100) − logistics
         # logistics ≈ 306 ₽/qty (deliver + last-mile, средние по Жирафу)
+        LOGISTICS_PER_UNIT = 306.0
+
         total_revenue = total_real = total_model = total_qty = 0.0
         sku_diffs: list[dict] = []
         for sku, a in by_sku.items():
@@ -146,12 +143,13 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
                 FROM products WHERE ozon_sku = :sku AND ozon_account_id = :acc
                 LIMIT 1
             """), {"sku": sku, "acc": str(account.id)})).first()
-            # Fallback из единого источника (25%, не 41% — раньше был легаси Жирафа).
-            comm_pct = get_commission_pct(
-                product_sales_percent_fbo=prod.comm if prod else None,
-            )
+            # Fallback 41% — это категорийный default для тяжёлой техники (Жираф/Stolz).
+            # В finance_consts global default 25% для UI-estimate, но для модели realization
+            # 25% занижает комиссию в 1.6x → расхождение взлетает с <2% до >25%.
+            # Менять — только когда подключим per-category fallback по medianу.
+            comm_pct = float(prod.comm) if prod and prod.comm else 41.0
 
-            model_payout = a["revenue"] * (1 - comm_pct / 100) - a["qty"] * LOGISTICS_PER_UNIT_DEFAULT
+            model_payout = a["revenue"] * (1 - comm_pct / 100) - a["qty"] * LOGISTICS_PER_UNIT
             diff = a["payout_real"] - model_payout
             diff_pct = (diff / a["payout_real"] * 100) if a["payout_real"] else None
 
