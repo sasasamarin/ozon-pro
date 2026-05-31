@@ -147,25 +147,51 @@ async def _upsert_return(
     db: AsyncSession, *, account_id: uuid.UUID, raw: dict, sku_to_id: dict[int, uuid.UUID]
 ) -> None:
     return_id = raw.get("id") or raw.get("return_id")
+    # Ozon /v1/returns/list гнёт ВЛОЖЕННЫЕ объекты:
+    #   logistic.return_date / logistic.final_moment — даты
+    #   product.sku / product.offer_id — товар
+    #   visual.change_moment — когда сменился статус (= moved_to_warehouse_at)
+    #   visual.status.sys_name — статус
+    logistic = raw.get("logistic") or {}
+    product = raw.get("product") or {}
+    visual = raw.get("visual") or {}
+    visual_status = (visual.get("status") or {}).get("sys_name")
     if return_id is None:
         return
 
-    sku = raw.get("sku") or raw.get("product_id")
+    sku = (product.get("sku") or product.get("product_id")
+           or raw.get("sku") or raw.get("product_id"))
     payload = {
         "ozon_account_id": account_id,
         "ozon_return_id": int(return_id),
         "posting_number": raw.get("posting_number"),
         "ozon_sku": int(sku) if sku else None,
         "product_id": sku_to_id.get(int(sku)) if sku else None,
-        "return_type": raw.get("return_type"),
+        "return_type": raw.get("schema") or raw.get("return_type"),
         "return_reason": raw.get("return_reason_name") or raw.get("reason"),
-        "return_amount": _safe_float(raw.get("price") or raw.get("return_amount")),
-        "quantity": int(raw.get("quantity", 1)),
-        "status": raw.get("status"),
-        "return_date": _parse_dt(raw.get("logistic_return_date") or raw.get("return_date")),
-        "accepted_from_customer_at": _parse_dt(raw.get("accepted_from_customer_at")),
-        "returned_to_seller_at": _parse_dt(raw.get("returned_to_seller_at")),
-        "moved_to_warehouse_at": _parse_dt(raw.get("moved_to_warehouse_at")),
+        "return_amount": _safe_float(
+            (product.get("price") or {}).get("price") if isinstance(product.get("price"), dict) else None
+            or raw.get("price") or raw.get("return_amount")
+        ),
+        "quantity": int(product.get("quantity", 1) or raw.get("quantity", 1)),
+        "status": visual_status or raw.get("status"),
+        "return_date": _parse_dt(
+            logistic.get("return_date")
+            or logistic.get("final_moment")
+            or raw.get("logistic_return_date") or raw.get("return_date")
+        ),
+        "accepted_from_customer_at": _parse_dt(
+            logistic.get("accepted_from_customer_moment")
+            or raw.get("accepted_from_customer_at")
+        ),
+        "returned_to_seller_at": _parse_dt(
+            logistic.get("returned_to_seller_moment")
+            or raw.get("returned_to_seller_at")
+        ),
+        "moved_to_warehouse_at": _parse_dt(
+            visual.get("change_moment") if visual_status == "ReturnedToOzon" else None
+            or raw.get("moved_to_warehouse_at")
+        ),
         "raw_data": raw,
     }
     stmt = pg_insert(Return).values(payload)
