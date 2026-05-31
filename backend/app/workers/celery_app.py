@@ -160,4 +160,7 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.maintenance.cleanup_old_logs",
         "schedule": crontab(day_of_week=0, hour=2, minute=0),  # вс 2:00
     },
+    # Backup БД работает на хосте VPS через systemd timer (scripts/backup_db.sh).
+    # Решение принято осознанно: pg_dump на хосте не зависит от Docker rebuild
+    # и не требует postgresql-client в backend образе.
 }

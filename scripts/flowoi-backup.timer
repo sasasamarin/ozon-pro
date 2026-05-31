@@ -1,0 +1,13 @@
+[Unit]
+Description=Flowoi DB backup daily at 04:00 UTC (07:00 MSK)
+
+[Timer]
+# 04:00 UTC = до утренних sync'ов (3:00–3:30 UTC уже завершены)
+OnCalendar=*-*-* 04:00:00 UTC
+# Если VPS был выключен — догнать пропуск через 5 минут после загрузки
+Persistent=true
+RandomizedDelaySec=120
+Unit=flowoi-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Flowoi DB backup (pg_dump + rotate)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/flowoi-backup.sh auto
+StandardOutput=journal
+StandardError=journal
+# Ограничения: не убивать всю систему если pg_dump зависнет
+TimeoutStartSec=900
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=5
