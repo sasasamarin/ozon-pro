@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
 from app.core.security import decrypt_secret
-from app.models import AnalyticsDaily, OzonAccount, OzonAccountStatus
+from app.models import AnalyticsDaily, OzonAccount, OzonAccountStatus, SyncState
 from app.services.ozon_client import OzonAPIError, OzonRateLimitError, OzonSellerClient
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
@@ -35,6 +35,8 @@ from app.workers.tasks._helpers import (
     run_celery_async,
     track_sync_log,
 )
+
+_ANALYTICS_ENDPOINT = "/v1/analytics/data"  # ключ в sync_state
 
 
 _METRICS = [
@@ -57,8 +59,9 @@ _METRICS = [
 
 _CHUNK_DAYS = 30
 _PAGE_SLEEP_S = 2.0          # Дросселируем /v1/analytics/data (rate ≤ 1 RPS у Ozon)
-_RATE_LIMIT_SLEEP_S = 30.0   # Sleep при 429 без Retry-After
-_MAX_RETRIES_ON_429 = 5
+_RATE_LIMIT_BASE_S = 5.0     # База для exp backoff при 429 без Retry-After
+_RATE_LIMIT_MAX_S = 120.0    # Потолок одного sleep при 429
+_MAX_RETRIES_ON_429 = 6
 
 
 # ============================================================
@@ -110,58 +113,146 @@ async def _orchestrate(
     else:
         date_from = today - timedelta(days=days_window)
 
-    chunks = _build_chunks(date_from, today, _CHUNK_DAYS)
     log.info(
         "analytics_orchestrator_start",
-        accounts=len(accounts), chunks_per_account=len(chunks),
+        accounts=len(accounts),
         df=date_from.isoformat(), dt=today.isoformat(),
     )
+
+    # Кабинеты параллельно. Внутри кабинета чанки последовательно
+    # (rate-limit /v1/analytics/data действует на Client-Id, у каждого кабинета свой).
+    cabinet_results = await asyncio.gather(*[
+        _sync_cabinet_chunks(SessionLocal, acc, date_from, today)
+        for acc in accounts
+    ], return_exceptions=True)
 
     summary = {
         "total_chunks": 0, "success": 0, "failed": 0, "skipped": 0,
         "records": 0, "by_account": {},
     }
-    for acc in accounts:
-        acc_stats = {"chunks": 0, "success": 0, "failed": 0, "skipped": 0, "records": 0}
-        for chunk_from, chunk_to in chunks:
-            ar = sync_analytics_chunk.delay(
-                str(acc.id),
-                chunk_from.isoformat(),
-                chunk_to.isoformat(),
-            )
-            try:
-                # Чанк ~3 минуты максимум при заpolzli sleep'ах
-                res = ar.get(timeout=600, disable_sync_subtasks=False)
-            except Exception as e:
-                log.exception(
-                    "analytics_chunk_exception",
-                    account=str(acc.id), df=chunk_from.isoformat(), dt=chunk_to.isoformat(),
-                )
-                res = {"status": "failed", "error": str(e)}
-
-            acc_stats["chunks"] += 1
-            status = res.get("status", "failed")
-            if status == "success":
-                acc_stats["success"] += 1
-                acc_stats["records"] += int(res.get("rows", 0))
-            elif status == "skipped":
-                acc_stats["skipped"] += 1
-            else:
-                acc_stats["failed"] += 1
-
-        summary["total_chunks"] += acc_stats["chunks"]
-        summary["success"]      += acc_stats["success"]
-        summary["failed"]       += acc_stats["failed"]
-        summary["skipped"]      += acc_stats["skipped"]
-        summary["records"]      += acc_stats["records"]
-        summary["by_account"][str(acc.id)] = acc_stats
-
+    for acc, res in zip(accounts, cabinet_results):
+        if isinstance(res, Exception):
+            log.exception("analytics_cabinet_crash", account=str(acc.id))
+            summary["by_account"][str(acc.id)] = {"error": str(res), "chunks": 0}
+            summary["failed"] += 1
+            continue
+        summary["total_chunks"] += res["chunks"]
+        summary["success"]      += res["success"]
+        summary["failed"]       += res["failed"]
+        summary["skipped"]      += res["skipped"]
+        summary["records"]      += res["records"]
+        summary["by_account"][str(acc.id)] = res
         log.info(
             "analytics_account_done",
-            account=str(acc.id), account_name=acc.name, **acc_stats,
+            account=str(acc.id), account_name=acc.name, **res,
         )
 
     return summary
+
+
+async def _get_resume_cursor(
+    SessionLocal: async_sessionmaker[AsyncSession],
+    cabinet_id: uuid.UUID,
+) -> date_cls | None:
+    """Читает sync_state.last_cursor → возвращает date_cls или None."""
+    async with SessionLocal() as db:
+        row = (await db.execute(
+            select(SyncState.last_cursor).where(
+                SyncState.cabinet_id == cabinet_id,
+                SyncState.endpoint == _ANALYTICS_ENDPOINT,
+            )
+        )).first()
+    if row and row.last_cursor:
+        try:
+            return date_cls.fromisoformat(row.last_cursor[:10])
+        except ValueError:
+            return None
+    return None
+
+
+async def _save_cursor(
+    SessionLocal: async_sessionmaker[AsyncSession],
+    cabinet_id: uuid.UUID,
+    cursor: date_cls,
+    status: str = "ok",
+    error: str | None = None,
+) -> None:
+    """Upsert sync_state.last_cursor для (cabinet, analytics)."""
+    async with SessionLocal() as db:
+        stmt = pg_insert(SyncState).values(
+            cabinet_id=cabinet_id,
+            endpoint=_ANALYTICS_ENDPOINT,
+            last_cursor=cursor.isoformat(),
+            last_synced_at=datetime.now(UTC),
+            status=status,
+            error_message=error[:500] if error else None,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["cabinet_id", "endpoint"],
+            set_={
+                "last_cursor": stmt.excluded.last_cursor,
+                "last_synced_at": stmt.excluded.last_synced_at,
+                "status": stmt.excluded.status,
+                "error_message": stmt.excluded.error_message,
+            },
+        )
+        await db.execute(stmt)
+        await db.commit()
+
+
+async def _sync_cabinet_chunks(
+    SessionLocal: async_sessionmaker[AsyncSession],
+    acc: OzonAccount, date_from: date_cls, today: date_cls,
+) -> dict:
+    """
+    Внутри одного кабинета — последовательно по чанкам (1 RPM per Client-Id).
+    Кабинеты вызываются параллельно из _orchestrate.
+
+    Возобновляемость через sync_state: при втором прогоне начнём с
+    cursor+1day, а не с requested date_from.
+    """
+    # Resume from cursor if any
+    cursor = await _get_resume_cursor(SessionLocal, acc.id)
+    if cursor and cursor >= date_from:
+        effective_from = cursor + timedelta(days=1)
+        if effective_from >= today:
+            log.info("analytics_account_up_to_date", account=str(acc.id), cursor=cursor.isoformat())
+            return {"chunks": 0, "success": 0, "failed": 0, "skipped": 0, "records": 0}
+    else:
+        effective_from = date_from
+
+    chunks = _build_chunks(effective_from, today, _CHUNK_DAYS)
+    log.info("analytics_cabinet_start", account=str(acc.id),
+             chunks=len(chunks), df=effective_from.isoformat(), dt=today.isoformat())
+
+    stats = {"chunks": 0, "success": 0, "failed": 0, "skipped": 0, "records": 0}
+    for chunk_from, chunk_to in chunks:
+        try:
+            res = await _chunk_async(
+                SessionLocal, str(acc.id),
+                chunk_from.isoformat(), chunk_to.isoformat(),
+            )
+        except Exception as e:
+            log.exception("analytics_chunk_crash",
+                          account=str(acc.id), df=chunk_from.isoformat())
+            res = {"status": "failed", "error": str(e)[:200]}
+
+        stats["chunks"] += 1
+        status = res.get("status", "failed")
+        if status == "success":
+            stats["success"] += 1
+            stats["records"] += int(res.get("rows", 0))
+            # Двигаем курсор только после успешного чанка
+            await _save_cursor(SessionLocal, acc.id, chunk_to, status="ok")
+        elif status == "skipped":
+            stats["skipped"] += 1
+        else:
+            stats["failed"] += 1
+            await _save_cursor(SessionLocal, acc.id, chunk_from,
+                               status="error", error=res.get("error"))
+            # При фейле останавливаемся — следующий прогон возобновится с курсора
+            break
+    return stats
 
 
 def _build_chunks(
@@ -299,11 +390,18 @@ async def _fetch_analytics_chunk(
             retries += 1
             if retries > _MAX_RETRIES_ON_429:
                 raise OzonAPIError(f"analytics rate-limit exceeded after {_MAX_RETRIES_ON_429} retries: {e}") from e
-            wait = e.retry_after if (e.retry_after and e.retry_after > 0) else _RATE_LIMIT_SLEEP_S
+            # Ozon часто не присылает Retry-After → exp backoff с jitter
+            # вместо плоских 30s × 5 = 2.5 мин слепого ожидания.
+            if e.retry_after and e.retry_after > 0:
+                wait = float(e.retry_after)
+            else:
+                import random
+                wait = min(_RATE_LIMIT_BASE_S * (2 ** (retries - 1)), _RATE_LIMIT_MAX_S)
+                wait += random.uniform(0, wait * 0.2)  # jitter
             log.warning(
                 "analytics_429_retry",
                 account=str(account_id),
-                page=page, retry=retries, wait_s=wait,
+                page=page, retry=retries, wait_s=round(wait, 1),
             )
             await asyncio.sleep(wait)
             continue
