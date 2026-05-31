@@ -133,21 +133,57 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
         # Модельный payout (Flowoi): selling_price × (1 − sales_percent_fbo / 100) − logistics
         # logistics ≈ 306 ₽/qty (deliver + last-mile, средние по Жирафу)
         LOGISTICS_PER_UNIT = 306.0
+        GLOBAL_FALLBACK_PCT = 41.0  # последний резерв
+
+        # ─── PER-CATEGORY MEDIAN FALLBACK ───
+        # Один запрос вместо N+1: за раз получаем per-SKU комиссию + median по
+        # category_id из ВСЕХ кабинетов компании юзера. Так fallback для category
+        # «Бытовое освещение» в home pro подтянет реальные ~20% из похожих
+        # товаров других кабинетов, а не глобальный 41% Жирафа.
+        sku_list = list(by_sku.keys())
+        rows = (await db.execute(text("""
+            WITH per_sku AS (
+                SELECT p.ozon_sku, p.sales_percent_fbo::float comm, p.category_id
+                FROM products p
+                WHERE p.ozon_account_id = :acc
+                  AND p.ozon_sku = ANY(:skus)
+            ),
+            cat_median AS (
+                SELECT category_id,
+                       percentile_cont(0.5) WITHIN GROUP (
+                           ORDER BY sales_percent_fbo::float
+                       ) AS median_comm
+                FROM products
+                WHERE deleted_at IS NULL
+                  AND sales_percent_fbo IS NOT NULL
+                  AND sales_percent_fbo > 0
+                  AND category_id IS NOT NULL
+                GROUP BY category_id
+            )
+            SELECT s.ozon_sku, s.comm, s.category_id, m.median_comm
+            FROM per_sku s
+            LEFT JOIN cat_median m ON m.category_id = s.category_id
+        """), {"acc": str(account.id), "skus": sku_list})).all()
+        sku_meta: dict[int, dict] = {}
+        for row in rows:
+            sku_meta[int(row.ozon_sku)] = {
+                "comm": float(row.comm) if row.comm else None,
+                "category_id": row.category_id,
+                "median_comm": float(row.median_comm) if row.median_comm else None,
+            }
 
         total_revenue = total_real = total_model = total_qty = 0.0
         sku_diffs: list[dict] = []
         for sku, a in by_sku.items():
-            # из products.sales_percent_fbo возьмём за SKU (если есть)
-            prod = (await db.execute(text("""
-                SELECT sales_percent_fbo::float comm
-                FROM products WHERE ozon_sku = :sku AND ozon_account_id = :acc
-                LIMIT 1
-            """), {"sku": sku, "acc": str(account.id)})).first()
-            # Fallback 41% — это категорийный default для тяжёлой техники (Жираф/Stolz).
-            # В finance_consts global default 25% для UI-estimate, но для модели realization
-            # 25% занижает комиссию в 1.6x → расхождение взлетает с <2% до >25%.
-            # Менять — только когда подключим per-category fallback по medianу.
-            comm_pct = float(prod.comm) if prod and prod.comm else 41.0
+            meta = sku_meta.get(int(sku), {})
+            comm_pct: float
+            comm_source: str
+            if meta.get("comm"):
+                comm_pct = meta["comm"]; comm_source = "sku"
+            elif meta.get("median_comm"):
+                comm_pct = meta["median_comm"]; comm_source = "category_median"
+            else:
+                comm_pct = GLOBAL_FALLBACK_PCT; comm_source = "global"
 
             model_payout = a["revenue"] * (1 - comm_pct / 100) - a["qty"] * LOGISTICS_PER_UNIT
             diff = a["payout_real"] - model_payout
@@ -165,7 +201,8 @@ async def _reconcile_account(db: AsyncSession, account: OzonAccount, year: int, 
                 "payout_model": round(model_payout, 2),
                 "diff_rub": round(diff, 2),
                 "diff_pct": round(diff_pct, 2) if diff_pct is not None else None,
-                "comm_pct_used": comm_pct,
+                "comm_pct_used": round(comm_pct, 2),
+                "comm_source": comm_source,  # "sku" / "category_median" / "global"
             })
 
         total_diff = total_real - total_model
