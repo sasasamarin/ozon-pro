@@ -110,3 +110,71 @@ def aggregate_services(services: list[dict] | None) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+# ============================================================================
+# OPERATION_TYPE → BUCKET (для операций без services[])
+# ============================================================================
+# Корневой баг P&L: транзакции типа OperationMarketplaceServiceStorage приходят
+# с services=[] и пустой `aggregate_services` не разносит их по бакетам. Вся
+# сумма (-805k₽ за май для home, реальное хранение!) лежала только в amount.
+# Этот mapping разносит такие соло-операции по operation_type в правильный бакет.
+_OP_TYPE_BUCKET_MAP: dict[str, str] = {
+    # ─── ХРАНЕНИЕ ───
+    "OperationMarketplaceServiceStorage":                        "storage",
+    "TemporaryStorage":                                          "storage",
+    # ─── РАЗМЕЩЕНИЕ / УПАКОВКА ───
+    "OperationMarketplacePackageRedistribution":                 "placement",
+    "OperationLabelOriginal":                                    "placement",
+    # ─── ЭКВАЙРИНГ ───
+    "MarketplaceRedistributionOfAcquiringOperation":             "acquiring",
+    # ─── РЕКЛАМА ───
+    "OperationMarketplaceCostPerClick":                          "advertising",
+    "OperationPromotionWithCostPerOrder":                        "advertising",
+    "OperationPromotionWithCostPerImpression":                   "advertising",
+    "OperationMarketplaceBrandsale":                             "advertising",
+    "OperationPaidStarsReward":                                  "advertising",
+    "OperationReviewReward":                                     "advertising",
+    "OperationMarketplaceServicePremiumCashbackIndividualPoints": "advertising",
+    "OperationSubscriptionPremiumPlus":                          "advertising",  # подписка как маркетинг
+    # ─── ВОЗВРАТ ЛОГИСТИКА ───
+    "OperationItemReturn":                                       "return_logistics",
+    "ClientReturnAgentOperation":                                "return_logistics",
+    "SellerReturnsDeliveryByCourier":                            "return_logistics",
+    "OperationSellerReturnsCargoAssortmentInvalid":              "return_logistics",
+    # ─── УТИЛИЗАЦИЯ ───
+    "DisposalReasonFailedToPickupOnTime":                        "utilization",
+    # NB: OperationAgentDeliveredToCustomer — НЕ расход, это начисление за продажу
+    # (положительный amount). НЕ маппим — он попадает в accruals_for_sale.
+}
+
+
+def classify_operation_type(op_type: str | None) -> str | None:
+    """operation_type → bucket для операций без services[]."""
+    if not op_type:
+        return None
+    return _OP_TYPE_BUCKET_MAP.get(op_type)
+
+
+def buckets_from_operation(
+    op_type: str | None, amount: float, services: list[dict] | None,
+) -> dict[str, float]:
+    """
+    Главная функция разноса транзакции по бакетам.
+
+    Логика:
+    1. Если services[] непустой — берём суммы оттуда (детальный разнос).
+    2. Иначе — fallback по operation_type: вся abs(amount) в один бакет.
+
+    Гарантия: одна транзакция учитывается ровно в одном бакете (через services
+    ИЛИ через operation_type, но не оба сразу).
+    """
+    result = aggregate_services(services)
+    has_service_amounts = any(v > 0 for v in result.values())
+    if has_service_amounts:
+        return result
+    # Fallback: операция без services[] — разносим по operation_type
+    bucket = classify_operation_type(op_type)
+    if bucket and amount:
+        result[bucket] = abs(float(amount))
+    return result

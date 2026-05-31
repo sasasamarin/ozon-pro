@@ -30,7 +30,7 @@ from app.core.logging import log
 from app.core.security import decrypt_secret
 from app.models import OzonAccount, OzonAccountStatus, Transaction
 from app.services.ozon_client import OzonAPIError, OzonSellerClient
-from app.services.transaction_classifier import aggregate_services
+from app.services.transaction_classifier import buckets_from_operation
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import (
     get_active_accounts,
@@ -287,7 +287,13 @@ async def _sync_chunk(
                                 continue
                             posting = op.get("posting") or {}
                             services_raw = op.get("services")
-                            buckets = aggregate_services(services_raw)
+                            op_amount = _safe_float(op.get("amount")) or 0
+                            # Разносим по бакетам через универсальный helper:
+                            # services[] для posting-операций, operation_type
+                            # для соло-операций (storage, реклама, эквайринг).
+                            buckets = buckets_from_operation(
+                                op.get("operation_type"), op_amount, services_raw,
+                            )
                             rows.append({
                                 "time": op_date,
                                 "ozon_transaction_id": tid,
