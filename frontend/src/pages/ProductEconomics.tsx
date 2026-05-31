@@ -16,6 +16,8 @@ import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
 import { useProductFilter } from '@/stores/product_filter'
+import { useCategoryFilter } from '@/stores/category_filter'
+import { useTagFilter } from '@/stores/tag_filter'
 
 interface EcoRow {
   product_id: string
@@ -90,18 +92,22 @@ type SortBy = 'revenue' | 'net_profit' | 'net_margin' | 'qty' | 'op_profit' | 't
 export function ProductEconomics() {
   const { selectedCabinetIds } = useCabinetStore()
   const { selectedProductId } = useProductFilter()
+  const { selectedCategoryId } = useCategoryFilter()
+  const { selectedTags } = useTagFilter()
   const [days, setDays] = useState(30)
   const [sortBy, setSortBy] = useState<SortBy>('revenue')
   const [showArchived, setShowArchived] = useState(false)
   const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery<EcoResp>({
-    queryKey: ['products', 'economics', days, selectedCabinetIds, showArchived, selectedProductId],
+    queryKey: ['products', 'economics', days, selectedCabinetIds, showArchived, selectedProductId, selectedCategoryId, selectedTags],
     queryFn: async () => {
       const p = new URLSearchParams({ days: String(days) })
       selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
       if (showArchived) p.append('include_archived', 'true')
       if (selectedProductId) p.append('product_id', selectedProductId)
+      if (selectedCategoryId != null) p.append('category_id', String(selectedCategoryId))
+      selectedTags.forEach((t) => p.append('tags', t))
       return (await api.get(`/products/economics/?${p.toString()}`, { timeout: 60_000 })).data
     },
   })

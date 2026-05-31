@@ -21,6 +21,8 @@ import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors'
 import { useCabinetStore } from '@/stores/cabinet'
+import { useCategoryFilter } from '@/stores/category_filter'
+import { useTagFilter } from '@/stores/tag_filter'
 
 interface ProductItem {
   id: string
@@ -181,6 +183,8 @@ function StockBreakdown({ productId }: { productId: string }) {
 
 export function Products() {
   const { selectedCabinetIds } = useCabinetStore()
+  const { selectedCategoryId } = useCategoryFilter()
+  const { selectedTags } = useTagFilter()
   const [stockFilter, setStockFilter] = useState<StockFilter>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [urlParams] = useSearchParams()
@@ -198,10 +202,12 @@ export function Products() {
   const [showBulk, setShowBulk] = useState(false)
 
   const { data, isLoading, error } = useQuery<ProductItem[]>({
-    queryKey: ['products', selectedCabinetIds],
+    queryKey: ['products', selectedCabinetIds, selectedCategoryId, selectedTags],
     queryFn: async () => {
       const params = new URLSearchParams()
       selectedCabinetIds.forEach((id) => params.append('cabinet_ids', id))
+      if (selectedCategoryId != null) params.append('category_id', String(selectedCategoryId))
+      selectedTags.forEach((t) => params.append('tags', t))
       const qs = params.toString()
       const res = await api.get(qs ? `/products/?${qs}` : '/products/')
       return res.data

@@ -95,6 +95,8 @@ async def list_products(
     cabinet_id: uuid.UUID | None = Query(
         None, description="Legacy single-select (для обратной совместимости)."
     ),
+    category_id: int | None = Query(None, description="Глобальный фильтр Topbar — категория с потомками"),
+    tags: list[str] | None = Query(None, description="Глобальный фильтр Topbar — теги (OR)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ProductItem]:
@@ -176,6 +178,18 @@ async def list_products(
         query = query.where(Product.ozon_account_id.in_(cabinet_ids))
     elif cabinet_id:
         query = query.where(Product.ozon_account_id == cabinet_id)
+
+    # Глобальные фильтры из Topbar
+    if category_id is not None:
+        from app.api.product_filter import category_descendants
+        desc = await category_descendants(db, category_id=category_id)
+        query = query.where(Product.category_id.in_(desc))
+    if tags:
+        # PostgreSQL ARRAY overlap
+        from sqlalchemy import cast as sa_cast
+        from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
+        from sqlalchemy import String as SA_String
+        query = query.where(Product.tags.op("&&")(sa_cast(tags, PG_ARRAY(SA_String))))
 
     result = await db.execute(query)
     items: list[ProductItem] = []

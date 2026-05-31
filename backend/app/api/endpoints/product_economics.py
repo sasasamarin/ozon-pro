@@ -27,6 +27,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.product_filter import build_product_filter_sql, category_descendants
 from app.db.session import get_db
 from app.models import Company, OzonAccount, Product, User
 from app.services.finance_consts import (
@@ -122,6 +123,8 @@ async def get_economics(
     date_to: date_cls | None = Query(None),
     cabinet_ids: list[uuid.UUID] | None = Query(None),
     product_id: uuid.UUID | None = Query(None),
+    category_id: int | None = Query(None, description="Категория из Topbar (включая потомков)"),
+    tags: list[str] | None = Query(None, description="Фильтр по тегам (OR-логика)"),
     include_archived: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -169,6 +172,16 @@ async def get_economics(
         params["pid"] = str(product_id)
     if not include_archived:
         where_extra += " AND p.is_archived = false"
+
+    # Глобальные фильтры из Topbar (category_id + tags)
+    desc_ids: list[int] | None = None
+    if category_id is not None:
+        desc_ids = await category_descendants(db, category_id=category_id)
+    filter_sql, filter_params = build_product_filter_sql(
+        category_ids=desc_ids, tags=tags, p_alias="p",
+    )
+    where_extra += " " + filter_sql
+    params.update(filter_params)
 
     sql = f"""
         SELECT
