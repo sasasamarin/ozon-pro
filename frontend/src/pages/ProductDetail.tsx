@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { StockSalesChart } from '@/components/StockSalesChart'
 import { StockBreakdownChip } from '@/components/StockBreakdownChip'
+import { ProductEconomicsCard } from '@/components/ProductEconomicsCard'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 
@@ -109,6 +110,9 @@ export function ProductDetail() {
           </div>
         </div>
       </Card>
+
+      {/* Экономика за 30 дней — реальный P&L товара после налога */}
+      {id && <ProductEconomicsCard productId={id} />}
 
       {/* Warehouse stocks */}
       <Card className="overflow-hidden">
