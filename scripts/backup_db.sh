@@ -15,8 +15,8 @@
 set -euo pipefail
 
 LABEL="${1:-auto}"
-# label → безопасная строка для имени файла
-SAFE_LABEL=$(echo "$LABEL" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | cut -c1-40)
+# label → безопасная строка для имени файла. printf без \n + чистим хвостовые _
+SAFE_LABEL=$(printf '%s' "$LABEL" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '_' | cut -c1-40 | sed -E 's/_+$//')
 
 BACKUP_DIR="${BACKUP_DIR:-/root/backups/auto}"
 ENV_FILE="${BACKUP_ENV:-/etc/flowoi/backup.env}"
@@ -75,14 +75,21 @@ log "backup_done size_mb=$SIZE_MB file=$OUT"
 # Это сохраняет ручные снимки с особыми метками (pre-formulas, manual) в окне «недавних».
 
 rotate() {
-    local kept=""
+    # set -u + ассоц.массивы плохо дружат на пустом ключе, локально отключаем
+    set +u
     local removed=0
     # Сортируем по mtime DESC
     mapfile -t FILES < <(find "$BACKUP_DIR" -maxdepth 1 -name 'db_*.sql.gz' -printf '%T@ %p\n' \
                           | sort -rn | awk '{print $2}')
 
-    declare -A seen_week seen_month
-    declare -A keep
+    if [[ ${#FILES[@]} -eq 0 ]]; then
+        set -u
+        return
+    fi
+
+    declare -A seen_week=()
+    declare -A seen_month=()
+    declare -A keep=()
 
     local i=0
     for f in "${FILES[@]}"; do
@@ -91,26 +98,23 @@ rotate() {
         fi
         i=$((i+1))
 
-        # Неделя/месяц снимка по mtime
-        local mt
+        local mt wk mo
         mt=$(stat -c %Y "$f")
-        local wk
         wk=$(date -u -d "@$mt" +%G-W%V)
-        local mo
         mo=$(date -u -d "@$mt" +%Y-%m)
 
-        if [[ -z "${seen_week[$wk]:-}" && ${#seen_week[@]} -lt $KEEP_WEEKLY ]]; then
+        if [[ -z "${seen_week[$wk]+x}" && ${#seen_week[@]} -lt $KEEP_WEEKLY ]]; then
             seen_week[$wk]=1
             keep[$f]=1
         fi
-        if [[ -z "${seen_month[$mo]:-}" && ${#seen_month[@]} -lt $KEEP_MONTHLY ]]; then
+        if [[ -z "${seen_month[$mo]+x}" && ${#seen_month[@]} -lt $KEEP_MONTHLY ]]; then
             seen_month[$mo]=1
             keep[$f]=1
         fi
     done
 
     for f in "${FILES[@]}"; do
-        if [[ -z "${keep[$f]:-}" ]]; then
+        if [[ -z "${keep[$f]+x}" ]]; then
             rm -f "$f"
             removed=$((removed+1))
         fi
@@ -119,6 +123,7 @@ rotate() {
     if (( removed > 0 )); then
         log "rotation_done removed=$removed kept=${#keep[@]}"
     fi
+    set -u
 }
 
 rotate
