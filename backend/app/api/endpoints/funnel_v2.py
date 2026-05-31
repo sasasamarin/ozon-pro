@@ -764,11 +764,36 @@ async def funnel_correlations(
                     p.price = cur_price
                     p.marketing_price = mk_price
 
-            # stockout по дням — есть ли в stocks за этот день суммарный free>0
+            # Остаток per day — последний снапшот ≤ конец дня.
+            # ВАЖНО: stocks содержит разные warehouse_type (AGG, FBO, FBS, FBO_WH).
+            # Тупой SUM удваивает (вид 28.05: AGG=534 + FBO=9070 = 9634, факт 534).
+            # Берём логику /products: приоритет FBO_WH per-warehouse, fallback AGG.
             stk_rows = (await db.execute(text("""
-              SELECT date_trunc('day', time)::date d, SUM(free_to_sell) free
-              FROM stocks WHERE product_id = :pid AND time >= :dfrom AND time < :dto
-              GROUP BY 1
+              WITH per_day AS (
+                SELECT date_trunc('day', time)::date d,
+                       warehouse_type,
+                       MAX(time) last_t
+                FROM stocks
+                WHERE product_id = :pid AND time >= :dfrom AND time < :dto
+                GROUP BY 1, warehouse_type
+              ),
+              priority_type AS (
+                SELECT d,
+                       CASE
+                         WHEN bool_or(warehouse_type='FBO_WH') THEN 'FBO_WH'
+                         WHEN bool_or(warehouse_type='AGG')    THEN 'AGG'
+                         WHEN bool_or(warehouse_type='FBO')    THEN 'FBO'
+                         ELSE 'FBS'
+                       END AS chosen_type
+                FROM per_day GROUP BY d
+              )
+              SELECT s.time::date d,
+                     SUM(GREATEST(s.free_to_sell - s.reserved, 0)) free
+              FROM stocks s
+              JOIN per_day pd ON pd.d = s.time::date AND pd.warehouse_type = s.warehouse_type AND pd.last_t = s.time
+              JOIN priority_type pt ON pt.d = s.time::date AND pt.chosen_type = s.warehouse_type
+              WHERE s.product_id = :pid
+              GROUP BY s.time::date
             """), {
                 "pid": str(pid),
                 "dfrom": datetime.combine(date_from, datetime.min.time(), tzinfo=UTC),

@@ -38,15 +38,33 @@ _MAX_RETRIES = 3
 
 
 @shared_task(name="enrich_customer_price", bind=True)
-def enrich_customer_price(self, max_postings: int | None = None, account_id: str | None = None) -> dict:
+def enrich_customer_price(
+    self,
+    max_postings: int | None = None,
+    account_id: str | None = None,
+    since_date: str | None = None,
+) -> dict:
     """
-    Сall: enrich_customer_price.delay(max_postings=29000)  # backfill всё
-          enrich_customer_price.delay(max_postings=500)    # ongoing хвост
+    Параметры:
+      max_postings: всего за прогон
+      account_id: конкретный кабинет (опционально)
+      since_date: 'YYYY-MM-DD' — только заказы с этой даты (для приоритетного
+                  бекфилла свежих дней)
     """
-    return run_celery_async(_enrich_async, max_postings=max_postings, account_id=account_id)
+    return run_celery_async(
+        _enrich_async,
+        max_postings=max_postings,
+        account_id=account_id,
+        since_date=since_date,
+    )
 
 
-async def _enrich_async(SessionLocal, max_postings: int | None = None, account_id: str | None = None) -> dict:
+async def _enrich_async(
+    SessionLocal,
+    max_postings: int | None = None,
+    account_id: str | None = None,
+    since_date: str | None = None,
+) -> dict:
     stats = {"processed": 0, "updated": 0, "skipped": 0, "errors": 0, "started_at": datetime.now(UTC).isoformat()}
 
     async with SessionLocal() as db:
@@ -57,7 +75,7 @@ async def _enrich_async(SessionLocal, max_postings: int | None = None, account_i
         log.info("enrich_customer_price_start", accounts=len(accounts), max_postings=max_postings)
 
         for ac in accounts:
-            await _enrich_account(db, ac, stats, max_postings=max_postings)
+            await _enrich_account(db, ac, stats, max_postings=max_postings, since_date=since_date)
 
     stats["finished_at"] = datetime.now(UTC).isoformat()
     log.info("enrich_customer_price_done", **stats)
@@ -69,13 +87,17 @@ async def _enrich_account(
     account: OzonAccount,
     stats: dict,
     max_postings: int | None,
+    since_date: str | None = None,
 ) -> None:
-    """Обогащаем postings одного кабинета."""
-    # Берём posting_number'ы где customer_price пуст. Сортируем по order_created_at DESC —
-    # свежие postings первыми, чтобы аналитика последних дней сразу появлялась.
-    # Раньше было ORDER BY posting_number DESC — лексикографическая сортировка
-    # (не по дате) → свежие 28-30 мая с меньшими posting_number не попадали в выборку.
+    """Обогащаем postings одного кабинета. ORDER BY order_created_at DESC —
+    свежие первыми. since_date='YYYY-MM-DD' — фильтр для приоритетного бекфилла.
+    """
     limit_sql = f"LIMIT {int(max_postings)}" if max_postings else ""
+    params: dict = {"acc": str(account.id)}
+    since_clause = ""
+    if since_date:
+        since_clause = "AND o.order_created_at >= CAST(:since AS timestamptz)"
+        params["since"] = f"{since_date} 00:00:00+00"
     rows = (await db.execute(text(f"""
         SELECT o.posting_number, MAX(o.order_created_at) max_dt
         FROM orders o
@@ -83,10 +105,11 @@ async def _enrich_account(
         WHERE o.ozon_account_id = :acc
           AND o.order_type = 'fbo'
           AND oi.customer_price IS NULL
+          {since_clause}
         GROUP BY o.posting_number
         ORDER BY MAX(o.order_created_at) DESC
         {limit_sql}
-    """), {"acc": str(account.id)})).all()
+    """), params)).all()
     postings = [r[0] for r in rows]
     if not postings:
         log.info("enrich_account_nothing_to_do", account=str(account.id))
