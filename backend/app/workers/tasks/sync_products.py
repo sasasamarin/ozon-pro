@@ -575,9 +575,17 @@ async def _sync_stocks_for_account(
                             break
 
                 if rows:
+                    # PK после миграции 0010 включает warehouse_name (иначе ORM identity-map
+                    # склеивает per-warehouse строки). Без warehouse_name в ON CONFLICT
+                    # запрос валится ProgrammingError → stocks ВООБЩЕ не пишутся
+                    # с момента 0010 для тех кабинетов где приходит >1 строки на (time, sku, type).
+                    # У warehouse_name дефолт '<aggregate>', null'ы не проблема.
+                    for r in rows:
+                        if r.get("warehouse_name") is None:
+                            r["warehouse_name"] = "<aggregate>"
                     stmt = pg_insert(Stock).values(rows)
                     stmt = stmt.on_conflict_do_nothing(
-                        index_elements=["time", "product_id", "warehouse_type"]
+                        index_elements=["time", "product_id", "warehouse_type", "warehouse_name"]
                     )
                     await db.execute(stmt)
                     stats.created += len(rows)
