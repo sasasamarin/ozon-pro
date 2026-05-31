@@ -65,15 +65,23 @@ async def _sync_category_tree_async(SessionLocal: async_sessionmaker[AsyncSessio
 
         nodes: list[dict] = []
         _flatten(data.get("result", []), parent_id=None, level=0, path="", out=nodes)
-        log.info("category_tree_flattened", count=len(nodes))
+        # Ozon API может вернуть один и тот же type_id под разными родителями
+        # (мульти-категория). Берём первое вхождение, чтобы PK не дублировался.
+        seen: dict[int, dict] = {}
+        for n in nodes:
+            if n["ozon_id"] not in seen:
+                seen[n["ozon_id"]] = n
+        dedup_nodes = list(seen.values())
+        log.info("category_tree_flattened",
+                 raw=len(nodes), unique=len(dedup_nodes))
 
-        if not nodes:
+        if not dedup_nodes:
             return {"status": "empty"}
 
-        # Upsert батчем — TimescaleDB на это норм
+        # Upsert батчем
         batch_size = 500
-        for i in range(0, len(nodes), batch_size):
-            chunk = nodes[i:i + batch_size]
+        for i in range(0, len(dedup_nodes), batch_size):
+            chunk = dedup_nodes[i:i + batch_size]
             stmt = pg_insert(OzonCategoryTree).values(chunk)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["ozon_id"],
@@ -88,8 +96,9 @@ async def _sync_category_tree_async(SessionLocal: async_sessionmaker[AsyncSessio
             )
             await db.execute(stmt)
         await db.commit()
-        log.info("category_tree_synced", total=len(nodes))
-        return {"status": "ok", "nodes_total": len(nodes)}
+        log.info("category_tree_synced", total=len(dedup_nodes))
+        return {"status": "ok", "nodes_total": len(dedup_nodes),
+                "duplicates_dropped": len(nodes) - len(dedup_nodes)}
 
 
 def _flatten(items: list[dict], *, parent_id: int | None, level: int,
