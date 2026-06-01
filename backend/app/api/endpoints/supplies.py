@@ -138,7 +138,11 @@ class SupplyDetail(BaseModel):
     notes: str | None
     cabinet_id: str | None
     cabinet_name: str | None
+    # Введённый пользователем итог (опц). Если не задан — фронт показывает грэнд-сумму.
     total_cost: float | None
+    # Авто-агрегаты для UI «Итоги»
+    items_total: float = 0
+    costs_total: float = 0
     status: str
     payment_date: str | None
     dispatch_date: str | None
@@ -166,7 +170,9 @@ class SupplyListRow(BaseModel):
     actual_departure_date: str | None
     supply_date: str | None
     items_count: int
-    costs_sum: float
+    items_total: float        # Σ final_unit_cost × qty
+    costs_sum: float          # Σ amount затрат
+    grand_total: float        # items_total + costs_sum (грэнд-сумма)
     docs_count: int
 
 
@@ -222,6 +228,11 @@ async def _to_detail(db: AsyncSession, supply: Supply) -> SupplyDetail:
             )).all()
             product_names = {r.id: r.name for r in rows}
 
+    items_total = sum(
+        float(it.final_unit_cost or 0) * (it.qty or 0)
+        for it in supply.items
+    )
+    costs_total = sum(float(c.amount or 0) for c in supply.costs)
     return SupplyDetail(
         id=str(supply.id),
         name=supply.name,
@@ -232,6 +243,8 @@ async def _to_detail(db: AsyncSession, supply: Supply) -> SupplyDetail:
         cabinet_id=str(supply.cabinet_id) if supply.cabinet_id else None,
         cabinet_name=cabinet_name,
         total_cost=float(supply.total_cost) if supply.total_cost is not None else None,
+        items_total=round(items_total, 2),
+        costs_total=round(costs_total, 2),
         status=supply.status,
         payment_date=supply.payment_date.isoformat() if supply.payment_date else None,
         dispatch_date=supply.dispatch_date.isoformat() if supply.dispatch_date else None,
@@ -355,8 +368,11 @@ async def list_supplies(
             q = q.where(col <= date_to)
 
     supplies = (await db.execute(q)).scalars().all()
-    return [
-        SupplyListRow(
+    rows = []
+    for s in supplies:
+        items_total = sum(float(i.final_unit_cost or 0) * (i.qty or 0) for i in s.items)
+        costs_sum = sum(float(c.amount or 0) for c in s.costs)
+        rows.append(SupplyListRow(
             id=str(s.id), name=s.name, tag=s.tag,
             transport_type=s.transport_type, route=s.route, status=s.status,
             payment_date=s.payment_date.isoformat() if s.payment_date else None,
@@ -367,11 +383,12 @@ async def list_supplies(
             ),
             supply_date=s.supply_date.isoformat() if s.supply_date else None,
             items_count=len(s.items),
-            costs_sum=sum(float(c.amount) for c in s.costs),
+            items_total=round(items_total, 2),
+            costs_sum=round(costs_sum, 2),
+            grand_total=round(items_total + costs_sum, 2),
             docs_count=len(s.documents),
-        )
-        for s in supplies
-    ]
+        ))
+    return rows
 
 
 @router.post("", response_model=SupplyDetail)

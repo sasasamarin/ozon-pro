@@ -20,7 +20,11 @@ interface SupplyListRow {
   dispatch_from: string | null
   actual_departure_date: string | null
   supply_date: string | null
-  items_count: number; costs_sum: number; docs_count: number
+  items_count: number
+  items_total: number
+  costs_sum: number
+  grand_total: number
+  docs_count: number
 }
 
 const STATUS_META: Record<SupplyStatus, { label: string; cls: string }> = {
@@ -156,7 +160,9 @@ export function Supplies() {
                 <th className="px-3 py-2.5">Факт. выход</th>
                 <th className="px-3 py-2.5">Приход</th>
                 <th className="px-3 py-2.5 text-right">SKU</th>
+                <th className="px-3 py-2.5 text-right">Σ товары</th>
                 <th className="px-3 py-2.5 text-right">Σ затрат</th>
+                <th className="px-3 py-2.5 text-right">ИТОГО</th>
                 <th className="px-3 py-2.5 text-center">📎</th>
                 <th className="px-3 py-2.5"></th>
               </tr>
@@ -187,7 +193,9 @@ export function Supplies() {
                   <td className="px-3 py-2.5 tabular-nums text-xs">{s.actual_departure_date ?? '—'}</td>
                   <td className="px-3 py-2.5 tabular-nums text-xs">{s.supply_date ?? '—'}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{s.items_count}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">{formatCurrency(s.items_total)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{formatCurrency(s.costs_sum)}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{formatCurrency(s.grand_total)}</td>
                   <td className="px-3 py-2.5 text-center text-fg-muted">{s.docs_count || ''}</td>
                   <td className="px-3 py-2.5 text-right whitespace-nowrap">
                     <Link to={`/procurement/supplies/${s.id}`}

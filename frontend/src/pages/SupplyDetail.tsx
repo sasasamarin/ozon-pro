@@ -108,6 +108,10 @@ export function SupplyDetailPage() {
     .reduce((s, c) => s + (Number(c.amount) || 0), 0)
   const sumSupply = costs.filter(c => c.scope === 'supply').reduce((s, c) => s + (Number(c.amount) || 0), 0)
   const totalCostsSum = costs.reduce((s, c) => s + (Number(c.amount) || 0), 0)
+  // Итоги
+  const itemsTotal = items.reduce((s, i) => s + (Number(i.final_unit_cost) || 0) * (Number(i.qty) || 0), 0)
+  const grandTotal = itemsTotal + totalCostsSum
+  const totalCostOverride = form.total_cost ? parseFloat(form.total_cost) : null
 
   const save = async () => {
     setError(null); setSaving(true)
@@ -369,11 +373,35 @@ export function SupplyDetailPage() {
         ))}
         {totalCostsSum > 0 && (
           <div className="mt-3 px-3 py-2 bg-bg-subtle/40 rounded text-xs">
-            <div>Σ затрат всего (справочно): <b>{formatCurrency(totalCostsSum)}</b></div>
-            <div>Σ на всю поставку: <b>{formatCurrency(sumSupply)}</b></div>
-            <div className="text-fg-muted mt-1">Эти суммы НЕ записываются в себестоимость автоматически. Используй для ручного пересчёта final_unit_cost.</div>
+            <div>Σ затрат всего: <b>{formatCurrency(totalCostsSum)}</b> · из них на всю поставку: <b>{formatCurrency(sumSupply)}</b></div>
+            <div className="text-fg-muted mt-1">Суммы затрат НЕ записываются в себестоимость автоматически. Используй для ручного пересчёта final_unit_cost.</div>
           </div>
         )}
+      </Card>
+
+      {/* Итоги */}
+      <Card className="p-4 border-2 border-indigo-200 bg-indigo-50/30">
+        <h2 className="text-sm font-medium text-fg mb-3">Итоги</h2>
+        <div className="space-y-1.5 text-sm">
+          <div className="flex justify-between">
+            <span className="text-fg-muted">Все за товар (Σ final_unit_cost × qty)</span>
+            <span className="tabular-nums font-medium">{formatCurrency(itemsTotal)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-fg-muted">Все за доставку и затраты (Σ amount)</span>
+            <span className="tabular-nums font-medium">{formatCurrency(totalCostsSum)}</span>
+          </div>
+          <div className="flex justify-between pt-2 mt-1 border-t border-indigo-200 text-base">
+            <span className="font-semibold">ИТОГО (товар + затраты)</span>
+            <span className="tabular-nums font-bold text-indigo-900">{formatCurrency(grandTotal)}</span>
+          </div>
+          {totalCostOverride !== null && Math.abs(totalCostOverride - grandTotal) > 1 && (
+            <div className="flex justify-between text-xs text-amber-700 mt-1">
+              <span>⚠ Расхождение с введённым «Итог. стоимость» ({formatCurrency(totalCostOverride)})</span>
+              <span>Δ = {formatCurrency(totalCostOverride - grandTotal)}</span>
+            </div>
+          )}
+        </div>
       </Card>
 
       {/* Документы */}
