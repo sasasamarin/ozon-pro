@@ -337,7 +337,18 @@ async def _upsert_posting(
         "raw_data": posting,
     }
 
+    # customer_price заполняется отдельной таской enrich_customer_price
+    # (через /v2/posting/fbo/get). При пересинке Order мы удаляем items —
+    # сохраняем уже обогащённый customer_price, чтобы не зануляться.
+    preserved_cp: dict[tuple[int, str | None], float] = {}
     if order:
+        existing = (await db.execute(
+            select(OrderItem.ozon_sku, OrderItem.offer_id, OrderItem.customer_price)
+            .where(OrderItem.order_id == order.id,
+                   OrderItem.customer_price.is_not(None))
+        )).all()
+        for sku, off, cp in existing:
+            preserved_cp[(sku or 0, off)] = cp
         for k, v in payload.items():
             setattr(order, k, v)
         await db.flush()
@@ -368,6 +379,7 @@ async def _upsert_posting(
                 total_price=_safe_float(item.get("total_price"))
                 or (_safe_float(item.get("price")) or 0) * int(item.get("quantity", 1)),
                 commission=_safe_float(item.get("commission_amount")) or 0,
+                customer_price=preserved_cp.get((ozon_sku or 0, offer_id)),
             )
         )
 
