@@ -39,3 +39,17 @@ secrets/
 
 # Bootstrap / служебные скрипты
 setup_*.sh
+
+# Temp debug / probe / verify скрипты (создаём в /tmp или в backend/, не коммитим)
+backend/probe_*.py
+backend/verify_*.py
+backend/dive_*.py
+backend/reconcile_*.py
+backend/gen_jwt.py
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Backup конфигов nginx
+*.conf.bak
+*.bak
