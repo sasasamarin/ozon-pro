@@ -76,6 +76,7 @@ from app.models.financing import (  # noqa: F401
     OzonFinancingMovement,
 )
 from app.models.loan import Loan, LoanPayment  # noqa: F401
+from app.models.customer_price_estimate import CustomerPriceMonthlyEstimate  # noqa: F401
 from app.models.market import (  # noqa: F401
     CrossPlatform,
     MarketCompetitor,

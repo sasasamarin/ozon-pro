@@ -35,6 +35,7 @@ celery_app = Celery(
         "app.workers.tasks.maintenance",
         "app.workers.tasks.recompute_recommendations",
         "app.workers.tasks.enrich_customer_price",
+        "app.workers.tasks.backfill_customer_price_estimate",
         "app.workers.tasks.reconcile_realization",
         "app.workers.tasks.sync_category_tree",
         "app.workers.tasks.sync_placement_reports",

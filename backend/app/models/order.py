@@ -148,6 +148,9 @@ class OrderItem(BaseModel):
     # Отдаётся Ozon API в /v2/posting/fbo/get → fd.products[].customer_price.
     # Не влияет на финансы продавца, но драйвер спроса.
     customer_price: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
+    # NULL / 'api' = точный из posting/fbo/get
+    # 'estimated_monthly' = средняя за месяц из realization API (для >90 дней)
+    customer_price_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
     total_price: Mapped[float] = mapped_column(Numeric(15, 2), default=0)
     commission: Mapped[float] = mapped_column(Numeric(15, 2), default=0)
 

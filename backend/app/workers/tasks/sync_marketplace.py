@@ -21,6 +21,7 @@ from app.core.logging import log
 from app.core.security import decrypt_secret
 from app.models import (
     Cancellation,
+    CustomerPriceMonthlyEstimate,
     OrderType,
     OzonAccount,
     OzonAccountStatus,
@@ -495,26 +496,85 @@ async def _sync_realization_for_account(
                         else:
                             period_to = date_cls(year, month + 1, 1) - timedelta(days=1)
 
-                        bulk = []
+                        # ВАЖНО: realization отдаёт МНОГО строк на один SKU
+                        # (по rowNumber, каждая = отдельная транзакция).
+                        # Поля живут под `item.{sku,offer_id,name}` и
+                        # `delivery_commission.{price_per_instance,quantity,bonus}`.
+                        # Агрегируем взвешенно по qty для (sku, month).
+                        per_sku: dict[int, dict] = {}
                         for r in rows:
-                            sku = r.get("sku") or r.get("product_id")
+                            item = r.get("item") or {}
+                            sku = item.get("sku")
                             if not sku:
                                 continue
+                            sku = int(sku)
+                            dc = r.get("delivery_commission") or {}
+                            cp = _safe_float(dc.get("price_per_instance")) or 0
+                            qty = int(dc.get("quantity") or 0)
+                            sp = _safe_float(r.get("seller_price_per_instance")) or 0
+                            rc = r.get("return_commission") or {}
+                            ret_qty = int(rc.get("quantity") or 0) if rc else 0
+                            ret_amount = _safe_float(rc.get("amount")) or 0 if rc else 0
+                            bonus = _safe_float(dc.get("bonus")) or 0
+                            standard_fee = _safe_float(dc.get("standard_fee")) or 0
+
+                            agg = per_sku.setdefault(sku, {
+                                "offer_id": item.get("offer_id"),
+                                "name": item.get("name"),
+                                "sum_cp_qty": 0.0, "sum_sp_qty": 0.0,
+                                "qty_sold": 0, "qty_returned": 0,
+                                "sum_bonus": 0.0, "sum_fee": 0.0,
+                                "sum_amount_sold": 0.0, "sum_amount_returned": 0.0,
+                                "rows": 0,
+                            })
+                            agg["sum_cp_qty"] += cp * qty
+                            agg["sum_sp_qty"] += sp * qty
+                            agg["qty_sold"] += qty
+                            agg["qty_returned"] += ret_qty
+                            agg["sum_bonus"] += bonus
+                            agg["sum_fee"] += standard_fee
+                            agg["sum_amount_sold"] += cp * qty
+                            agg["sum_amount_returned"] += ret_amount
+                            agg["rows"] += 1
+
+                        bulk = []
+                        estimate_bulk = []
+                        for sku, agg in per_sku.items():
+                            if agg["qty_sold"] <= 0:
+                                continue
+                            weighted_cp = agg["sum_cp_qty"] / agg["qty_sold"]
+                            weighted_sp = (
+                                agg["sum_sp_qty"] / agg["qty_sold"]
+                                if agg["sum_sp_qty"] else None
+                            )
                             bulk.append({
                                 "ozon_account_id": account_id,
                                 "period_from": period_from,
                                 "period_to": period_to,
-                                "ozon_sku": int(sku),
-                                "product_id": sku_to_id.get(int(sku)),
-                                "offer_id": r.get("offer_id"),
-                                "name": r.get("name"),
-                                "qty_sold": int(r.get("sale_qty", 0) or 0),
-                                "qty_returned": int(r.get("return_qty", 0) or 0),
-                                "revenue": _safe_float(r.get("price_per_instance")) or 0,
-                                "commission_amount": _safe_float((r.get("delivery_commission") or {}).get("commission_percent")) or 0,
-                                "delivery_amount": _safe_float(r.get("delivery_per_unit_amount")) or 0,
-                                "refund_amount": _safe_float(r.get("return_per_unit_amount")) or 0,
-                                "raw_data": r,
+                                "ozon_sku": sku,
+                                "product_id": sku_to_id.get(sku),
+                                "offer_id": agg["offer_id"],
+                                "name": agg["name"],
+                                "qty_sold": agg["qty_sold"],
+                                "qty_returned": agg["qty_returned"],
+                                # revenue (interpret): weighted customer_price (per unit)
+                                "revenue": round(weighted_cp, 2),
+                                # commission_amount: суммарный standard_fee
+                                "commission_amount": round(agg["sum_fee"], 2),
+                                "delivery_amount": 0,
+                                "refund_amount": round(agg["sum_amount_returned"], 2),
+                                "raw_data": {"rows_aggregated": agg["rows"],
+                                             "sum_bonus": agg["sum_bonus"]},
+                            })
+                            estimate_bulk.append({
+                                "cabinet_id": account_id,
+                                "sku": sku,
+                                "month": period_from,
+                                "weighted_cp": round(weighted_cp, 2),
+                                "qty": agg["qty_sold"],
+                                "weighted_sp": round(weighted_sp, 2) if weighted_sp else None,
+                                "source_rows": agg["rows"],
+                                "computed_at": datetime.now(UTC),
                             })
                             stats.processed += 1
 
@@ -529,6 +589,16 @@ async def _sync_realization_for_account(
                             )
                             await db.execute(stmt)
                             stats.updated += len(bulk)
+                        if estimate_bulk:
+                            est_stmt = pg_insert(CustomerPriceMonthlyEstimate).values(estimate_bulk)
+                            est_stmt = est_stmt.on_conflict_do_update(
+                                index_elements=["cabinet_id", "sku", "month"],
+                                set_={c: est_stmt.excluded[c] for c in (
+                                    "weighted_cp", "qty", "weighted_sp",
+                                    "source_rows", "computed_at",
+                                )},
+                            )
+                            await db.execute(est_stmt)
 
                 account.last_sync_at = datetime.now(UTC)
                 account.last_sync_error = None
