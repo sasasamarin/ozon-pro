@@ -29,7 +29,7 @@ from app.core.logging import log
 from app.core.security import decrypt_secret
 from app.models import MonthlyUnitEconomy, OzonAccount
 from app.services.ozon_client import OzonSellerClient
-from app.services.unit_economy_parser import parse_unit_economy
+from app.services.placement_report_parser import parse_placement_report
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import get_active_accounts, run_celery_async
 
@@ -128,38 +128,54 @@ async def _sync_one_cabinet(
                 log.info("placement_downloaded", account=str(acc.id),
                          code=code, size=len(content))
 
-                # Парсим XLSX тем же парсером что использует ручная загрузка
-                parsed = parse_unit_economy(io.BytesIO(content), file_name=code)
+                # Парсим — формат отличается от ручного XLSX «Общие расходы»:
+                # per-day-per-SKU-per-warehouse, 12 колонок, только хранение.
+                # Агрегируем в SUM(storage) per (sku, month).
+                parsed = parse_placement_report(io.BytesIO(content))
+                log.info("placement_parsed",
+                         account=str(acc.id), code=code,
+                         rows_total=parsed.rows_total,
+                         rows_with_cost=parsed.rows_with_cost,
+                         unique_keys=len(parsed.storage_by_sku_month))
 
-                # Upsert в monthly_unit_economy
-                month_date = parsed.period_from.replace(day=1)
                 now = datetime.now(UTC)
                 async with SessionLocal() as db:
-                    for row in parsed.rows:
+                    # UPSERT только поле storage (другие поля приходят из
+                    # ручного XLSX «Общие расходы» — их не трогаем).
+                    for (sku, month_first), storage_cost in parsed.storage_by_sku_month.items():
+                        # Знак как в Ozon — расход (отрицательное). API даёт +,
+                        # делаем − для согласованности с monthly_unit_economy.
+                        storage_value = -abs(storage_cost)
                         values = {
-                            **row,
                             "cabinet_id": acc.id,
-                            "month": month_date,
+                            "sku": sku,
+                            "month": month_first,
+                            "storage": storage_value,
+                            "offer_id": parsed.offer_by_sku.get(sku),
                             "period_from": parsed.period_from,
                             "period_to": parsed.period_to,
                             "imported_at": now,
                             "source_file": code[:200],
                         }
                         stmt = pg_insert(MonthlyUnitEconomy).values(**values)
-                        update_cols = {
-                            k: stmt.excluded[k] for k in values
-                            if k not in ("cabinet_id", "sku", "month")
-                        }
+                        # ON CONFLICT: обновляем ТОЛЬКО storage и метаданные,
+                        # остальные поля (commission, acquiring, реклама и т.д.)
+                        # из XLSX «Общие расходы» сохраняются.
                         stmt = stmt.on_conflict_do_update(
                             index_elements=["cabinet_id", "sku", "month"],
-                            set_=update_cols,
+                            set_={
+                                "storage": stmt.excluded.storage,
+                                "imported_at": stmt.excluded.imported_at,
+                                "source_file": stmt.excluded.source_file,
+                            },
                         )
                         await db.execute(stmt)
                         upserted += 1
                     await db.commit()
                 new_imported += 1
                 log.info("placement_imported", account=str(acc.id), code=code,
-                         month=month_date.isoformat(), rows=len(parsed.rows))
+                         period=f"{parsed.period_from}..{parsed.period_to}",
+                         skus_months=len(parsed.storage_by_sku_month))
 
             except Exception as e:
                 log.exception("placement_import_failed",
