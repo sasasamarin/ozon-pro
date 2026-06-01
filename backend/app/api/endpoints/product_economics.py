@@ -52,18 +52,27 @@ class EconomicsRow(BaseModel):
     cabinet_name: str
     is_archived: bool
 
+    # Источник цифр расходов (storage/acquiring/реклама и т.д.):
+    # 'ozon_xlsx' — точные числа из загруженного «Экономика магазина» (зеркало)
+    # 'estimated' — оценка по эвристикам (если XLSX за месяц не загружен)
+    expenses_source: str
+
     qty_delivered: int
-    revenue: float                 # brut — то что показывает Ozon как продано
-    returned_revenue: float        # сумма возвратов по этому товару в периоде
+    revenue: float                 # brut — что показывает Ozon как продано
+    returned_revenue: float        # сумма возвратов
     effective_revenue: float       # revenue − returned_revenue
+
+    # Доплаты Ozon (только если есть XLSX, иначе 0)
+    spp_points: float              # Баллы за скидки (компенсация СПП)
+    partner_programs: float        # Программы партнёров
 
     # На единицу — для сравнения товаров
     avg_seller_price: float | None
-    avg_customer_price: float | None     # СПП-цена покупателя (если есть customer_price)
-    spp_pct: float | None                # на сколько % покупатель видит ниже seller_price
+    avg_customer_price: float | None
+    spp_pct: float | None
 
     cost_per_unit: float | None
-    commission_pct: float                 # реальная sales_percent_fbo (или fallback)
+    commission_pct: float
     commission_per_unit: float
     logistics_per_unit: float
     acquiring_per_unit: float
@@ -72,18 +81,37 @@ class EconomicsRow(BaseModel):
     # Итоги за период (× qty)
     cost_total: float
     commission_total: float
-    logistics_total: float
+    logistics_total: float          # из XLSX: только logistics. Без last_mile (он отдельно).
+    last_mile_total: float          # доставка до места выдачи (XLSX) / 0 если оценка
+    storage_total: float            # стоимость размещения (XLSX) / 0 если оценка
+    posting_handling_total: float   # обработка отправления (XLSX)
     acquiring_total: float
-    ad_spend_total: float
-    operating_profit: float               # выручка минус все вычеты, ДО налога
+    return_handling_total: float    # обработка возврата (XLSX)
+    reverse_logistics_total: float  # обратная логистика (XLSX)
+    disposal_total: float           # утилизация (XLSX)
+    ovh_extra_total: float          # доп. обработка ОВХ (XLSX)
+    operational_errors_total: float # операционные ошибки (XLSX)
+    # Реклама детально (XLSX) — sum равна ad_spend_total для совместимости
+    ad_cpc_total: float
+    ad_cpo_total: float
+    ad_star_total: float
+    ad_paid_brand_total: float
+    ad_reviews_total: float
+    ad_spend_total: float           # = ad_cpc + ad_cpo + ad_star + paid_brand + reviews
+
+    operating_profit: float         # выручка минус все вычеты, ДО налога
     operating_margin_pct: float | None
 
     tax_amount: float
     vat_amount: float
-    net_profit: float                     # ПОСЛЕ налога
+    net_profit: float
     net_margin_pct: float | None
 
-    cost_missing: bool                    # cost_price пуст → итоги неполные
+    cost_missing: bool
+
+    # Контрольные числа Ozon (для сверки UI ↔ Ozon)
+    ozon_profit: float | None       # Прибыль за период из XLSX
+    ozon_profit_diff: float | None  # |наш net_profit без с/с − ozon_profit| если есть xlsx
 
 
 class EconomicsTotals(BaseModel):
@@ -96,14 +124,18 @@ class EconomicsTotals(BaseModel):
     logistics_total: float
     acquiring_total: float
     ad_spend_total: float
+    storage_total: float                  # из XLSX когда загружен
     operating_profit: float
     tax_amount: float
     vat_amount: float
     net_profit: float
     net_margin_pct: float | None
     products_total: int
-    products_with_cost: int               # сколько товаров имеют cost_price
+    products_with_cost: int
     products_missing_cost: int
+    # Сколько товаров получили точные числа из XLSX vs оценку
+    products_with_xlsx: int
+    products_estimated: int
 
 
 class EconomicsResp(BaseModel):
@@ -112,6 +144,9 @@ class EconomicsResp(BaseModel):
     tax_regime: str
     tax_regime_label: str
     tax_rate_pct: float
+    # Информация о покрытии XLSX за этот период
+    months_with_xlsx: list[str]           # ["2026-05-01"] если есть монти за период
+    xlsx_coverage_pct: float              # % товаров с точными числами из XLSX
     rows: list[EconomicsRow]
     totals: EconomicsTotals
 
@@ -156,7 +191,9 @@ async def get_economics(
         return EconomicsResp(
             period_from=date_from.isoformat(), period_to=date_to.isoformat(),
             tax_regime=tax_regime, tax_regime_label=tax_regime.upper(),
-            tax_rate_pct=tax_rate, rows=[], totals=_empty_totals(),
+            tax_rate_pct=tax_rate,
+            months_with_xlsx=[], xlsx_coverage_pct=0.0,
+            rows=[], totals=_empty_totals(),
         )
     allowed_acc_ids = [r[0] for r in cab_rows]
     acc_name_map = {r[0]: r[1] for r in cab_rows}
@@ -231,13 +268,79 @@ async def get_economics(
     """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
     ret_by_prod: dict[str, float] = {r.pid: float(r.ret_sum or 0) for r in ret_rows}
 
+    # === MONTHLY UNIT ECONOMY: точные XLSX-числа из «Экономика магазина» ===
+    # Если за период есть загруженный отчёт Ozon — берём расходы оттуда per-SKU.
+    # Иначе остаётся текущая модель оценок. Матчим по ozon_sku (sku в файле).
+    # Период XLSX = month (первый день). За period_from..period_to берём ВСЕ
+    # месяцы которые пересекаются и суммируем по SKU.
+    xlsx_rows = (await db.execute(text("""
+        SELECT
+          ue.cabinet_id::text AS cab_id,
+          ue.sku,
+          ue.month::text AS month_iso,
+          SUM(COALESCE(ue.revenue, 0))::float AS xrevenue,
+          SUM(COALESCE(ue.spp_points, 0))::float AS xspp,
+          SUM(COALESCE(ue.partner_programs, 0))::float AS xpartner,
+          SUM(COALESCE(ue.ozon_commission, 0))::float AS xcomm,
+          SUM(COALESCE(ue.acquiring, 0))::float AS xacq,
+          SUM(COALESCE(ue.posting_handling, 0))::float AS xposting,
+          SUM(COALESCE(ue.logistics, 0))::float AS xlog,
+          SUM(COALESCE(ue.last_mile, 0))::float AS xlast,
+          SUM(COALESCE(ue.storage, 0))::float AS xstorage,
+          SUM(COALESCE(ue.return_handling, 0))::float AS xrethnd,
+          SUM(COALESCE(ue.reverse_logistics, 0))::float AS xrevlog,
+          SUM(COALESCE(ue.disposal, 0))::float AS xdisp,
+          SUM(COALESCE(ue.ovh_extra, 0))::float AS xovh,
+          SUM(COALESCE(ue.operational_errors, 0))::float AS xopserr,
+          SUM(COALESCE(ue.ad_cpc, 0))::float AS xcpc,
+          SUM(COALESCE(ue.ad_cpo, 0))::float AS xcpo,
+          SUM(COALESCE(ue.ad_star, 0))::float AS xstar,
+          SUM(COALESCE(ue.ad_paid_brand, 0))::float AS xbrand,
+          SUM(COALESCE(ue.ad_reviews, 0))::float AS xreviews,
+          SUM(COALESCE(ue.ozon_profit, 0))::float AS xprofit,
+          SUM(COALESCE(ue.delivered_qty, 0))::int AS xdelivered,
+          SUM(COALESCE(ue.returned_qty, 0))::int AS xreturned
+        FROM monthly_unit_economy ue
+        WHERE ue.cabinet_id = ANY(CAST(:accs AS uuid[]))
+          AND ue.month >= date_trunc('month', CAST(:df AS date))
+          AND ue.month <= date_trunc('month', CAST(:dt AS date))
+        GROUP BY ue.cabinet_id, ue.sku, ue.month
+    """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
+    # Ключ = (cabinet_id, ozon_sku) → суммируем по месяцам если их несколько
+    xlsx_by_sku: dict[tuple[str, int], dict] = {}
+    months_covered: set[str] = set()
+    for x in xlsx_rows:
+        key = (x.cab_id, int(x.sku))
+        months_covered.add(x.month_iso[:10])
+        if key in xlsx_by_sku:
+            # суммируем если за период попало несколько месяцев
+            prev = xlsx_by_sku[key]
+            for k in ("xrevenue", "xspp", "xpartner", "xcomm", "xacq", "xposting",
+                      "xlog", "xlast", "xstorage", "xrethnd", "xrevlog", "xdisp",
+                      "xovh", "xopserr", "xcpc", "xcpo", "xstar", "xbrand", "xreviews",
+                      "xprofit", "xdelivered", "xreturned"):
+                prev[k] = (prev.get(k, 0) or 0) + (getattr(x, k) or 0)
+        else:
+            xlsx_by_sku[key] = {
+                "xrevenue": x.xrevenue, "xspp": x.xspp, "xpartner": x.xpartner,
+                "xcomm": x.xcomm, "xacq": x.xacq, "xposting": x.xposting,
+                "xlog": x.xlog, "xlast": x.xlast, "xstorage": x.xstorage,
+                "xrethnd": x.xrethnd, "xrevlog": x.xrevlog, "xdisp": x.xdisp,
+                "xovh": x.xovh, "xopserr": x.xopserr,
+                "xcpc": x.xcpc, "xcpo": x.xcpo, "xstar": x.xstar,
+                "xbrand": x.xbrand, "xreviews": x.xreviews,
+                "xprofit": x.xprofit, "xdelivered": x.xdelivered, "xreturned": x.xreturned,
+            }
+
     # Построение строк
     out_rows: list[EconomicsRow] = []
     tot_qty = 0
     tot_revenue = tot_returned = tot_eff_rev = 0.0
     tot_cost = tot_comm = tot_log = tot_acq = tot_ad = 0.0
+    tot_storage = 0.0
     tot_op = tot_tax = tot_vat = tot_net = 0.0
     p_with_cost = 0
+    p_with_xlsx = 0
 
     for r in rows:
         qty = int(r.qty_delivered or 0)
@@ -253,36 +356,105 @@ async def get_economics(
 
         cost_per = float(r.cost_price) if r.cost_price else None
         commission_pct = get_commission_pct(product_sales_percent_fbo=r.comm_pct)
-        comm_per = (avg_seller or 0) * commission_pct / 100
         prod_acq_amount = float(r.prod_acq_amount) if r.prod_acq_amount else None
-        acq_calc = calc_acquiring(
-            seller_price=avg_seller or 0, qty=qty,
-            product_acquiring_amount=prod_acq_amount,
-        )
-        log_calc = calc_logistics(qty=qty)
-        acq_per = acq_calc.amount / qty if qty else 0.0
-        ad_total = ad_by_prod.get(r.product_id, 0.0)
-        ad_per = ad_total / qty if qty else 0.0
+
+        # Проверяем — есть ли точные XLSX-данные за этот период для этого SKU
+        xlsx = xlsx_by_sku.get((r.account_id, int(r.ozon_sku)))
+        expenses_source = "ozon_xlsx" if xlsx else "estimated"
+
+        if xlsx:
+            p_with_xlsx += 1
+            # === ИЗ XLSX: точное «зеркало Ozon», знаки сохранены как в файле ===
+            # XLSX-выручка по доставленным товарам (может отличаться от oi.price-агрегата
+            # на величину spp_points, partner_programs — Ozon доплачивает).
+            spp_points = float(xlsx["xspp"] or 0)
+            partner_programs = float(xlsx["xpartner"] or 0)
+            # comm_total отрицательный в XLSX → переводим в abs для P&L строки
+            comm_total = abs(float(xlsx["xcomm"] or 0))
+            acq_total = abs(float(xlsx["xacq"] or 0))
+            posting_handling_total = abs(float(xlsx["xposting"] or 0))
+            log_total = abs(float(xlsx["xlog"] or 0))
+            last_mile_total = abs(float(xlsx["xlast"] or 0))
+            storage_total = abs(float(xlsx["xstorage"] or 0))
+            return_handling_total = abs(float(xlsx["xrethnd"] or 0))
+            reverse_logistics_total = abs(float(xlsx["xrevlog"] or 0))
+            disposal_total = abs(float(xlsx["xdisp"] or 0))
+            ovh_extra_total = abs(float(xlsx["xovh"] or 0))
+            operational_errors_total = abs(float(xlsx["xopserr"] or 0))
+            ad_cpc_total = abs(float(xlsx["xcpc"] or 0))
+            ad_cpo_total = abs(float(xlsx["xcpo"] or 0))
+            ad_star_total = abs(float(xlsx["xstar"] or 0))
+            ad_paid_brand_total = abs(float(xlsx["xbrand"] or 0))
+            ad_reviews_total = abs(float(xlsx["xreviews"] or 0))
+            ad_total = (ad_cpc_total + ad_cpo_total + ad_star_total
+                        + ad_paid_brand_total + ad_reviews_total)
+            ozon_profit_x = float(xlsx["xprofit"] or 0)
+            # comm/log/acq на единицу — для отображения per-unit
+            comm_per = comm_total / qty if qty else 0
+            acq_per = acq_total / qty if qty else 0
+            ad_per = ad_total / qty if qty else 0
+        else:
+            # === ОЦЕНКА: текущая модель ===
+            spp_points = 0.0
+            partner_programs = 0.0
+            comm_per = (avg_seller or 0) * commission_pct / 100
+            acq_calc = calc_acquiring(
+                seller_price=avg_seller or 0, qty=qty,
+                product_acquiring_amount=prod_acq_amount,
+            )
+            log_calc = calc_logistics(qty=qty)
+            acq_per = acq_calc.amount / qty if qty else 0.0
+            ad_total = ad_by_prod.get(r.product_id, 0.0)
+            ad_per = ad_total / qty if qty else 0.0
+            comm_total = comm_per * qty
+            log_total = log_calc.amount
+            acq_total = acq_calc.amount
+            posting_handling_total = 0.0
+            last_mile_total = 0.0
+            storage_total = 0.0
+            return_handling_total = 0.0
+            reverse_logistics_total = 0.0
+            disposal_total = 0.0
+            ovh_extra_total = 0.0
+            operational_errors_total = 0.0
+            ad_cpc_total = ad_cpo_total = ad_star_total = 0.0
+            ad_paid_brand_total = ad_reviews_total = 0.0
+            ozon_profit_x = None
 
         cost_total = (cost_per * qty) if cost_per else 0.0
-        comm_total = comm_per * qty
-        log_total = log_calc.amount
-        acq_total = acq_calc.amount
 
         returned_revenue = ret_by_prod.get(r.product_id, 0.0)
-        effective_revenue = revenue - returned_revenue
+        # Для XLSX-режима effective_revenue = seller_revenue (incl. spp/partner) − returns
+        # Для оценки — revenue − returns (как раньше).
+        if xlsx:
+            seller_revenue_xlsx = revenue + spp_points + partner_programs
+            effective_revenue = seller_revenue_xlsx - returned_revenue
+        else:
+            effective_revenue = revenue - returned_revenue
 
-        # Налог и op_profit считаются от effective_revenue (post-returns)
-        op_profit = effective_revenue - cost_total - comm_total - log_total - acq_total - ad_total
+        # op_profit = effective_revenue − все расходы Ozon − реклама − cost
+        # Не двойной учёт: comm_total / log_total / acq_total суммируют все
+        # отдельные статьи если XLSX, иначе только базовая модель.
+        all_ozon_expenses = (
+            comm_total + acq_total + posting_handling_total + log_total + last_mile_total
+            + storage_total + return_handling_total + reverse_logistics_total
+            + disposal_total + ovh_extra_total + operational_errors_total
+        )
+        op_profit = effective_revenue - cost_total - all_ozon_expenses - ad_total
         tax_res = calc_tax(
             revenue=effective_revenue, gross_profit=op_profit,
             tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
         )
 
         net = tax_res.net_profit
-        # % считаем от brut revenue (= что в кабинете Ozon)
         net_margin = (net / revenue * 100) if revenue else None
         op_margin = (op_profit / revenue * 100) if revenue else None
+
+        # Сверка XLSX: наш op_profit (БЕЗ себестоимости) должен ≈ ozon_profit
+        ozon_diff = None
+        if ozon_profit_x is not None:
+            our_no_cogs = op_profit + cost_total
+            ozon_diff = round(abs(our_no_cogs - ozon_profit_x), 2)
 
         out_rows.append(EconomicsRow(
             product_id=r.product_id,
@@ -291,10 +463,13 @@ async def get_economics(
             ozon_sku=r.ozon_sku,
             cabinet_name=acc_name_map.get(uuid.UUID(r.account_id), "—"),
             is_archived=bool(r.is_archived),
+            expenses_source=expenses_source,
             qty_delivered=qty,
             revenue=round(revenue, 2),
             returned_revenue=round(returned_revenue, 2),
             effective_revenue=round(effective_revenue, 2),
+            spp_points=round(spp_points, 2),
+            partner_programs=round(partner_programs, 2),
             avg_seller_price=round(avg_seller, 2) if avg_seller else None,
             avg_customer_price=round(avg_customer, 2) if avg_customer else None,
             spp_pct=spp_pct,
@@ -307,7 +482,20 @@ async def get_economics(
             cost_total=round(cost_total, 2),
             commission_total=round(comm_total, 2),
             logistics_total=round(log_total, 2),
+            last_mile_total=round(last_mile_total, 2),
+            storage_total=round(storage_total, 2),
+            posting_handling_total=round(posting_handling_total, 2),
             acquiring_total=round(acq_total, 2),
+            return_handling_total=round(return_handling_total, 2),
+            reverse_logistics_total=round(reverse_logistics_total, 2),
+            disposal_total=round(disposal_total, 2),
+            ovh_extra_total=round(ovh_extra_total, 2),
+            operational_errors_total=round(operational_errors_total, 2),
+            ad_cpc_total=round(ad_cpc_total, 2),
+            ad_cpo_total=round(ad_cpo_total, 2),
+            ad_star_total=round(ad_star_total, 2),
+            ad_paid_brand_total=round(ad_paid_brand_total, 2),
+            ad_reviews_total=round(ad_reviews_total, 2),
             ad_spend_total=round(ad_total, 2),
             operating_profit=round(op_profit, 2),
             operating_margin_pct=round(op_margin, 2) if op_margin is not None else None,
@@ -316,6 +504,8 @@ async def get_economics(
             net_profit=net,
             net_margin_pct=round(net_margin, 2) if net_margin is not None else None,
             cost_missing=cost_per is None,
+            ozon_profit=round(ozon_profit_x, 2) if ozon_profit_x is not None else None,
+            ozon_profit_diff=ozon_diff,
         ))
 
         tot_qty += qty
@@ -327,6 +517,7 @@ async def get_economics(
         tot_log += log_total
         tot_acq += acq_total
         tot_ad += ad_total
+        tot_storage += storage_total
         tot_op += op_profit
         tot_tax += tax_res.tax_amount
         tot_vat += tax_res.vat_amount
@@ -344,6 +535,7 @@ async def get_economics(
         logistics_total=round(tot_log, 2),
         acquiring_total=round(tot_acq, 2),
         ad_spend_total=round(tot_ad, 2),
+        storage_total=round(tot_storage, 2),
         operating_profit=round(tot_op, 2),
         tax_amount=round(tot_tax, 2),
         vat_amount=round(tot_vat, 2),
@@ -352,7 +544,11 @@ async def get_economics(
         products_total=len(out_rows),
         products_with_cost=p_with_cost,
         products_missing_cost=len(out_rows) - p_with_cost,
+        products_with_xlsx=p_with_xlsx,
+        products_estimated=len(out_rows) - p_with_xlsx,
     )
+
+    xlsx_coverage = (p_with_xlsx / len(out_rows) * 100) if out_rows else 0.0
 
     return EconomicsResp(
         period_from=date_from.isoformat(),
@@ -365,6 +561,8 @@ async def get_economics(
             "none": "Без налога",
         }.get(tax_regime, tax_regime),
         tax_rate_pct=tax_rate,
+        months_with_xlsx=sorted(months_covered),
+        xlsx_coverage_pct=round(xlsx_coverage, 1),
         rows=out_rows, totals=totals,
     )
 
@@ -374,7 +572,9 @@ def _empty_totals() -> EconomicsTotals:
         qty_delivered=0, revenue=0, returned_revenue=0, effective_revenue=0,
         cost_total=0, commission_total=0,
         logistics_total=0, acquiring_total=0, ad_spend_total=0,
+        storage_total=0,
         operating_profit=0, tax_amount=0, vat_amount=0, net_profit=0,
         net_margin_pct=None, products_total=0,
         products_with_cost=0, products_missing_cost=0,
+        products_with_xlsx=0, products_estimated=0,
     )
