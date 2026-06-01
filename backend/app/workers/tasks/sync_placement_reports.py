@@ -158,15 +158,41 @@ async def _sync_one_cabinet(
                             "source_file": code[:200],
                         }
                         stmt = pg_insert(MonthlyUnitEconomy).values(**values)
-                        # ON CONFLICT: обновляем ТОЛЬКО storage и метаданные,
-                        # остальные поля (commission, acquiring, реклама и т.д.)
-                        # из XLSX «Общие расходы» сохраняются.
+                        # ON CONFLICT: storage обновляем ТОЛЬКО если запись
+                        # пришла из ранее этого же API (source_file LIKE
+                        # 'REPORT_seller_placement_%') ИЛИ если storage был
+                        # NULL. Ручной XLSX «Общие расходы» (другие префиксы)
+                        # имеет приоритет — он покрывает полный календарный
+                        # месяц, тогда как API даёт скользящее 30-д окно
+                        # и может не охватывать всё.
+                        from sqlalchemy import case
                         stmt = stmt.on_conflict_do_update(
                             index_elements=["cabinet_id", "sku", "month"],
                             set_={
-                                "storage": stmt.excluded.storage,
-                                "imported_at": stmt.excluded.imported_at,
-                                "source_file": stmt.excluded.source_file,
+                                "storage": case(
+                                    (MonthlyUnitEconomy.storage.is_(None),
+                                     stmt.excluded.storage),
+                                    (MonthlyUnitEconomy.source_file.like(
+                                        "REPORT_seller_placement_%"),
+                                     stmt.excluded.storage),
+                                    else_=MonthlyUnitEconomy.storage,
+                                ),
+                                "imported_at": case(
+                                    (MonthlyUnitEconomy.storage.is_(None),
+                                     stmt.excluded.imported_at),
+                                    (MonthlyUnitEconomy.source_file.like(
+                                        "REPORT_seller_placement_%"),
+                                     stmt.excluded.imported_at),
+                                    else_=MonthlyUnitEconomy.imported_at,
+                                ),
+                                "source_file": case(
+                                    (MonthlyUnitEconomy.storage.is_(None),
+                                     stmt.excluded.source_file),
+                                    (MonthlyUnitEconomy.source_file.like(
+                                        "REPORT_seller_placement_%"),
+                                     stmt.excluded.source_file),
+                                    else_=MonthlyUnitEconomy.source_file,
+                                ),
                             },
                         )
                         await db.execute(stmt)
