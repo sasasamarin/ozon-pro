@@ -22,6 +22,7 @@ from app.api.endpoints import (
     funnel,
     funnel_v2,
     loans,
+    reverse_funnel,
     reconciliation,
     company_settings,
     product_economics,
