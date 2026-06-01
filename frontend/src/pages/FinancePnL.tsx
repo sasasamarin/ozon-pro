@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
-import { TrendingUp, ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
+import { useNavigate, Link } from 'react-router-dom'
+import { TrendingUp, ArrowUpRight, ArrowDownRight, Loader2, FileSpreadsheet, AlertTriangle } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { CostWarningBanner } from '@/components/ui/CostWarningBanner'
 import { SelectedProductBanner } from '@/components/SelectedProductBanner'
@@ -101,6 +101,9 @@ export function FinancePnL() {
       {data?.has_missing_costs && (
         <CostWarningBanner count={data.missing_costs_count} context="profit" />
       )}
+
+      {/* Баннер XLSX покрытия: показывает за какие месяцы есть точные числа Ozon */}
+      <XlsxCoverageBanner />
 
       {data && (data.seller_revenue - data.buyer_revenue) > 1 && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm">
@@ -268,6 +271,80 @@ function KpiTile({
           {delta.toFixed(1)}% vs прошлый
         </p>
       )}
+    </Card>
+  )
+}
+
+
+interface UploadStatus {
+  cabinet_id: string
+  cabinet_name: string
+  month: string
+  imported_at: string
+  sku_count: number
+}
+
+/**
+ * Баннер «За какие месяцы загружен XLSX Ozon». Показывает покрытие точными
+ * данными по кабинетам — где есть, чего ждать. Принцип «честность источников».
+ */
+function XlsxCoverageBanner() {
+  const { data: uploads = [] } = useQuery<UploadStatus[]>({
+    queryKey: ['unit-economy-status'],
+    queryFn: async () => (await api.get('/finance/unit-economy/status')).data,
+    staleTime: 60_000,
+  })
+
+  // Группируем по кабинету
+  const byCabinet = uploads.reduce<Record<string, UploadStatus[]>>((acc, u) => {
+    if (!acc[u.cabinet_name]) acc[u.cabinet_name] = []
+    acc[u.cabinet_name].push(u)
+    return acc
+  }, {})
+  const hasAny = uploads.length > 0
+
+  if (!hasAny) {
+    return (
+      <Card className="p-3 bg-amber-50/60 border-amber-200/60 text-sm flex items-center gap-3">
+        <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0" />
+        <div className="flex-1">
+          <strong className="text-amber-900">XLSX «Экономика магазина» не загружен.</strong>{' '}
+          Хранение и детальная реклама в P&amp;L = оценки. Загрузи XLSX за месяц для точного зеркала Ozon.
+        </div>
+        <Link to="/finance/unit-economy/import"
+              className="text-xs font-medium px-3 py-1.5 rounded-md bg-fg text-bg hover:opacity-90 inline-flex items-center gap-1.5">
+          <FileSpreadsheet className="w-3.5 h-3.5" />
+          Загрузить
+        </Link>
+      </Card>
+    )
+  }
+
+  return (
+    <Card className="p-3 bg-blue-50/60 border-blue-200/60 text-sm">
+      <div className="flex items-start gap-3">
+        <FileSpreadsheet className="w-5 h-5 text-blue-700 mt-0.5 shrink-0" />
+        <div className="flex-1">
+          <strong className="text-blue-900">Точные числа Ozon загружены:</strong>
+          <div className="mt-1 space-y-0.5">
+            {Object.entries(byCabinet).map(([cab, ups]) => (
+              <div key={cab} className="text-xs text-fg-muted">
+                <span className="font-medium text-fg">{cab}:</span>{' '}
+                {ups.slice(0, 6).map((u) => {
+                  const m = new Date(u.month).toLocaleDateString('ru', { month: 'short', year: 'numeric' })
+                  const d = new Date(u.imported_at).toLocaleDateString('ru', { day: '2-digit', month: '2-digit' })
+                  return `${m} (загр. ${d})`
+                }).join(' · ')}
+              </div>
+            ))}
+          </div>
+        </div>
+        <Link to="/finance/unit-economy/import"
+              className="text-xs font-medium px-3 py-1.5 rounded-md border border-border-subtle hover:bg-bg-subtle inline-flex items-center gap-1.5 shrink-0">
+          <FileSpreadsheet className="w-3.5 h-3.5" />
+          Добавить
+        </Link>
+      </div>
     </Card>
   )
 }

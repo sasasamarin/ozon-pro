@@ -9,9 +9,10 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Loader2, AlertTriangle, Info, TrendingUp, TrendingDown } from 'lucide-react'
+import { Loader2, AlertTriangle, Info, TrendingUp, TrendingDown, FileSpreadsheet, Pencil } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { SelectedProductBanner } from '@/components/SelectedProductBanner'
+import { SourceBadge, SourceLegend } from '@/components/SourceBadge'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
@@ -26,8 +27,14 @@ interface EcoRow {
   ozon_sku: number
   cabinet_name: string
   is_archived: boolean
+  // Источник каждого поля: 'api' / 'xlsx' / 'estimated' / 'manual' / 'missing'
+  sources: Record<string, string>
   qty_delivered: number
   revenue: number
+  returned_revenue: number
+  effective_revenue: number
+  spp_points: number
+  partner_programs: number
   avg_seller_price: number | null
   avg_customer_price: number | null
   spp_pct: number | null
@@ -40,7 +47,20 @@ interface EcoRow {
   cost_total: number
   commission_total: number
   logistics_total: number
+  last_mile_total: number
+  storage_total: number
+  posting_handling_total: number
   acquiring_total: number
+  return_handling_total: number
+  reverse_logistics_total: number
+  disposal_total: number
+  ovh_extra_total: number
+  operational_errors_total: number
+  ad_cpc_total: number
+  ad_cpo_total: number
+  ad_star_total: number
+  ad_paid_brand_total: number
+  ad_reviews_total: number
   ad_spend_total: number
   operating_profit: number
   operating_margin_pct: number | null
@@ -49,16 +69,21 @@ interface EcoRow {
   net_profit: number
   net_margin_pct: number | null
   cost_missing: boolean
+  ozon_profit: number | null
+  ozon_profit_diff: number | null
 }
 
 interface EcoTotals {
   qty_delivered: number
   revenue: number
+  returned_revenue: number
+  effective_revenue: number
   cost_total: number
   commission_total: number
   logistics_total: number
   acquiring_total: number
   ad_spend_total: number
+  storage_total: number
   operating_profit: number
   tax_amount: number
   vat_amount: number
@@ -67,6 +92,8 @@ interface EcoTotals {
   products_total: number
   products_with_cost: number
   products_missing_cost: number
+  products_with_xlsx: number
+  products_estimated: number
 }
 
 interface EcoResp {
@@ -75,6 +102,8 @@ interface EcoResp {
   tax_regime: string
   tax_regime_label: string
   tax_rate_pct: number
+  months_with_xlsx: string[]
+  xlsx_coverage_pct: number
   rows: EcoRow[]
   totals: EcoTotals
 }
@@ -162,18 +191,63 @@ export function ProductEconomics() {
 
       <SelectedProductBanner supported />
 
-      {/* Баннер «не заполнена себестоимость» */}
+      {/* Баннер «не заполнена себестоимость» — критично для корректности */}
       {data && data.totals.products_missing_cost > 0 && (
-        <Card className="p-4 flex items-start gap-3 bg-amber-50/60 border-amber-200/60">
-          <AlertTriangle className="w-5 h-5 text-amber-700 mt-0.5 shrink-0" />
-          <div className="text-sm text-amber-900/90 flex-1">
-            <strong>У {data.totals.products_missing_cost} товаров не заполнена себестоимость.</strong>{' '}
-            Для них cost_total = 0, прибыль завышена. Заполни на странице{' '}
-            <Link to="/products?missing_cost=1&arch=all" className="text-blue-700 hover:underline font-medium">
-              /products → фильтр «Без себестоимости»
-            </Link>.
+        <Card className="p-4 flex items-start gap-3 bg-rose-50/60 border-rose-200/60">
+          <AlertTriangle className="w-5 h-5 text-rose-700 mt-0.5 shrink-0" />
+          <div className="text-sm text-rose-900 flex-1">
+            <strong>Прибыль ЗАВЫШЕНА:</strong> у {data.totals.products_missing_cost} из {data.totals.products_total} товаров
+            не заполнена себестоимость → COGS = 0 → прибыль выглядит больше реальной на десятки процентов.{' '}
+            <Link to="/products?missing_cost=1&arch=all" className="font-medium underline">
+              Заполнить ({data.totals.products_missing_cost} товаров) →
+            </Link>
           </div>
         </Card>
+      )}
+
+      {/* Баннер покрытия XLSX «Экономика магазина» */}
+      {data && (
+        <Card className={cn(
+          'p-3 flex items-center gap-3 text-sm',
+          data.totals.products_with_xlsx > 0
+            ? 'bg-blue-50/60 border-blue-200/60'
+            : 'bg-amber-50/60 border-amber-200/60',
+        )}>
+          <FileSpreadsheet className={cn(
+            'w-5 h-5 shrink-0',
+            data.totals.products_with_xlsx > 0 ? 'text-blue-700' : 'text-amber-700',
+          )} />
+          <div className="flex-1 flex items-center justify-between flex-wrap gap-2">
+            <div>
+              {data.totals.products_with_xlsx > 0 ? (
+                <>
+                  <strong className="text-blue-900">
+                    {data.totals.products_with_xlsx} из {data.totals.products_total} товаров
+                  </strong>
+                  {' '}({data.xlsx_coverage_pct}%) — точные числа из XLSX Ozon (хранение,
+                  реклама детально, доплаты СПП). Месяцы: {data.months_with_xlsx.join(', ') || '—'}.
+                </>
+              ) : (
+                <>
+                  <strong className="text-amber-900">XLSX «Экономика магазина» за этот период не загружен.</strong>{' '}
+                  Хранение и детальная реклама будут = 0, остальные расходы — оценка.
+                </>
+              )}
+            </div>
+            <Link to="/finance/unit-economy/import"
+                  className="text-xs font-medium px-3 py-1.5 rounded-md bg-fg text-bg hover:opacity-90 inline-flex items-center gap-1.5">
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              Загрузить XLSX
+            </Link>
+          </div>
+        </Card>
+      )}
+
+      {/* Легенда источников */}
+      {data && data.rows.length > 0 && (
+        <div className="px-1">
+          <SourceLegend />
+        </div>
       )}
 
       {/* Сводка KPI */}
@@ -286,23 +360,46 @@ export function ProductEconomics() {
                       )}
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums font-medium text-emerald-700">
-                      {formatCurrency(r.revenue)}
+                      <span className="inline-flex items-center gap-1">
+                        {formatCurrency(r.revenue)}
+                        <SourceBadge source={r.sources?.revenue} />
+                      </span>
+                      {r.storage_total > 0 && (
+                        <div className="text-[10px] text-rose-600">
+                          в т.ч. −{formatCurrency(r.storage_total)} хранение
+                        </div>
+                      )}
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums text-rose-700">
-                      {r.cost_total > 0 ? `−${formatCurrency(r.cost_total)}` : '—'}
+                      <span className="inline-flex items-center gap-1">
+                        {r.cost_total > 0 ? `−${formatCurrency(r.cost_total)}` : '—'}
+                        <SourceBadge source={r.cost_missing ? 'missing' : 'manual'} />
+                      </span>
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums text-rose-700">
-                      −{formatCurrency(r.commission_total)}
+                      <span className="inline-flex items-center gap-1">
+                        −{formatCurrency(r.commission_total)}
+                        <SourceBadge source={r.sources?.commission_total} />
+                      </span>
                       <div className="text-[10px] text-fg-subtle">{r.commission_pct}%</div>
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums text-rose-700">
-                      −{formatCurrency(r.logistics_total)}
+                      <span className="inline-flex items-center gap-1">
+                        −{formatCurrency(r.logistics_total)}
+                        <SourceBadge source={r.sources?.logistics_total} />
+                      </span>
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums text-rose-700">
-                      −{formatCurrency(r.acquiring_total)}
+                      <span className="inline-flex items-center gap-1">
+                        −{formatCurrency(r.acquiring_total)}
+                        <SourceBadge source={r.sources?.acquiring_total} />
+                      </span>
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums text-rose-700">
-                      {r.ad_spend_total > 0 ? `−${formatCurrency(r.ad_spend_total)}` : '—'}
+                      <span className="inline-flex items-center gap-1">
+                        {r.ad_spend_total > 0 ? `−${formatCurrency(r.ad_spend_total)}` : '—'}
+                        <SourceBadge source={r.sources?.ad_spend_total} />
+                      </span>
                     </td>
                     <td className={cn('text-right py-2 px-2 tabular-nums font-semibold',
                       r.operating_profit >= 0 ? 'text-emerald-700' : 'text-rose-700')}>

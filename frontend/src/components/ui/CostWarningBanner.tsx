@@ -23,32 +23,30 @@ export function CostWarningBanner({ count, context = 'general', className }: Cos
 
   const detail =
     context === 'profit'
-      ? 'Прибыль рассчитана с заглушкой 100 ₽ на единицу — введите реальную себестоимость для точной цифры.'
+      ? 'COGS = 0 для этих товаров → их вклад в чистую прибыль завышен на полную себестоимость. Введи реальные цифры — иначе цифры P&L ВРУТ.'
       : context === 'romi'
-      ? 'ROMI/ROI требуют реальной себестоимости. Сейчас используется заглушка 100 ₽.'
-      : 'Себестоимость не заполнена для части товаров — используется заглушка 100 ₽. Финансовые метрики приблизительные.'
+      ? 'ROMI/ROI без себестоимости — бессмысленны. Цифры выглядят слишком радужно, не принимай решения по ним.'
+      : 'Себестоимость = 0 для части товаров → вся аналитика прибыли по ним искажена. Заполни до использования.'
 
   return (
     <div
       className={
-        'flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 ' +
+        'flex items-start gap-3 rounded-lg border border-rose-300 bg-rose-50 px-4 py-3 ' +
         (className ?? '')
       }
     >
-      <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+      <AlertTriangle className="w-5 h-5 text-rose-700 mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-amber-900">
-          Себестоимость не заполнена ({count} {pluralize(count)})
+        <p className="text-sm font-semibold text-rose-900">
+          ⚠ Прибыль ЗАВЫШЕНА: себестоимость не введена ({count} {pluralize(count)})
         </p>
-        <p className="text-sm text-amber-800/90 mt-0.5">{detail}</p>
+        <p className="text-sm text-rose-800/90 mt-0.5">{detail}</p>
       </div>
       <Link
-        // Сразу с фильтром «без себестоимости» — иначе юзер не найдёт где они.
-        // arch=all чтобы показать и архивные заглушки тоже.
         to="/products?missing_cost=1&arch=all"
-        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-amber-900 hover:bg-amber-800 text-white text-xs font-medium shrink-0 transition-colors"
+        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-rose-900 hover:bg-rose-800 text-white text-xs font-medium shrink-0 transition-colors"
       >
-        Найти и ввести
+        Заполнить сейчас
         <ArrowRight className="w-3.5 h-3.5" />
       </Link>
     </div>
