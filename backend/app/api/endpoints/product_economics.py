@@ -247,15 +247,39 @@ async def get_economics(
     """
     rows = (await db.execute(text(sql), params)).all()
 
-    # ad_spend per-product за тот же период
-    ad_rows = (await db.execute(text("""
-        SELECT product_id::text pid, SUM(spend)::float spend
+    # ad_spend per-product:
+    # ad_statistics хранит per-campaign-per-day (product_id=NIL_UUID placeholder),
+    # сами товары per-кампания не синкаются в ad_campaign_products. Значит
+    # точного per-SKU из API сейчас НЕТ.
+    # Решение: распределяем общий ad_spend per-cabinet пропорционально revenue
+    # доставленных товаров за тот же период. Это оценка (source='estimated')
+    # для месяцев без XLSX. Если XLSX загружен — он override это точными
+    # цифрами (ad_cpc + ad_cpo + ad_star + ad_paid_brand + ad_reviews per-SKU).
+    ad_cabinet_rows = (await db.execute(text("""
+        SELECT ozon_account_id::text AS acc, SUM(spend)::float AS total_spend
         FROM ad_statistics
-        WHERE ozon_account_id = ANY(:accs)
+        WHERE ozon_account_id = ANY(CAST(:accs AS uuid[]))
           AND date >= :df AND date <= :dt
-        GROUP BY product_id
+        GROUP BY ozon_account_id
     """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
-    ad_by_prod: dict[str, float] = {r.pid: float(r.spend or 0) for r in ad_rows}
+    ad_total_by_cab: dict[str, float] = {r.acc: float(r.total_spend or 0) for r in ad_cabinet_rows}
+
+    # Revenue per-cabinet за период — база для пропорции
+    rev_cab_rows = (await db.execute(text("""
+        SELECT p.ozon_account_id::text AS acc, SUM(oi.price)::float AS rev
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        JOIN products p ON p.id = oi.product_id
+        WHERE p.ozon_account_id = ANY(CAST(:accs AS uuid[]))
+          AND o.status = 'delivered'
+          AND o.order_created_at >= :df
+          AND o.order_created_at < (CAST(:dt AS date) + interval '1 day')
+        GROUP BY p.ozon_account_id
+    """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
+    rev_total_by_cab: dict[str, float] = {r.acc: float(r.rev or 0) for r in rev_cab_rows}
+
+    # ad_by_prod[product_id] = пропорциональное распределение
+    ad_by_prod: dict[str, float] = {}  # будем считать ниже per-row
 
     # returns per-product за тот же период (по return_date — «зеркало Ozon»)
     ret_rows = (await db.execute(text("""
@@ -383,10 +407,14 @@ async def get_economics(
         log_calc = calc_logistics(qty=qty)
         log_total = log_calc.amount
         sources["logistics_total"] = "estimated"
-        # Реклама общая — из ad_statistics (API live)
-        ad_total = ad_by_prod.get(r.product_id, 0.0)
+        # Реклама общая — пропорция от cabinet ad_spend × (revenue_product/revenue_cabinet)
+        # Пометка 'estimated' — это не точно per-SKU из API (Ozon Perf API такого не отдаёт),
+        # а распределение по доле выручки. XLSX перекроет точными числами если есть.
+        cab_ad = ad_total_by_cab.get(r.account_id, 0.0)
+        cab_rev = rev_total_by_cab.get(r.account_id, 0.0)
+        ad_total = (revenue / cab_rev * cab_ad) if cab_rev > 0 else 0.0
         ad_per = ad_total / qty if qty else 0.0
-        sources["ad_spend_total"] = "api"
+        sources["ad_spend_total"] = "estimated"
         # Поля только из XLSX — по умолчанию 0
         storage_total = 0.0
         last_mile_total = 0.0
