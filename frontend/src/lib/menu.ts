@@ -224,6 +224,11 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: TrendingUp,
       },
       {
+        path: '/products/stats',
+        label: 'Статистика товара',
+        icon: Grid3x3,
+      },
+      {
         path: '/whatif',
         label: 'Симулятор «Что если»',
         icon: Calculator,
