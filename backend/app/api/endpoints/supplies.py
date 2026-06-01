@@ -82,6 +82,7 @@ class SupplyCreate(BaseModel):
     notes: str | None = None
     cabinet_id: uuid.UUID | None = None
     total_cost: Decimal | None = None
+    status: Literal["ordered", "in_transit", "arrived"] = "arrived"
     payment_date: date_cls | None = None
     dispatch_date: date_cls | None = None
     dispatch_from: str | None = None
@@ -126,6 +127,7 @@ class SupplyDetail(BaseModel):
     cabinet_id: str | None
     cabinet_name: str | None
     total_cost: float | None
+    status: str
     payment_date: str | None
     dispatch_date: str | None
     dispatch_from: str | None
@@ -142,6 +144,11 @@ class SupplyDetail(BaseModel):
 class SupplyListRow(BaseModel):
     id: str
     name: str
+    status: str
+    payment_date: str | None
+    dispatch_date: str | None
+    dispatch_from: str | None
+    actual_departure_date: str | None
     supply_date: str | None
     items_count: int
     costs_sum: float
@@ -207,6 +214,7 @@ async def _to_detail(db: AsyncSession, supply: Supply) -> SupplyDetail:
         cabinet_id=str(supply.cabinet_id) if supply.cabinet_id else None,
         cabinet_name=cabinet_name,
         total_cost=float(supply.total_cost) if supply.total_cost is not None else None,
+        status=supply.status,
         payment_date=supply.payment_date.isoformat() if supply.payment_date else None,
         dispatch_date=supply.dispatch_date.isoformat() if supply.dispatch_date else None,
         dispatch_from=supply.dispatch_from,
@@ -288,10 +296,25 @@ async def lookup_products(
 
 @router.get("", response_model=list[SupplyListRow])
 async def list_supplies(
+    search: str | None = None,
+    status: Literal["ordered", "in_transit", "arrived"] | None = None,
+    date_field: Literal[
+        "payment_date", "dispatch_date", "actual_departure_date", "supply_date"
+    ] | None = None,
+    date_from: date_cls | None = None,
+    date_to: date_cls | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[SupplyListRow]:
-    supplies = (await db.execute(
+    """
+    Список поставок с фильтрами:
+    - `search` — подстрочный поиск по name (case-insensitive).
+    - `status` — ordered / in_transit / arrived.
+    - `date_field` + `date_from`/`date_to` — фильтр по конкретной дате
+      (payment / dispatch / actual_departure / supply). Если date_field не указан,
+      даты игнорируются.
+    """
+    q = (
         select(Supply).where(Supply.company_id == current_user.company_id)
         .options(
             selectinload(Supply.items),
@@ -299,10 +322,28 @@ async def list_supplies(
             selectinload(Supply.documents),
         )
         .order_by(Supply.supply_date.desc().nullslast(), Supply.created_at.desc())
-    )).scalars().all()
+    )
+    if search:
+        q = q.where(Supply.name.ilike(f"%{search}%"))
+    if status:
+        q = q.where(Supply.status == status)
+    if date_field and (date_from or date_to):
+        col = getattr(Supply, date_field)
+        if date_from:
+            q = q.where(col >= date_from)
+        if date_to:
+            q = q.where(col <= date_to)
+
+    supplies = (await db.execute(q)).scalars().all()
     return [
         SupplyListRow(
-            id=str(s.id), name=s.name,
+            id=str(s.id), name=s.name, status=s.status,
+            payment_date=s.payment_date.isoformat() if s.payment_date else None,
+            dispatch_date=s.dispatch_date.isoformat() if s.dispatch_date else None,
+            dispatch_from=s.dispatch_from,
+            actual_departure_date=(
+                s.actual_departure_date.isoformat() if s.actual_departure_date else None
+            ),
             supply_date=s.supply_date.isoformat() if s.supply_date else None,
             items_count=len(s.items),
             costs_sum=sum(float(c.amount) for c in s.costs),
@@ -335,6 +376,7 @@ async def create_supply(
         name=payload.name,
         notes=payload.notes,
         total_cost=payload.total_cost,
+        status=payload.status,
         payment_date=payload.payment_date,
         dispatch_date=payload.dispatch_date,
         dispatch_from=payload.dispatch_from,
@@ -412,6 +454,7 @@ async def update_supply(
     supply.name = payload.name
     supply.notes = payload.notes
     supply.total_cost = payload.total_cost
+    supply.status = payload.status
     supply.payment_date = payload.payment_date
     supply.dispatch_date = payload.dispatch_date
     supply.dispatch_from = payload.dispatch_from

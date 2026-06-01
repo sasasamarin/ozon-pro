@@ -13,9 +13,30 @@ import { formatCurrency, cn } from '@/lib/utils'
 interface ProductLookup {
   id: string; offer_id: string; ozon_sku: number; name: string; cabinet_name: string
 }
+type SupplyStatus = 'ordered' | 'in_transit' | 'arrived'
+type DateField = 'payment_date' | 'dispatch_date' | 'actual_departure_date' | 'supply_date'
+
 interface SupplyListRow {
-  id: string; name: string; supply_date: string | null
+  id: string; name: string; status: SupplyStatus
+  payment_date: string | null
+  dispatch_date: string | null
+  dispatch_from: string | null
+  actual_departure_date: string | null
+  supply_date: string | null
   items_count: number; costs_sum: number; docs_count: number
+}
+
+const STATUS_META: Record<SupplyStatus, { label: string; cls: string }> = {
+  ordered:    { label: 'Заказана',  cls: 'bg-fg-subtle/15 text-fg-muted' },
+  in_transit: { label: 'В пути',    cls: 'bg-amber-100 text-amber-800' },
+  arrived:    { label: 'Получена',  cls: 'bg-emerald-100 text-emerald-800' },
+}
+
+const DATE_FIELD_LABEL: Record<DateField, string> = {
+  payment_date: 'Оплата',
+  dispatch_date: 'Отправка',
+  actual_departure_date: 'Факт. выход',
+  supply_date: 'Приход',
 }
 interface SupplyItem {
   id?: string; product_id: string | null; offer_id: string | null
@@ -33,6 +54,7 @@ interface SupplyDetail {
   id: string; name: string; notes: string | null
   cabinet_id: string | null; cabinet_name: string | null
   total_cost: number | null
+  status: SupplyStatus
   payment_date: string | null; dispatch_date: string | null; dispatch_from: string | null
   actual_departure_date: string | null; supply_date: string | null
   items: (SupplyItem & { id: string })[]; costs: (SupplyCost & { id: string })[]
@@ -47,9 +69,27 @@ export function Supplies() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
 
+  // Фильтры
+  const [search, setSearch] = useState('')
+  const [filterStatus, setFilterStatus] = useState<SupplyStatus | ''>('')
+  const [dateField, setDateField] = useState<DateField>('supply_date')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
   const { data: list, isLoading } = useQuery<SupplyListRow[]>({
-    queryKey: ['supplies', 'list'],
-    queryFn: async () => (await api.get('/supplies')).data,
+    queryKey: ['supplies', 'list', search, filterStatus, dateField, dateFrom, dateTo],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (search) params.set('search', search)
+      if (filterStatus) params.set('status', filterStatus)
+      if (dateFrom || dateTo) {
+        params.set('date_field', dateField)
+        if (dateFrom) params.set('date_from', dateFrom)
+        if (dateTo) params.set('date_to', dateTo)
+      }
+      const qs = params.toString()
+      return (await api.get(`/supplies${qs ? '?' + qs : ''}`)).data
+    },
   })
 
   const del = useMutation({
@@ -75,6 +115,54 @@ export function Supplies() {
         </button>
       </div>
 
+      {/* Фильтры */}
+      <Card className="p-3">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-end">
+          <div className="md:col-span-3">
+            <label className="text-[10px] text-fg-muted uppercase block mb-1">Поиск по названию</label>
+            <input value={search} onChange={(e) => setSearch(e.target.value)}
+                   placeholder="метка / партия…"
+                   className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="text-[10px] text-fg-muted uppercase block mb-1">Статус</label>
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as any)}
+                    className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
+              <option value="">все</option>
+              <option value="ordered">Заказана</option>
+              <option value="in_transit">В пути</option>
+              <option value="arrived">Получена</option>
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label className="text-[10px] text-fg-muted uppercase block mb-1">Фильтр по дате</label>
+            <select value={dateField} onChange={(e) => setDateField(e.target.value as DateField)}
+                    className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
+              <option value="supply_date">Приход</option>
+              <option value="payment_date">Оплата</option>
+              <option value="dispatch_date">Отправка</option>
+              <option value="actual_departure_date">Факт. выход</option>
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label className="text-[10px] text-fg-muted uppercase block mb-1">От</label>
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+                   className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="text-[10px] text-fg-muted uppercase block mb-1">До</label>
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+                   className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
+          </div>
+          <div className="md:col-span-1">
+            {(search || filterStatus || dateFrom || dateTo) && (
+              <button onClick={() => { setSearch(''); setFilterStatus(''); setDateFrom(''); setDateTo('') }}
+                      className="text-xs text-fg-muted hover:text-fg">сброс</button>
+            )}
+          </div>
+        </div>
+      </Card>
+
       {isLoading ? (
         <div className="flex justify-center py-12">
           <Loader2 className="size-6 animate-spin text-fg-muted" />
@@ -85,17 +173,21 @@ export function Supplies() {
           <p className="text-fg-muted mt-3">Пока нет ни одной поставки</p>
         </Card>
       ) : (
-        <Card className="overflow-hidden">
+        <Card className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[11px] uppercase text-fg-muted bg-bg-subtle/40">
-                <th className="px-4 py-2.5 w-8"></th>
-                <th className="px-4 py-2.5">Дата</th>
-                <th className="px-4 py-2.5">Метка</th>
-                <th className="px-4 py-2.5 text-right">SKU</th>
-                <th className="px-4 py-2.5 text-right">Σ затрат</th>
-                <th className="px-4 py-2.5 text-center">📎</th>
-                <th className="px-4 py-2.5"></th>
+              <tr className="text-left text-[10px] uppercase text-fg-muted bg-bg-subtle/40">
+                <th className="px-3 py-2.5 w-6"></th>
+                <th className="px-3 py-2.5">Метка</th>
+                <th className="px-3 py-2.5">Статус</th>
+                <th className="px-3 py-2.5">Оплата</th>
+                <th className="px-3 py-2.5">Отправка</th>
+                <th className="px-3 py-2.5">Факт. выход</th>
+                <th className="px-3 py-2.5">Приход</th>
+                <th className="px-3 py-2.5 text-right">SKU</th>
+                <th className="px-3 py-2.5 text-right">Σ затрат</th>
+                <th className="px-3 py-2.5 text-center">📎</th>
+                <th className="px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody>
@@ -103,19 +195,30 @@ export function Supplies() {
                 <>
                   <tr key={s.id} className="border-t border-fg-subtle/10 hover:bg-bg-subtle/30 cursor-pointer"
                       onClick={() => setExpanded(expanded === s.id ? null : s.id)}>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5">
                       {expanded === s.id
                         ? <ChevronUp className="size-4 text-fg-muted" />
                         : <ChevronDown className="size-4 text-fg-muted" />}
                     </td>
-                    <td className="px-4 py-3 tabular-nums">{s.supply_date ?? '—'}</td>
-                    <td className="px-4 py-3 font-medium">{s.name}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{s.items_count}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{formatCurrency(s.costs_sum)}</td>
-                    <td className="px-4 py-3 text-center text-fg-muted">{s.docs_count || ''}</td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 py-2.5 font-medium">{s.name}</td>
+                    <td className="px-3 py-2.5">
+                      <span className={cn('text-[10px] uppercase px-2 py-0.5 rounded font-medium', STATUS_META[s.status].cls)}>
+                        {STATUS_META[s.status].label}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 tabular-nums text-xs">{s.payment_date ?? '—'}</td>
+                    <td className="px-3 py-2.5 tabular-nums text-xs">
+                      {s.dispatch_date ?? '—'}
+                      {s.dispatch_from && <span className="block text-[10px] text-fg-muted">{s.dispatch_from}</span>}
+                    </td>
+                    <td className="px-3 py-2.5 tabular-nums text-xs">{s.actual_departure_date ?? '—'}</td>
+                    <td className="px-3 py-2.5 tabular-nums text-xs">{s.supply_date ?? '—'}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{s.items_count}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{formatCurrency(s.costs_sum)}</td>
+                    <td className="px-3 py-2.5 text-center text-fg-muted">{s.docs_count || ''}</td>
+                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
                       <button onClick={(e) => { e.stopPropagation(); setEditingId(s.id); setShowForm(true) }}
-                              className="text-xs text-accent hover:underline mr-2">Редактировать</button>
+                              className="text-xs text-accent hover:underline mr-2">Изм</button>
                       <button onClick={(e) => { e.stopPropagation(); if (confirm(`Удалить «${s.name}»?`)) del.mutate(s.id) }}
                               className="text-fg-muted hover:text-rose-600">
                         <Trash2 className="size-4" />
@@ -123,7 +226,7 @@ export function Supplies() {
                     </td>
                   </tr>
                   {expanded === s.id && (
-                    <tr><td colSpan={7} className="bg-bg-subtle/20"><SupplyExpanded supplyId={s.id} /></td></tr>
+                    <tr><td colSpan={11} className="bg-bg-subtle/20"><SupplyExpanded supplyId={s.id} /></td></tr>
                   )}
                 </>
               ))}
@@ -260,6 +363,7 @@ function SupplyForm({
 
   const [form, setForm] = useState({
     name: '', notes: '',
+    status: 'arrived' as SupplyStatus,
     payment_date: '', dispatch_date: '', dispatch_from: '',
     actual_departure_date: '', supply_date: new Date().toISOString().slice(0, 10),
     total_cost: '',
@@ -276,6 +380,7 @@ function SupplyForm({
     if (!editing) return
     setForm({
       name: editing.name, notes: editing.notes || '',
+      status: editing.status,
       payment_date: editing.payment_date || '',
       dispatch_date: editing.dispatch_date || '',
       dispatch_from: editing.dispatch_from || '',
@@ -310,6 +415,7 @@ function SupplyForm({
       const payload = {
         name: form.name,
         notes: form.notes || null,
+        status: form.status,
         total_cost: form.total_cost ? parseFloat(form.total_cost) : null,
         payment_date: form.payment_date || null,
         dispatch_date: form.dispatch_date || null,
@@ -364,11 +470,21 @@ function SupplyForm({
         </div>
 
         {/* Шапка */}
-        <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
           <Field label="Метка / название*" value={form.name}
                  onChange={(v) => setForm({ ...form, name: v })}
                  placeholder="Партия 2026-06, машина-1" />
-          <Field label="Итоговая стоимость поставки, ₽ (опц.)" type="number" value={form.total_cost}
+          <div>
+            <label className="text-[10px] text-fg-muted uppercase block mb-1">Статус</label>
+            <select value={form.status}
+                    onChange={(e) => setForm({ ...form, status: e.target.value as SupplyStatus })}
+                    className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
+              <option value="ordered">Заказана</option>
+              <option value="in_transit">В пути</option>
+              <option value="arrived">Получена</option>
+            </select>
+          </div>
+          <Field label="Итог. стоимость ₽ (опц.)" type="number" value={form.total_cost}
                  onChange={(v) => setForm({ ...form, total_cost: v })} placeholder="справочно" />
         </div>
 
