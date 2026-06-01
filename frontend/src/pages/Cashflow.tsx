@@ -12,6 +12,8 @@ interface CashflowPoint {
   outflow: number
   net: number
   cumulative: number
+  loan_inflow: number
+  loan_outflow: number
 }
 
 interface CashflowKPI {
@@ -19,6 +21,8 @@ interface CashflowKPI {
   total_outflow: number
   net: number
   end_balance: number
+  loan_inflow_total: number
+  loan_outflow_total: number
 }
 
 interface CashflowResp {
@@ -98,6 +102,29 @@ export function Cashflow() {
         <KpiTile label="Чистый поток" value={data?.kpi.net ?? 0} color="indigo" accent />
         <KpiTile label="Конечный баланс" value={data?.kpi.end_balance ?? 0} color="violet" />
       </div>
+
+      {/* Декомпозиция: займы отдельно от продаж */}
+      {(data?.kpi.loan_inflow_total ?? 0) + (data?.kpi.loan_outflow_total ?? 0) > 0 && (
+        <Card className="px-4 py-3 border-l-4 border-l-indigo-400 bg-indigo-50/30">
+          <p className="text-[11px] uppercase tracking-wider text-indigo-700 font-medium">
+            В т.ч. кредиты (вручную через /loans)
+          </p>
+          <div className="flex gap-6 mt-1 text-sm">
+            <span>
+              <span className="text-fg-muted">Выдача займов:</span>{' '}
+              <b className="tabular-nums text-emerald-700">
+                +{Math.round(data?.kpi.loan_inflow_total ?? 0).toLocaleString('ru-RU')} ₽
+              </b>
+            </span>
+            <span>
+              <span className="text-fg-muted">Платежи (тело + % + комиссия):</span>{' '}
+              <b className="tabular-nums text-rose-700">
+                −{Math.round(data?.kpi.loan_outflow_total ?? 0).toLocaleString('ru-RU')} ₽
+              </b>
+            </span>
+          </div>
+        </Card>
+      )}
 
       <Card className="overflow-hidden">
         <div className="px-6 py-4 border-b border-border-subtle flex items-center justify-between flex-wrap gap-3">

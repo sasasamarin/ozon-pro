@@ -40,6 +40,9 @@ class CashflowPoint(BaseModel):
     outflow: float       # положительное число (=|sum negative|)
     net: float           # inflow - outflow
     cumulative: float    # накопительный с начала окна
+    # Декомпозиция: займы как отдельная категория (для tooltip/легенды)
+    loan_inflow: float = 0    # выдача займов в этом бакете
+    loan_outflow: float = 0   # тело+процент+комиссия по фактическим платежам
 
 
 class CashflowKPI(BaseModel):
@@ -47,6 +50,9 @@ class CashflowKPI(BaseModel):
     total_outflow: float
     net: float
     end_balance: float
+    # Кредиты — отдельные суммы за окно
+    loan_inflow_total: float = 0
+    loan_outflow_total: float = 0
 
 
 class CashflowResponse(BaseModel):
@@ -115,20 +121,22 @@ async def get_cashflow(
         .order_by(bucket)
     )).all()
 
-    # Аккумулятор по бакетам (общий для transactions и loans).
+    # Аккумулятор по бакетам.
+    # tx_* — продажи/услуги Ozon (Transaction.amount).
+    # loan_* — займы отдельной серией для UI.
     buckets: dict[str, dict[str, float]] = {}
-    def add(period_start: str, *, inflow: float = 0.0, outflow: float = 0.0) -> None:
-        slot = buckets.setdefault(period_start, {"inflow": 0.0, "outflow": 0.0})
-        slot["inflow"] += inflow
-        slot["outflow"] += outflow
+    def slot(period_start: str) -> dict[str, float]:
+        return buckets.setdefault(period_start, {
+            "tx_in": 0.0, "tx_out": 0.0,
+            "loan_in": 0.0, "loan_out": 0.0,
+        })
 
     for r in rows:
-        add(r.bucket.date().isoformat(),
-            inflow=float(r.inflow or 0), outflow=float(r.outflow or 0))
+        s = slot(r.bucket.date().isoformat())
+        s["tx_in"] += float(r.inflow or 0)
+        s["tx_out"] += float(r.outflow or 0)
 
     # === Кредиты/займы — Ветка 1 ТЗ flowoi_tz_loans.md ===
-    # Выдача займа = +inflow (по issued_at), фактически уплаченные платежи =
-    # −outflow по paid_at (тело + процент + комиссия — все в ДДС).
     loan_bucket = func.date_trunc(trunc_unit, Loan.issued_at).label("bucket")
     loan_in_rows = (await db.execute(
         select(loan_bucket, func.coalesce(func.sum(Loan.principal), 0))
@@ -140,7 +148,7 @@ async def get_cashflow(
         .group_by(loan_bucket)
     )).all()
     for b, amount in loan_in_rows:
-        add(b.date().isoformat(), inflow=float(amount or 0))
+        slot(b.date().isoformat())["loan_in"] += float(amount or 0)
 
     pay_bucket = func.date_trunc(trunc_unit, LoanPayment.paid_at).label("bucket")
     loan_out_rows = (await db.execute(
@@ -159,27 +167,33 @@ async def get_cashflow(
         .group_by(pay_bucket)
     )).all()
     for b, amount in loan_out_rows:
-        add(b.date().isoformat(), outflow=float(amount or 0))
+        slot(b.date().isoformat())["loan_out"] += float(amount or 0)
 
     # Сортируем бакеты по дате и собираем series с cumulative.
     series: list[CashflowPoint] = []
     cum = 0.0
     total_in = 0.0
     total_out = 0.0
+    loan_in_total = 0.0
+    loan_out_total = 0.0
     for period_start in sorted(buckets.keys()):
-        slot = buckets[period_start]
-        inflow = slot["inflow"]
-        outflow = slot["outflow"]
+        s = buckets[period_start]
+        inflow = s["tx_in"] + s["loan_in"]
+        outflow = s["tx_out"] + s["loan_out"]
         net = inflow - outflow
         cum += net
         total_in += inflow
         total_out += outflow
+        loan_in_total += s["loan_in"]
+        loan_out_total += s["loan_out"]
         series.append(CashflowPoint(
             period_start=period_start,
             inflow=round(inflow, 2),
             outflow=round(outflow, 2),
             net=round(net, 2),
             cumulative=round(cum, 2),
+            loan_inflow=round(s["loan_in"], 2),
+            loan_outflow=round(s["loan_out"], 2),
         ))
 
     return CashflowResponse(
@@ -191,6 +205,8 @@ async def get_cashflow(
             total_outflow=round(total_out, 2),
             net=round(total_in - total_out, 2),
             end_balance=round(cum, 2),
+            loan_inflow_total=round(loan_in_total, 2),
+            loan_outflow_total=round(loan_out_total, 2),
         ),
         series=series,
     )

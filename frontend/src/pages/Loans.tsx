@@ -156,6 +156,14 @@ export function Loans() {
                       {ln.rate_pct != null ? `${ln.rate_pct}% годовых` : 'без процента'} ·{' '}
                       {ln.term_months ? `${ln.term_months} мес` : 'без срока'} · с{' '}
                       {ln.issued_at}
+                      {ln.cabinet_id && cabinets && (
+                        <>
+                          {' · '}
+                          <span className="text-fg">
+                            {cabinets.find((c) => c.id === ln.cabinet_id)?.name ?? '—'}
+                          </span>
+                        </>
+                      )}
                     </p>
                   </div>
                   <div className="text-right shrink-0">
@@ -205,6 +213,7 @@ export function Loans() {
 
 function PaymentsList({ loanId }: { loanId: string }) {
   const qc = useQueryClient()
+  const [showManual, setShowManual] = useState(false)
   const { data, isLoading } = useQuery<PaymentRow[]>({
     queryKey: ['loans', loanId, 'payments'],
     queryFn: async () => (await api.get(`/loans/${loanId}/payments`)).data,
@@ -225,16 +234,56 @@ function PaymentsList({ loanId }: { loanId: string }) {
       </div>
     )
   }
+
+  const header = (
+    <div className="border-t border-fg-subtle/15 px-4 py-2 flex justify-between items-center bg-bg-subtle/30">
+      <span className="text-xs text-fg-muted">
+        {data?.length ? `${data.length} платежей в графике` : 'Нет платежей'}
+      </span>
+      <button
+        onClick={() => setShowManual(true)}
+        className="text-xs text-accent hover:underline"
+      >
+        + Ручной платёж
+      </button>
+    </div>
+  )
+
   if (!data?.length) {
     return (
-      <div className="p-4 border-t border-fg-subtle/15 text-xs text-fg-muted">
-        Нет платежей. Добавь вручную либо пересоздай договор с указанием срока.
-      </div>
+      <>
+        {header}
+        <div className="p-4 text-xs text-fg-muted">
+          Нет платежей. Добавь вручную либо пересоздай договор с указанием срока.
+        </div>
+        {showManual && (
+          <ManualPaymentModal
+            loanId={loanId}
+            onClose={() => setShowManual(false)}
+            onCreated={() => {
+              qc.invalidateQueries({ queryKey: ['loans'] })
+              setShowManual(false)
+            }}
+          />
+        )}
+      </>
     )
   }
 
   return (
-    <div className="border-t border-fg-subtle/15 overflow-x-auto">
+    <>
+      {header}
+      {showManual && (
+        <ManualPaymentModal
+          loanId={loanId}
+          onClose={() => setShowManual(false)}
+          onCreated={() => {
+            qc.invalidateQueries({ queryKey: ['loans'] })
+            setShowManual(false)
+          }}
+        />
+      )}
+    <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-[10px] uppercase text-fg-muted bg-bg-subtle/30">
@@ -291,6 +340,112 @@ function PaymentsList({ loanId }: { loanId: string }) {
           })}
         </tbody>
       </table>
+    </div>
+    </>
+  )
+}
+
+// === Модалка ручного платежа ============================================
+
+function ManualPaymentModal({
+  loanId,
+  onClose,
+  onCreated,
+}: {
+  loanId: string
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const [form, setForm] = useState({
+    pay_date: new Date().toISOString().slice(0, 10),
+    principal_part: '',
+    interest_part: '',
+    fee_part: '',
+    note: '',
+  })
+  const [error, setError] = useState<string | null>(null)
+
+  const submit = useMutation({
+    mutationFn: async () =>
+      api.post(`/loans/${loanId}/payments`, {
+        pay_date: form.pay_date,
+        principal_part: parseFloat(form.principal_part || '0'),
+        interest_part: parseFloat(form.interest_part || '0'),
+        fee_part: parseFloat(form.fee_part || '0'),
+        note: form.note || null,
+      }),
+    onSuccess: () => onCreated(),
+    onError: (e: { response?: { data?: { detail?: string } } }) =>
+      setError(e?.response?.data?.detail || 'Ошибка'),
+  })
+
+  const total =
+    (parseFloat(form.principal_part || '0') || 0) +
+    (parseFloat(form.interest_part || '0') || 0) +
+    (parseFloat(form.fee_part || '0') || 0)
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-bg rounded-xl shadow-xl max-w-md w-full p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-lg font-semibold text-fg mb-1">Ручной платёж</h2>
+        <p className="text-xs text-fg-muted mb-4">
+          Платёж вне графика. Тело идёт только в ДДС; процент и комиссия — и в ДДС, и в P&L.
+        </p>
+
+        <div className="space-y-3">
+          <Field label="Дата платежа" value={form.pay_date}
+            onChange={(v) => setForm({ ...form, pay_date: v })} type="date" />
+          <Field label="Тело (principal), ₽" value={form.principal_part}
+            onChange={(v) => setForm({ ...form, principal_part: v })}
+            placeholder="0" type="number" />
+          <Field label="Процент, ₽" value={form.interest_part}
+            onChange={(v) => setForm({ ...form, interest_part: v })}
+            placeholder="0" type="number" />
+          <Field label="Комиссия, ₽" value={form.fee_part}
+            onChange={(v) => setForm({ ...form, fee_part: v })}
+            placeholder="0" type="number" />
+          <Field label="Заметка" value={form.note}
+            onChange={(v) => setForm({ ...form, note: v })}
+            placeholder="Назначение, дата платёжки…" />
+        </div>
+
+        <div className="mt-3 p-3 bg-bg-subtle/40 rounded text-xs">
+          <div className="flex justify-between">
+            <span className="text-fg-muted">Итого к оплате:</span>
+            <b className="tabular-nums">{total.toLocaleString('ru-RU')} ₽</b>
+          </div>
+          <div className="flex justify-between mt-1">
+            <span className="text-fg-muted">Из них в P&L (% + комиссия):</span>
+            <b className="tabular-nums">
+              {(
+                (parseFloat(form.interest_part || '0') || 0) +
+                (parseFloat(form.fee_part || '0') || 0)
+              ).toLocaleString('ru-RU')}{' '}
+              ₽
+            </b>
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-rose-600 mt-3">{error}</p>}
+
+        <div className="flex gap-2 mt-5 justify-end">
+          <button onClick={onClose}
+            className="px-4 py-2 text-sm border border-fg-subtle/30 rounded-lg hover:bg-bg-subtle/30">
+            Отмена
+          </button>
+          <button onClick={() => submit.mutate()}
+            disabled={total <= 0 || submit.isPending}
+            className="px-4 py-2 bg-accent text-white text-sm rounded-lg hover:bg-accent-hover disabled:opacity-50">
+            {submit.isPending ? 'Сохраняю…' : 'Внести платёж'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

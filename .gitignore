@@ -36,3 +36,6 @@ build/
 *.pem
 *.key
 secrets/
+
+# Bootstrap / служебные скрипты
+setup_*.sh
