@@ -52,21 +52,22 @@ class EconomicsRow(BaseModel):
     cabinet_name: str
     is_archived: bool
 
-    # Источник цифр расходов (storage/acquiring/реклама и т.д.):
-    # 'ozon_xlsx' — точные числа из загруженного «Экономика магазина» (зеркало)
-    # 'estimated' — оценка по эвристикам (если XLSX за месяц не загружен)
-    expenses_source: str
+    # Source-флаги для прозрачности: какое поле откуда пришло.
+    # Значения: 'api' (живые данные Ozon API) / 'xlsx' (точный отчёт)
+    #         / 'estimated' (оценка по эвристикам) / 'manual' (ручной ввод)
+    # Ключи — те же что у полей ниже, например {"storage_total": "xlsx", ...}.
+    sources: dict[str, str] = {}
 
     qty_delivered: int
-    revenue: float                 # brut — что показывает Ozon как продано
-    returned_revenue: float        # сумма возвратов
-    effective_revenue: float       # revenue − returned_revenue
+    revenue: float                 # brut — sales API (oi.price × qty)
+    returned_revenue: float
+    effective_revenue: float
 
-    # Доплаты Ozon (только если есть XLSX, иначе 0)
-    spp_points: float              # Баллы за скидки (компенсация СПП)
-    partner_programs: float        # Программы партнёров
+    # Доплаты Ozon (только если XLSX, иначе 0)
+    spp_points: float
+    partner_programs: float
 
-    # На единицу — для сравнения товаров
+    # На единицу
     avg_seller_price: float | None
     avg_customer_price: float | None
     spp_pct: float | None
@@ -81,25 +82,24 @@ class EconomicsRow(BaseModel):
     # Итоги за период (× qty)
     cost_total: float
     commission_total: float
-    logistics_total: float          # из XLSX: только logistics. Без last_mile (он отдельно).
-    last_mile_total: float          # доставка до места выдачи (XLSX) / 0 если оценка
-    storage_total: float            # стоимость размещения (XLSX) / 0 если оценка
-    posting_handling_total: float   # обработка отправления (XLSX)
+    logistics_total: float
+    last_mile_total: float
+    storage_total: float
+    posting_handling_total: float
     acquiring_total: float
-    return_handling_total: float    # обработка возврата (XLSX)
-    reverse_logistics_total: float  # обратная логистика (XLSX)
-    disposal_total: float           # утилизация (XLSX)
-    ovh_extra_total: float          # доп. обработка ОВХ (XLSX)
-    operational_errors_total: float # операционные ошибки (XLSX)
-    # Реклама детально (XLSX) — sum равна ad_spend_total для совместимости
+    return_handling_total: float
+    reverse_logistics_total: float
+    disposal_total: float
+    ovh_extra_total: float
+    operational_errors_total: float
     ad_cpc_total: float
     ad_cpo_total: float
     ad_star_total: float
     ad_paid_brand_total: float
     ad_reviews_total: float
-    ad_spend_total: float           # = ad_cpc + ad_cpo + ad_star + paid_brand + reviews
+    ad_spend_total: float           # суммарная реклама (API live или sum из XLSX)
 
-    operating_profit: float         # выручка минус все вычеты, ДО налога
+    operating_profit: float
     operating_margin_pct: float | None
 
     tax_amount: float
@@ -109,9 +109,9 @@ class EconomicsRow(BaseModel):
 
     cost_missing: bool
 
-    # Контрольные числа Ozon (для сверки UI ↔ Ozon)
-    ozon_profit: float | None       # Прибыль за период из XLSX
-    ozon_profit_diff: float | None  # |наш net_profit без с/с − ozon_profit| если есть xlsx
+    # Сверка XLSX (если был файл)
+    ozon_profit: float | None
+    ozon_profit_diff: float | None
 
 
 class EconomicsTotals(BaseModel):
@@ -358,77 +358,107 @@ async def get_economics(
         commission_pct = get_commission_pct(product_sales_percent_fbo=r.comm_pct)
         prod_acq_amount = float(r.prod_acq_amount) if r.prod_acq_amount else None
 
-        # Проверяем — есть ли точные XLSX-данные за этот период для этого SKU
-        xlsx = xlsx_by_sku.get((r.account_id, int(r.ozon_sku)))
-        expenses_source = "ozon_xlsx" if xlsx else "estimated"
+        # === STEP 1: BASELINE из API live данных + текущих оценок ===
+        # Эти числа доступны всегда (API синкается каждый час).
+        # Source-флаги собираем по ходу.
+        sources: dict[str, str] = {
+            "revenue": "api",          # из order_items.price (накопления продаж)
+            "returned_revenue": "api", # из returns
+            "qty_delivered": "api",    # из order_items
+            "cost_total": "manual" if cost_per else "missing",
+        }
+        # Комиссия — оценка через products.sales_percent_fbo или fallback
+        comm_per = (avg_seller or 0) * commission_pct / 100
+        comm_total = comm_per * qty
+        sources["commission_total"] = "estimated"
+        # Эквайринг — если есть Product.acquiring_amount из API → точное; иначе оценка
+        acq_calc = calc_acquiring(
+            seller_price=avg_seller or 0, qty=qty,
+            product_acquiring_amount=prod_acq_amount,
+        )
+        acq_total = acq_calc.amount
+        acq_per = acq_total / qty if qty else 0.0
+        sources["acquiring_total"] = "api" if acq_calc.source == "api" else "estimated"
+        # Логистика — пока оценка 306×qty (real_amount из Transaction добавим позже)
+        log_calc = calc_logistics(qty=qty)
+        log_total = log_calc.amount
+        sources["logistics_total"] = "estimated"
+        # Реклама общая — из ad_statistics (API live)
+        ad_total = ad_by_prod.get(r.product_id, 0.0)
+        ad_per = ad_total / qty if qty else 0.0
+        sources["ad_spend_total"] = "api"
+        # Поля только из XLSX — по умолчанию 0
+        storage_total = 0.0
+        last_mile_total = 0.0
+        posting_handling_total = 0.0
+        return_handling_total = 0.0
+        reverse_logistics_total = 0.0
+        disposal_total = 0.0
+        ovh_extra_total = 0.0
+        operational_errors_total = 0.0
+        ad_cpc_total = ad_cpo_total = ad_star_total = 0.0
+        ad_paid_brand_total = ad_reviews_total = 0.0
+        spp_points = 0.0
+        partner_programs = 0.0
+        ozon_profit_x: float | None = None
 
+        # === STEP 2: XLSX OVERRIDE — точечно перекрываем то что Ozon отдал в файле ===
+        # API остаётся источником для revenue/qty/returns/ad_total — это live.
+        # XLSX даёт ТОЧНЫЕ числа для расходов которые API per-SKU не отдаёт.
+        xlsx = xlsx_by_sku.get((r.account_id, int(r.ozon_sku)))
         if xlsx:
             p_with_xlsx += 1
-            # === ИЗ XLSX: точное «зеркало Ozon», знаки сохранены как в файле ===
-            # XLSX-выручка по доставленным товарам (может отличаться от oi.price-агрегата
-            # на величину spp_points, partner_programs — Ozon доплачивает).
+            # Доплаты Ozon: spp_points + partner_programs (только в XLSX)
             spp_points = float(xlsx["xspp"] or 0)
             partner_programs = float(xlsx["xpartner"] or 0)
-            # comm_total отрицательный в XLSX → переводим в abs для P&L строки
-            comm_total = abs(float(xlsx["xcomm"] or 0))
-            acq_total = abs(float(xlsx["xacq"] or 0))
-            posting_handling_total = abs(float(xlsx["xposting"] or 0))
-            log_total = abs(float(xlsx["xlog"] or 0))
+            sources["spp_points"] = "xlsx"
+            sources["partner_programs"] = "xlsx"
+            # Точные расходы из файла (override оценок)
+            if xlsx["xcomm"]:
+                comm_total = abs(float(xlsx["xcomm"]))
+                comm_per = comm_total / qty if qty else 0
+                sources["commission_total"] = "xlsx"
+            if xlsx["xacq"]:
+                acq_total = abs(float(xlsx["xacq"]))
+                acq_per = acq_total / qty if qty else 0
+                sources["acquiring_total"] = "xlsx"
+            if xlsx["xlog"]:
+                log_total = abs(float(xlsx["xlog"]))
+                sources["logistics_total"] = "xlsx"
+            # Поля доступные ТОЛЬКО из XLSX (API не отдаёт per-SKU)
             last_mile_total = abs(float(xlsx["xlast"] or 0))
             storage_total = abs(float(xlsx["xstorage"] or 0))
+            posting_handling_total = abs(float(xlsx["xposting"] or 0))
             return_handling_total = abs(float(xlsx["xrethnd"] or 0))
             reverse_logistics_total = abs(float(xlsx["xrevlog"] or 0))
             disposal_total = abs(float(xlsx["xdisp"] or 0))
             ovh_extra_total = abs(float(xlsx["xovh"] or 0))
             operational_errors_total = abs(float(xlsx["xopserr"] or 0))
+            for f in ("last_mile_total", "storage_total", "posting_handling_total",
+                      "return_handling_total", "reverse_logistics_total",
+                      "disposal_total", "ovh_extra_total", "operational_errors_total"):
+                sources[f] = "xlsx"
+            # Реклама детально из XLSX — override общий ad_total суммой по типам
             ad_cpc_total = abs(float(xlsx["xcpc"] or 0))
             ad_cpo_total = abs(float(xlsx["xcpo"] or 0))
             ad_star_total = abs(float(xlsx["xstar"] or 0))
             ad_paid_brand_total = abs(float(xlsx["xbrand"] or 0))
             ad_reviews_total = abs(float(xlsx["xreviews"] or 0))
-            ad_total = (ad_cpc_total + ad_cpo_total + ad_star_total
-                        + ad_paid_brand_total + ad_reviews_total)
-            ozon_profit_x = float(xlsx["xprofit"] or 0)
-            # comm/log/acq на единицу — для отображения per-unit
-            comm_per = comm_total / qty if qty else 0
-            acq_per = acq_total / qty if qty else 0
-            ad_per = ad_total / qty if qty else 0
-        else:
-            # === ОЦЕНКА: текущая модель ===
-            spp_points = 0.0
-            partner_programs = 0.0
-            comm_per = (avg_seller or 0) * commission_pct / 100
-            acq_calc = calc_acquiring(
-                seller_price=avg_seller or 0, qty=qty,
-                product_acquiring_amount=prod_acq_amount,
-            )
-            log_calc = calc_logistics(qty=qty)
-            acq_per = acq_calc.amount / qty if qty else 0.0
-            ad_total = ad_by_prod.get(r.product_id, 0.0)
-            ad_per = ad_total / qty if qty else 0.0
-            comm_total = comm_per * qty
-            log_total = log_calc.amount
-            acq_total = acq_calc.amount
-            posting_handling_total = 0.0
-            last_mile_total = 0.0
-            storage_total = 0.0
-            return_handling_total = 0.0
-            reverse_logistics_total = 0.0
-            disposal_total = 0.0
-            ovh_extra_total = 0.0
-            operational_errors_total = 0.0
-            ad_cpc_total = ad_cpo_total = ad_star_total = 0.0
-            ad_paid_brand_total = ad_reviews_total = 0.0
-            ozon_profit_x = None
+            ad_total_xlsx = (ad_cpc_total + ad_cpo_total + ad_star_total
+                             + ad_paid_brand_total + ad_reviews_total)
+            if ad_total_xlsx > 0:
+                ad_total = ad_total_xlsx
+                ad_per = ad_total / qty if qty else 0
+                sources["ad_spend_total"] = "xlsx"
+            ozon_profit_x = float(xlsx["xprofit"] or 0) if xlsx["xprofit"] else None
 
         cost_total = (cost_per * qty) if cost_per else 0.0
-
         returned_revenue = ret_by_prod.get(r.product_id, 0.0)
-        # Для XLSX-режима effective_revenue = seller_revenue (incl. spp/partner) − returns
-        # Для оценки — revenue − returns (как раньше).
+
+        # Эффективная выручка: с XLSX добавляем компенсацию СПП,
+        # без — просто revenue минус возвраты.
         if xlsx:
-            seller_revenue_xlsx = revenue + spp_points + partner_programs
-            effective_revenue = seller_revenue_xlsx - returned_revenue
+            effective_revenue = revenue + spp_points + partner_programs - returned_revenue
         else:
             effective_revenue = revenue - returned_revenue
 
@@ -463,7 +493,7 @@ async def get_economics(
             ozon_sku=r.ozon_sku,
             cabinet_name=acc_name_map.get(uuid.UUID(r.account_id), "—"),
             is_archived=bool(r.is_archived),
-            expenses_source=expenses_source,
+            sources=sources,
             qty_delivered=qty,
             revenue=round(revenue, 2),
             returned_revenue=round(returned_revenue, 2),
