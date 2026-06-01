@@ -35,6 +35,7 @@ import { PlanPurchase } from '@/pages/PlanPurchase'
 import { AccountBalance } from '@/pages/AccountBalance'
 import { Credit } from '@/pages/Credit'
 import { Loans } from '@/pages/Loans'
+import { Supplies } from '@/pages/Supplies'
 import { Email } from '@/pages/Email'
 import { Settings } from '@/pages/Settings'
 import { SettingsReconciliation } from '@/pages/SettingsReconciliation'
@@ -115,6 +116,7 @@ export default function App() {
         <Route path="/credit/list" element={<Credit />} />
         <Route path="/loans" element={<Loans />} />
         <Route path="/credits" element={<Loans />} />
+        <Route path="/procurement/supplies" element={<Supplies />} />
         <Route path="/email" element={<Email />} />
         <Route path="/email/templates" element={<Email />} />
         <Route path="/email/log" element={<Email />} />
@@ -160,6 +162,7 @@ export default function App() {
               item.path !== '/credit/list' &&
               item.path !== '/credits' &&
               item.path !== '/loans' &&
+              item.path !== '/procurement/supplies' &&
               item.path !== '/email/templates' &&
               item.path !== '/email/log',
           )

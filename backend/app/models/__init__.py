@@ -77,6 +77,7 @@ from app.models.financing import (  # noqa: F401
 )
 from app.models.loan import Loan, LoanPayment  # noqa: F401
 from app.models.customer_price_estimate import CustomerPriceMonthlyEstimate  # noqa: F401
+from app.models.supply import Supply, SupplyCost, SupplyDocument, SupplyItem  # noqa: F401
 from app.models.market import (  # noqa: F401
     CrossPlatform,
     MarketCompetitor,

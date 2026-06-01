@@ -476,6 +476,11 @@ export const NAV_GROUPS: NavGroup[] = [
     header: 'Закупки',
     items: [
       {
+        path: '/procurement/supplies',
+        label: 'Поставки',
+        icon: Truck,
+      },
+      {
         path: '/procurement/suppliers',
         label: 'Поставщики',
         icon: Users,

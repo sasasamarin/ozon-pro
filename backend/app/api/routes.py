@@ -23,6 +23,7 @@ from app.api.endpoints import (
     funnel_v2,
     loans,
     reverse_funnel,
+    supplies,
     reconciliation,
     company_settings,
     product_economics,
@@ -143,6 +144,7 @@ api_router.include_router(
 )
 api_router.include_router(credit.router, prefix="/credit", tags=["credit"])
 api_router.include_router(loans.router, prefix="/loans", tags=["loans"])
+api_router.include_router(supplies.router, prefix="/supplies", tags=["supplies"])
 api_router.include_router(
     reverse_funnel.router, prefix="/analytics/reverse-funnel", tags=["analytics"],
 )
