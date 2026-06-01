@@ -37,6 +37,7 @@ interface EcoRow {
   partner_programs: number
   avg_seller_price: number | null
   avg_customer_price: number | null
+  avg_customer_price_estimate?: number | null
   spp_pct: number | null
   cost_per_unit: number | null
   commission_pct: number
@@ -354,10 +355,22 @@ export function ProductEconomics() {
                       {r.avg_seller_price != null ? formatNumber(Math.round(r.avg_seller_price)) : '—'}
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums text-blue-700">
-                      {r.avg_customer_price != null ? formatNumber(Math.round(r.avg_customer_price)) : '—'}
-                      {r.spp_pct != null && (
-                        <div className="text-[10px] text-blue-500">−{r.spp_pct}%</div>
-                      )}
+                      {r.avg_customer_price != null ? (
+                        <>
+                          {formatNumber(Math.round(r.avg_customer_price))}
+                          {r.spp_pct != null && (
+                            <div className="text-[10px] text-blue-500">−{r.spp_pct}%</div>
+                          )}
+                        </>
+                      ) : r.avg_customer_price_estimate != null ? (
+                        <span
+                          className="text-fg-muted italic"
+                          title="Точных данных за этот период нет (Ozon API >90 дней). Это средняя за месяц из отчёта о реализации."
+                        >
+                          ≈ {formatNumber(Math.round(r.avg_customer_price_estimate))}
+                          <div className="text-[10px] text-fg-muted">оценка</div>
+                        </span>
+                      ) : '—'}
                     </td>
                     <td className="text-right py-2 px-2 tabular-nums font-medium text-emerald-700">
                       <span className="inline-flex items-center gap-1">

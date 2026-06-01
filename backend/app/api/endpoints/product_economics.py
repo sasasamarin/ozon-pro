@@ -70,6 +70,9 @@ class EconomicsRow(BaseModel):
     # На единицу
     avg_seller_price: float | None
     avg_customer_price: float | None
+    # Если точных данных нет (старые месяцы >90 дней) — оценка из realization.
+    # null если для этого SKU/периода даже оценки нет.
+    avg_customer_price_estimate: float | None = None
     spp_pct: float | None
 
     cost_per_unit: float | None
@@ -231,7 +234,15 @@ async def get_economics(
             COUNT(*)                            AS qty_delivered,
             SUM(oi.price)::float                AS revenue,
             AVG(oi.price)::float                AS avg_seller_price,
-            AVG(oi.customer_price)::float       AS avg_customer_price
+            AVG(oi.customer_price)::float       AS avg_customer_price,
+            -- Оценка для старых месяцев (>90 дней, posting/fbo не отдаёт).
+            -- Берём только если точного customer_price нет ВООБЩЕ за период.
+            (SELECT SUM(est.weighted_cp * est.qty)::float / NULLIF(SUM(est.qty),0)
+               FROM customer_price_monthly_estimate est
+              WHERE est.cabinet_id = p.ozon_account_id AND est.sku = p.ozon_sku
+                AND est.month >= DATE_TRUNC('month', CAST(:df AS date))
+                AND est.month <= DATE_TRUNC('month', CAST(:dt AS date))
+            ) AS avg_customer_price_estimate
         FROM order_items oi
         JOIN orders o   ON o.id = oi.order_id
         JOIN products p ON p.id = oi.product_id
@@ -398,6 +409,10 @@ async def get_economics(
 
         avg_seller = float(r.avg_seller_price) if r.avg_seller_price else None
         avg_customer = float(r.avg_customer_price) if r.avg_customer_price else None
+        avg_customer_estimate = (
+            float(r.avg_customer_price_estimate)
+            if getattr(r, "avg_customer_price_estimate", None) else None
+        )
         spp_pct = None
         if avg_seller and avg_customer and avg_seller > 0 and avg_customer < avg_seller:
             spp_pct = round((1 - avg_customer / avg_seller) * 100, 1)
@@ -564,6 +579,9 @@ async def get_economics(
             partner_programs=round(partner_programs, 2),
             avg_seller_price=round(avg_seller, 2) if avg_seller else None,
             avg_customer_price=round(avg_customer, 2) if avg_customer else None,
+            avg_customer_price_estimate=(
+                round(avg_customer_estimate, 2) if avg_customer_estimate else None
+            ),
             spp_pct=spp_pct,
             cost_per_unit=cost_per,
             commission_pct=round(commission_pct, 2),
