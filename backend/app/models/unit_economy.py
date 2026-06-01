@@ -1,8 +1,16 @@
 """
-monthly_unit_economy — точные per-product финансы из XLSX «Экономика магазина».
+Финансовые таблицы из XLSX «Экономика магазина» + сырые daily-данные из API.
 
-Источник истины — выгрузка из кабинета Ozon (Финансы → Экономика магазина →
-Общие расходы → XLSX). API публичного этого не отдаёт — проверено 19 endpoint'ов.
+- MonthlyUnitEconomy — помесячный per-SKU агрегат из ручного XLSX
+  «Общие расходы». Точный, календарный месяц.
+- PlacementStorageDaily — сырые daily-записи хранения из Report API
+  (seller_placement_by_products). PK по дню → перекрывающиеся отчёты
+  не дают двойного счёта.
+
+P&L/Economics эффективное хранение = COALESCE(
+    storage_from_xlsx,                    -- точно (ручной XLSX)
+    SUM(daily.storage_cost ... in month)  -- оценка (API)
+)
 """
 from __future__ import annotations
 
@@ -52,7 +60,11 @@ class MonthlyUnitEconomy(Base):
     posting_handling: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     logistics: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     last_mile: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    # storage — ЛЕГАСИ. P&L больше не использует. Оставлен для отката
+    # и backfill через storage_from_xlsx (см. миграцию 0020).
     storage: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    # Точное хранение из ручного XLSX (приоритет в P&L через COALESCE).
+    storage_from_xlsx: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     return_handling: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     reverse_logistics: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     disposal: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
@@ -75,3 +87,31 @@ class MonthlyUnitEconomy(Base):
         DateTime(timezone=True), nullable=False,
     )
     source_file: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class PlacementStorageDaily(Base):
+    """
+    Сырые daily-записи хранения из Ozon Report API (seller_placement_by_products).
+
+    PK = (cabinet, sku, warehouse, day) — гарантия идемпотентности:
+    повторный импорт одного и того же отчёта с перекрывающимся периодом
+    не даёт двойного счёта.
+
+    P&L агрегирует SUM(storage_cost) WHERE cabinet=X AND sku=Y AND day IN month.
+    Это используется как fallback когда нет ручного XLSX за этот месяц.
+    """
+
+    __tablename__ = "placement_storage_daily"
+
+    cabinet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    sku: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    warehouse: Mapped[str] = mapped_column(Text, primary_key=True, default="")
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    storage_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    source_report: Mapped[str | None] = mapped_column(Text, nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+    )

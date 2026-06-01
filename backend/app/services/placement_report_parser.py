@@ -24,13 +24,26 @@ from openpyxl import load_workbook
 HEADER_DATE = {"Дата", "Date"}
 HEADER_SKU = {"SKU"}
 HEADER_OFFER = {"Артикул", "Offer"}
+HEADER_WAREHOUSE = {"Склад", "Warehouse"}
 HEADER_STORAGE_COST = {"Начисленная стоимость размещения", "Storage cost"}
 
 
 @dataclass
+class PlacementDailyRow:
+    """Одна сырая daily-запись из API-отчёта."""
+    sku: int
+    warehouse: str
+    day: date
+    storage_cost: Decimal  # знак как в файле (мы инвертируем при записи)
+    offer_id: str | None = None
+
+
+@dataclass
 class PlacementParseResult:
-    # storage_by_sku_month[(sku, month_first_day)] = SUM(storage_cost)
-    storage_by_sku_month: dict[tuple[int, date], Decimal] = field(default_factory=dict)
+    # Сырые daily-строки — пишем как есть в placement_storage_daily
+    # с PK (cabinet_id, sku, warehouse, day) → перекрытие отчётов
+    # дедуплицируется естественно.
+    daily_rows: list[PlacementDailyRow] = field(default_factory=list)
     # Метаданные
     offer_by_sku: dict[int, str] = field(default_factory=dict)
     rows_total: int = 0
@@ -83,6 +96,7 @@ def parse_placement_report(file_obj: BinaryIO) -> PlacementParseResult:
     col_date = find_col(HEADER_DATE)
     col_sku = find_col(HEADER_SKU)
     col_offer = find_col(HEADER_OFFER)
+    col_warehouse = find_col(HEADER_WAREHOUSE)
     col_cost = find_col(HEADER_STORAGE_COST)
 
     missing = []
@@ -102,7 +116,7 @@ def parse_placement_report(file_obj: BinaryIO) -> PlacementParseResult:
             continue
         result.rows_total += 1
 
-        # Дата → месяц (первый день)
+        # Дата
         date_val = row[col_date]
         if isinstance(date_val, datetime):
             d = date_val.date()
@@ -111,14 +125,12 @@ def parse_placement_report(file_obj: BinaryIO) -> PlacementParseResult:
         else:
             d = None
             if date_val:
-                # «2026-03-01 00:00:00» строка
                 try:
                     d = datetime.fromisoformat(str(date_val).split(" ")[0]).date()
                 except Exception:
                     pass
         if not d:
             continue
-        month_first = d.replace(day=1)
 
         # Обновляем period bounds
         if not result.period_from or d < result.period_from:
@@ -136,22 +148,31 @@ def parse_placement_report(file_obj: BinaryIO) -> PlacementParseResult:
             continue
 
         # offer_id для отображения
+        offer_id = None
         if col_offer is not None:
-            offer = _norm(row[col_offer])
-            if offer:
-                result.offer_by_sku.setdefault(sku, offer)
+            offer_id = _norm(row[col_offer]) or None
+            if offer_id:
+                result.offer_by_sku.setdefault(sku, offer_id)
 
-        # Storage cost — суммируем
+        # Склад — часть PK, не теряем (один SKU может быть на нескольких складах в один день)
+        warehouse = ""
+        if col_warehouse is not None:
+            warehouse = _norm(row[col_warehouse])
+
+        # Storage cost — сырое значение, не агрегируем (агрегацию делает SQL)
         cost = _to_decimal(row[col_cost])
         if cost is None:
             continue
         if cost != 0:
             result.rows_with_cost += 1
 
-        key = (sku, month_first)
-        result.storage_by_sku_month[key] = result.storage_by_sku_month.get(
-            key, Decimal("0")
-        ) + cost
+        result.daily_rows.append(PlacementDailyRow(
+            sku=sku,
+            warehouse=warehouse,
+            day=d,
+            storage_cost=cost,
+            offer_id=offer_id,
+        ))
 
     wb.close()
     return result

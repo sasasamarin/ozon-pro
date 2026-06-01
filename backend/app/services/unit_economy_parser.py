@@ -46,7 +46,10 @@ COLUMN_MAP: dict[str, str] = {
     "Обработка отправления": "posting_handling",
     "Логистика": "logistics",
     "Доставка до места выдачи": "last_mile",
-    "Стоимость размещения": "storage",
+    # XLSX «Общие расходы» точно покрывает календарный месяц → пишем в
+    # storage_from_xlsx (приоритет в P&L через COALESCE). Поле storage —
+    # легаси, оставлено для отката (см. миграцию 0020).
+    "Стоимость размещения": "storage_from_xlsx",
     "Обработка возврата": "return_handling",
     "Обратная логистика": "reverse_logistics",
     "Утилизация": "disposal",
@@ -69,7 +72,7 @@ COLUMN_MAP: dict[str, str] = {
 NUMERIC_FIELDS = {
     "current_price", "revenue", "spp_points", "partner_programs",
     "ozon_commission", "acquiring", "posting_handling", "logistics",
-    "last_mile", "storage", "return_handling", "reverse_logistics",
+    "last_mile", "storage_from_xlsx", "return_handling", "reverse_logistics",
     "disposal", "ovh_extra", "operational_errors",
     "ad_cpc", "ad_cpo", "ad_star", "ad_paid_brand", "ad_reviews",
     "ozon_profit", "ozon_margin_share", "price_index",
@@ -257,7 +260,7 @@ def verify_row_profit(row: dict[str, Any]) -> Decimal:
     return (
         _v("revenue") + _v("spp_points") + _v("partner_programs")
         + _v("ozon_commission") + _v("acquiring") + _v("posting_handling")
-        + _v("logistics") + _v("last_mile") + _v("storage")
+        + _v("logistics") + _v("last_mile") + _v("storage_from_xlsx")
         + _v("return_handling") + _v("reverse_logistics") + _v("disposal")
         + _v("ovh_extra") + _v("operational_errors")
         + _v("ad_cpc") + _v("ad_cpo") + _v("ad_star")

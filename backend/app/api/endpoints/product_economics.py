@@ -293,10 +293,9 @@ async def get_economics(
     ret_by_prod: dict[str, float] = {r.pid: float(r.ret_sum or 0) for r in ret_rows}
 
     # === MONTHLY UNIT ECONOMY: точные XLSX-числа из «Экономика магазина» ===
-    # Если за период есть загруженный отчёт Ozon — берём расходы оттуда per-SKU.
-    # Иначе остаётся текущая модель оценок. Матчим по ozon_sku (sku в файле).
-    # Период XLSX = month (первый день). За period_from..period_to берём ВСЕ
-    # месяцы которые пересекаются и суммируем по SKU.
+    # Storage берём по принципу COALESCE: сначала storage_from_xlsx (ручной XLSX,
+    # точно), иначе агрегат из placement_storage_daily (API, скользящее окно).
+    # Это убирает хрупкий CASE-костыль и делает регрессию невозможной.
     xlsx_rows = (await db.execute(text("""
         SELECT
           ue.cabinet_id::text AS cab_id,
@@ -310,7 +309,25 @@ async def get_economics(
           SUM(COALESCE(ue.posting_handling, 0))::float AS xposting,
           SUM(COALESCE(ue.logistics, 0))::float AS xlog,
           SUM(COALESCE(ue.last_mile, 0))::float AS xlast,
-          SUM(COALESCE(ue.storage, 0))::float AS xstorage,
+          -- storage_from_xlsx приоритет, daily — fallback
+          SUM(COALESCE(
+              ue.storage_from_xlsx,
+              (SELECT SUM(d.storage_cost) FROM placement_storage_daily d
+                WHERE d.cabinet_id = ue.cabinet_id AND d.sku = ue.sku
+                  AND d.day >= ue.month
+                  AND d.day < (ue.month + INTERVAL '1 month')),
+              0
+          ))::float AS xstorage,
+          -- Источник storage: xlsx | api_daily | missing
+          MAX(CASE
+              WHEN ue.storage_from_xlsx IS NOT NULL THEN 'xlsx'
+              WHEN EXISTS(SELECT 1 FROM placement_storage_daily d
+                          WHERE d.cabinet_id = ue.cabinet_id AND d.sku = ue.sku
+                            AND d.day >= ue.month
+                            AND d.day < (ue.month + INTERVAL '1 month'))
+                   THEN 'api_daily'
+              ELSE 'missing'
+          END) AS storage_source,
           SUM(COALESCE(ue.return_handling, 0))::float AS xrethnd,
           SUM(COALESCE(ue.reverse_logistics, 0))::float AS xrevlog,
           SUM(COALESCE(ue.disposal, 0))::float AS xdisp,
@@ -344,6 +361,12 @@ async def get_economics(
                       "xovh", "xopserr", "xcpc", "xcpo", "xstar", "xbrand", "xreviews",
                       "xprofit", "xdelivered", "xreturned"):
                 prev[k] = (prev.get(k, 0) or 0) + (getattr(x, k) or 0)
+            # Источник storage — если хоть в одной месяце xlsx, считаем xlsx
+            new_src = x.storage_source
+            if new_src == "xlsx" or prev.get("storage_source") == "xlsx":
+                prev["storage_source"] = "xlsx"
+            elif new_src == "api_daily" or prev.get("storage_source") == "api_daily":
+                prev["storage_source"] = "api_daily"
         else:
             xlsx_by_sku[key] = {
                 "xrevenue": x.xrevenue, "xspp": x.xspp, "xpartner": x.xpartner,
@@ -354,6 +377,7 @@ async def get_economics(
                 "xcpc": x.xcpc, "xcpo": x.xcpo, "xstar": x.xstar,
                 "xbrand": x.xbrand, "xreviews": x.xreviews,
                 "xprofit": x.xprofit, "xdelivered": x.xdelivered, "xreturned": x.xreturned,
+                "storage_source": x.storage_source,
             }
 
     # Построение строк
@@ -455,6 +479,7 @@ async def get_economics(
                 sources["logistics_total"] = "xlsx"
             # Поля доступные ТОЛЬКО из XLSX (API не отдаёт per-SKU)
             last_mile_total = abs(float(xlsx["xlast"] or 0))
+            # storage берётся уже как COALESCE(xlsx, daily) — см. SQL выше
             storage_total = abs(float(xlsx["xstorage"] or 0))
             posting_handling_total = abs(float(xlsx["xposting"] or 0))
             return_handling_total = abs(float(xlsx["xrethnd"] or 0))
@@ -462,7 +487,16 @@ async def get_economics(
             disposal_total = abs(float(xlsx["xdisp"] or 0))
             ovh_extra_total = abs(float(xlsx["xovh"] or 0))
             operational_errors_total = abs(float(xlsx["xopserr"] or 0))
-            for f in ("last_mile_total", "storage_total", "posting_handling_total",
+            # Источник storage отдельно — из COALESCE логики SQL
+            storage_src = xlsx.get("storage_source") or "missing"
+            if storage_src == "xlsx":
+                sources["storage_total"] = "xlsx"
+            elif storage_src == "api_daily":
+                sources["storage_total"] = "estimated"  # API скользящее окно
+            else:
+                sources["storage_total"] = "missing"
+            # Остальные XLSX-only поля
+            for f in ("last_mile_total", "posting_handling_total",
                       "return_handling_total", "reverse_logistics_total",
                       "disposal_total", "ovh_extra_total", "operational_errors_total"):
                 sources[f] = "xlsx"

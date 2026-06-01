@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
 from app.core.security import decrypt_secret
-from app.models import MonthlyUnitEconomy, OzonAccount
+from app.models import OzonAccount, PlacementStorageDaily
 from app.services.ozon_client import OzonSellerClient
 from app.services.placement_report_parser import parse_placement_report
 from app.workers.celery_app import celery_app
@@ -76,11 +76,11 @@ async def _sync_one_cabinet(
     cid = decrypt_secret(acc.client_id_encrypted)
     apk = decrypt_secret(acc.api_key_encrypted)
 
-    # Какие отчёты этого типа УЖЕ загружены — по source_file храним code
+    # Какие отчёты этого типа УЖЕ загружены — храним code в source_report daily-таблицы
     async with SessionLocal() as db:
         seen_codes = set((await db.execute(text("""
-            SELECT DISTINCT source_file FROM monthly_unit_economy
-            WHERE cabinet_id = :cab AND source_file LIKE :pattern
+            SELECT DISTINCT source_report FROM placement_storage_daily
+            WHERE cabinet_id = :cab AND source_report LIKE :pattern
         """), {"cab": str(acc.id), "pattern": f"REPORT_{REPORT_TYPE}_%"})).scalars().all())
 
     new_imported = 0
@@ -128,71 +128,37 @@ async def _sync_one_cabinet(
                 log.info("placement_downloaded", account=str(acc.id),
                          code=code, size=len(content))
 
-                # Парсим — формат отличается от ручного XLSX «Общие расходы»:
-                # per-day-per-SKU-per-warehouse, 12 колонок, только хранение.
-                # Агрегируем в SUM(storage) per (sku, month).
+                # Парсим в СЫРЫЕ daily-строки (sku, warehouse, day, cost).
+                # PK по дню → идемпотентно: перекрывающиеся отчёты не двойнят.
                 parsed = parse_placement_report(io.BytesIO(content))
                 log.info("placement_parsed",
                          account=str(acc.id), code=code,
                          rows_total=parsed.rows_total,
                          rows_with_cost=parsed.rows_with_cost,
-                         unique_keys=len(parsed.storage_by_sku_month))
+                         daily_rows=len(parsed.daily_rows))
 
                 now = datetime.now(UTC)
                 async with SessionLocal() as db:
-                    # UPSERT только поле storage (другие поля приходят из
-                    # ручного XLSX «Общие расходы» — их не трогаем).
-                    for (sku, month_first), storage_cost in parsed.storage_by_sku_month.items():
-                        # Знак как в Ozon — расход (отрицательное). API даёт +,
-                        # делаем − для согласованности с monthly_unit_economy.
-                        storage_value = -abs(storage_cost)
+                    # UPSERT в placement_storage_daily — никакого CASE.
+                    # PK (cabinet, sku, warehouse, day) → дубль = тот же ключ → UPDATE.
+                    for row in parsed.daily_rows:
+                        # Знак как в Ozon: расход → отрицательно. API даёт + → −abs.
                         values = {
                             "cabinet_id": acc.id,
-                            "sku": sku,
-                            "month": month_first,
-                            "storage": storage_value,
-                            "offer_id": parsed.offer_by_sku.get(sku),
-                            "period_from": parsed.period_from,
-                            "period_to": parsed.period_to,
+                            "sku": row.sku,
+                            "warehouse": row.warehouse or "",
+                            "day": row.day,
+                            "storage_cost": -abs(row.storage_cost),
+                            "source_report": code[:200],
                             "imported_at": now,
-                            "source_file": code[:200],
                         }
-                        stmt = pg_insert(MonthlyUnitEconomy).values(**values)
-                        # ON CONFLICT: storage обновляем ТОЛЬКО если запись
-                        # пришла из ранее этого же API (source_file LIKE
-                        # 'REPORT_seller_placement_%') ИЛИ если storage был
-                        # NULL. Ручной XLSX «Общие расходы» (другие префиксы)
-                        # имеет приоритет — он покрывает полный календарный
-                        # месяц, тогда как API даёт скользящее 30-д окно
-                        # и может не охватывать всё.
-                        from sqlalchemy import case
+                        stmt = pg_insert(PlacementStorageDaily).values(**values)
                         stmt = stmt.on_conflict_do_update(
-                            index_elements=["cabinet_id", "sku", "month"],
+                            index_elements=["cabinet_id", "sku", "warehouse", "day"],
                             set_={
-                                "storage": case(
-                                    (MonthlyUnitEconomy.storage.is_(None),
-                                     stmt.excluded.storage),
-                                    (MonthlyUnitEconomy.source_file.like(
-                                        "REPORT_seller_placement_%"),
-                                     stmt.excluded.storage),
-                                    else_=MonthlyUnitEconomy.storage,
-                                ),
-                                "imported_at": case(
-                                    (MonthlyUnitEconomy.storage.is_(None),
-                                     stmt.excluded.imported_at),
-                                    (MonthlyUnitEconomy.source_file.like(
-                                        "REPORT_seller_placement_%"),
-                                     stmt.excluded.imported_at),
-                                    else_=MonthlyUnitEconomy.imported_at,
-                                ),
-                                "source_file": case(
-                                    (MonthlyUnitEconomy.storage.is_(None),
-                                     stmt.excluded.source_file),
-                                    (MonthlyUnitEconomy.source_file.like(
-                                        "REPORT_seller_placement_%"),
-                                     stmt.excluded.source_file),
-                                    else_=MonthlyUnitEconomy.source_file,
-                                ),
+                                "storage_cost": stmt.excluded.storage_cost,
+                                "source_report": stmt.excluded.source_report,
+                                "imported_at": stmt.excluded.imported_at,
                             },
                         )
                         await db.execute(stmt)
@@ -201,7 +167,7 @@ async def _sync_one_cabinet(
                 new_imported += 1
                 log.info("placement_imported", account=str(acc.id), code=code,
                          period=f"{parsed.period_from}..{parsed.period_to}",
-                         skus_months=len(parsed.storage_by_sku_month))
+                         daily_rows=len(parsed.daily_rows))
 
             except Exception as e:
                 log.exception("placement_import_failed",

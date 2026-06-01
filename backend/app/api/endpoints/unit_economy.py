@@ -326,7 +326,7 @@ def _build_preview(cabinet: OzonAccount, parsed: ParseResult) -> PreviewResponse
                 revenue=float(r.get("revenue") or 0),
                 spp_points=float(r.get("spp_points") or 0),
                 ozon_commission=float(r.get("ozon_commission") or 0),
-                storage=float(r.get("storage") or 0),
+                storage=float(r.get("storage_from_xlsx") or 0),
                 ozon_profit=float(ozon_p),
                 computed_profit=float(computed),
                 diff=float(diff),
