@@ -36,6 +36,7 @@ import { AccountBalance } from '@/pages/AccountBalance'
 import { Credit } from '@/pages/Credit'
 import { Loans } from '@/pages/Loans'
 import { Supplies } from '@/pages/Supplies'
+import { SupplyDetailPage } from '@/pages/SupplyDetail'
 import { Email } from '@/pages/Email'
 import { Settings } from '@/pages/Settings'
 import { SettingsReconciliation } from '@/pages/SettingsReconciliation'
@@ -117,6 +118,7 @@ export default function App() {
         <Route path="/loans" element={<Loans />} />
         <Route path="/credits" element={<Loans />} />
         <Route path="/procurement/supplies" element={<Supplies />} />
+        <Route path="/procurement/supplies/:id" element={<SupplyDetailPage />} />
         <Route path="/email" element={<Email />} />
         <Route path="/email/templates" element={<Email />} />
         <Route path="/email/log" element={<Email />} />

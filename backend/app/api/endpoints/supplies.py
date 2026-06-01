@@ -77,8 +77,14 @@ class SupplyCostIn(BaseModel):
     id: uuid.UUID | None = None
 
 
+TRANSPORT_TYPES = Literal["rzd", "auto", "auto_consolidated", "cargo", "sea"]
+
+
 class SupplyCreate(BaseModel):
     name: str
+    tag: str | None = None
+    transport_type: TRANSPORT_TYPES | None = None
+    route: str | None = None
     notes: str | None = None
     cabinet_id: uuid.UUID | None = None
     total_cost: Decimal | None = None
@@ -123,6 +129,9 @@ class SupplyDocRow(BaseModel):
 class SupplyDetail(BaseModel):
     id: str
     name: str
+    tag: str | None
+    transport_type: str | None
+    route: str | None
     notes: str | None
     cabinet_id: str | None
     cabinet_name: str | None
@@ -144,6 +153,9 @@ class SupplyDetail(BaseModel):
 class SupplyListRow(BaseModel):
     id: str
     name: str
+    tag: str | None
+    transport_type: str | None
+    route: str | None
     status: str
     payment_date: str | None
     dispatch_date: str | None
@@ -210,6 +222,9 @@ async def _to_detail(db: AsyncSession, supply: Supply) -> SupplyDetail:
     return SupplyDetail(
         id=str(supply.id),
         name=supply.name,
+        tag=supply.tag,
+        transport_type=supply.transport_type,
+        route=supply.route,
         notes=supply.notes,
         cabinet_id=str(supply.cabinet_id) if supply.cabinet_id else None,
         cabinet_name=cabinet_name,
@@ -337,7 +352,8 @@ async def list_supplies(
     supplies = (await db.execute(q)).scalars().all()
     return [
         SupplyListRow(
-            id=str(s.id), name=s.name, status=s.status,
+            id=str(s.id), name=s.name, tag=s.tag,
+            transport_type=s.transport_type, route=s.route, status=s.status,
             payment_date=s.payment_date.isoformat() if s.payment_date else None,
             dispatch_date=s.dispatch_date.isoformat() if s.dispatch_date else None,
             dispatch_from=s.dispatch_from,
@@ -374,6 +390,9 @@ async def create_supply(
         user_id=current_user.id,
         cabinet_id=payload.cabinet_id,
         name=payload.name,
+        tag=payload.tag,
+        transport_type=payload.transport_type,
+        route=payload.route,
         notes=payload.notes,
         total_cost=payload.total_cost,
         status=payload.status,
@@ -452,6 +471,9 @@ async def update_supply(
             raise HTTPException(404, "Кабинет не найден")
     supply.cabinet_id = payload.cabinet_id
     supply.name = payload.name
+    supply.tag = payload.tag
+    supply.transport_type = payload.transport_type
+    supply.route = payload.route
     supply.notes = payload.notes
     supply.total_cost = payload.total_cost
     supply.status = payload.status

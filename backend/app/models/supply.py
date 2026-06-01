@@ -52,6 +52,9 @@ class Supply(Base):
         UUID(as_uuid=True), ForeignKey("ozon_accounts.id", ondelete="SET NULL"), nullable=True
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    tag: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    transport_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    route: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(20), nullable=False, server_default="manual")
     total_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
