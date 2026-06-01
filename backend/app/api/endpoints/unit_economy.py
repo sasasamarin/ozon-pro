@@ -81,7 +81,68 @@ async def preview_upload(
     """Парсит XLSX, возвращает превью без записи в БД."""
     cabinet = await _validate_cabinet(db, cabinet_id, current_user)
     parsed = await _parse_upload(file)
+    # Валидация: SKU из XLSX должны быть среди products выбранного кабинета.
+    # Иначе юзер выбрал не тот кабинет (артикулы soluna есть в home, не в Stolz).
+    file_skus = [int(r["sku"]) for r in parsed.rows if r.get("sku")]
+    if file_skus:
+        from sqlalchemy import text as _txt
+        matched = (await db.execute(_txt("""
+            SELECT COUNT(DISTINCT ozon_sku)
+            FROM products
+            WHERE ozon_account_id = :acc AND ozon_sku = ANY(:skus)
+        """), {"acc": str(cabinet.id), "skus": file_skus})).scalar() or 0
+        if matched == 0:
+            raise HTTPException(
+                400,
+                f"Кабинет «{cabinet.name}» не содержит ни одного товара из файла "
+                f"(проверено {len(file_skus)} SKU). Возможно, выбран не тот кабинет.",
+            )
+        if matched < len(file_skus) * 0.3:
+            # Найдено менее 30% — подозрительно, но не блокируем
+            # (новые товары могли появиться в файле раньше нашего sync_products)
+            pass
     return _build_preview(cabinet, parsed)
+
+
+@router.get("/status", response_model=list[dict])
+async def upload_status(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """
+    Список загруженных XLSX по каждому кабинету компании.
+    Для UI: рядом с кабинетом показывать «XLSX за май загружен 01.06.2026».
+    """
+    from sqlalchemy import text as _txt
+    rows = (await db.execute(_txt("""
+        SELECT
+          oa.id::text AS cabinet_id,
+          oa.name AS cabinet_name,
+          ue.month::text AS month,
+          ue.period_from::text AS period_from,
+          ue.period_to::text AS period_to,
+          MAX(ue.imported_at)::text AS imported_at,
+          COUNT(DISTINCT ue.sku) AS sku_count,
+          MAX(ue.source_file) AS source_file
+        FROM monthly_unit_economy ue
+        JOIN ozon_accounts oa ON oa.id = ue.cabinet_id
+        WHERE oa.company_id = :cid AND oa.deleted_at IS NULL
+        GROUP BY oa.id, oa.name, ue.month, ue.period_from, ue.period_to
+        ORDER BY oa.name, ue.month DESC
+    """), {"cid": str(current_user.company_id)})).all()
+    return [
+        {
+            "cabinet_id": r.cabinet_id,
+            "cabinet_name": r.cabinet_name,
+            "month": r.month,
+            "period_from": r.period_from,
+            "period_to": r.period_to,
+            "imported_at": r.imported_at,
+            "sku_count": r.sku_count,
+            "source_file": r.source_file,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/commit", response_model=dict)

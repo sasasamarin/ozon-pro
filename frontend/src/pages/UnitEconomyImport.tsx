@@ -30,6 +30,16 @@ interface RowSummary {
   sverka_ok: boolean
 }
 
+interface UploadStatus {
+  cabinet_id: string
+  cabinet_name: string
+  month: string
+  period_from: string
+  period_to: string
+  imported_at: string
+  sku_count: number
+}
+
 interface PreviewResp {
   cabinet_id: string
   cabinet_name: string
@@ -57,6 +67,19 @@ export function UnitEconomyImport() {
     queryFn: async () => (await api.get('/ozon-accounts/')).data,
     staleTime: 5 * 60_000,
   })
+
+  // Какие XLSX уже загружены — для подписи рядом с каждым кабинетом
+  const { data: uploadStatus = [] } = useQuery<UploadStatus[]>({
+    queryKey: ['unit-economy-status'],
+    queryFn: async () => (await api.get('/finance/unit-economy/status')).data,
+    staleTime: 60_000,
+  })
+  // Карта: cabinet_id → [{month, imported_at, sku}, ...]
+  const statusByCabinet = uploadStatus.reduce<Record<string, UploadStatus[]>>((acc, s) => {
+    if (!acc[s.cabinet_id]) acc[s.cabinet_id] = []
+    acc[s.cabinet_id].push(s)
+    return acc
+  }, {})
 
   const [cabinetId, setCabinetId] = useState<string>('')
   const [file, setFile] = useState<File | null>(null)
@@ -118,12 +141,27 @@ export function UnitEconomyImport() {
               className="w-full h-10 px-3 rounded-md border border-border-subtle bg-bg text-sm"
             >
               <option value="">— выбери кабинет —</option>
-              {cabinets.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
+              {cabinets.map((c) => {
+                const uploads = statusByCabinet[c.id] || []
+                const recent = uploads.slice(0, 2)
+                  .map((u) => {
+                    const monthLabel = new Date(u.month).toLocaleDateString('ru', {
+                      month: 'long', year: 'numeric',
+                    })
+                    const importedDate = new Date(u.imported_at).toLocaleDateString('ru', {
+                      day: '2-digit', month: '2-digit',
+                    })
+                    return `${monthLabel} (загр. ${importedDate})`
+                  }).join(', ')
+                return (
+                  <option key={c.id} value={c.id}>
+                    {c.name}{recent ? ` — XLSX: ${recent}` : ' — XLSX не загружен'}
+                  </option>
+                )
+              })}
             </select>
             <p className="text-[11px] text-fg-subtle mt-1">
-              XLSX от Ozon не содержит cabinet_id — указываем явно (один файл = один кабинет).
+              XLSX от Ozon не содержит cabinet_id — указываем явно. Рядом видно когда последний раз грузили какой месяц.
             </p>
           </div>
 

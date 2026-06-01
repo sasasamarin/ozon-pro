@@ -48,6 +48,10 @@ AVAILABLE_METRICS = [
     {"key": "ad_orders",          "label": "Рекл. заказы",          "group": "Реклама"},
     {"key": "ad_spend",           "label": "Расход на рекламу",     "group": "Реклама"},
     {"key": "ad_drr_pct",         "label": "ДРР % (от выручки)",    "group": "Реклама"},
+    # Цены / СПП — драйверы спроса
+    {"key": "avg_seller_price",   "label": "Ср. цена продавца",     "group": "Цены и СПП"},
+    {"key": "avg_customer_price", "label": "Ср. цена для покупателя", "group": "Цены и СПП"},
+    {"key": "spp_pct",            "label": "СПП % (скидка Ozon)",   "group": "Цены и СПП"},
 ]
 
 
@@ -163,6 +167,32 @@ async def get_metrics_matrix(
     )).all()
     ad_map = {r.d.date() if hasattr(r.d, "date") else r.d: r for r in ad_stat_rows}
 
+    # СПП и цены — из order_items.price и order_items.customer_price.
+    # Per-day средняя по доставленным товарам. customer_price может быть NULL
+    # (не на всех старых заказах) — считаем только где есть данные.
+    from sqlalchemy import text as _sql_txt
+    price_where = "p.ozon_account_id = ANY(:accs)"
+    price_params: dict = {"accs": [str(a) for a in accs], "df": date_from, "dt": date_to, "trunc": trunc}
+    if product_id is not None:
+        price_where += " AND oi.product_id = :pid"
+        price_params["pid"] = str(product_id)
+    price_rows = (await db.execute(_sql_txt(f"""
+        SELECT
+          date_trunc(:trunc, o.order_created_at) AS d,
+          AVG(oi.price)::float AS avg_seller_price,
+          AVG(oi.customer_price)::float AS avg_customer_price
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        JOIN products p ON p.id = oi.product_id
+        WHERE {price_where}
+          AND o.order_created_at >= :df
+          AND o.order_created_at < (CAST(:dt AS date) + interval '1 day')
+          AND o.status = 'delivered'
+          AND oi.price > 0
+        GROUP BY 1
+    """), price_params)).all()
+    price_map = {(r.d.date() if hasattr(r.d, 'date') else r.d): r for r in price_rows}
+
     # Сборка матрицы
     out: list[MatrixRow] = []
     for r in ad_rows:
@@ -176,6 +206,14 @@ async def get_metrics_matrix(
         ad_row = ad_map.get(d)
         ad_imp = int(ad_row.ad_imp or 0) if ad_row else 0
         ad_spend = float(ad_row.ad_spend or 0) if ad_row else 0
+
+        # Цены и СПП на эту дату
+        p_row = price_map.get(d)
+        avg_seller = float(p_row.avg_seller_price) if p_row and p_row.avg_seller_price else None
+        avg_customer = float(p_row.avg_customer_price) if p_row and p_row.avg_customer_price else None
+        spp_pct_val = None
+        if avg_seller and avg_customer and avg_seller > 0 and avg_customer < avg_seller:
+            spp_pct_val = round((1 - avg_customer / avg_seller) * 100, 2)
 
         values = {
             "impressions": imp,
@@ -196,6 +234,9 @@ async def get_metrics_matrix(
             "ad_orders": int(ad_row.ad_ord or 0) if ad_row else 0,
             "ad_spend": round(ad_spend, 2),
             "ad_drr_pct": round(ad_spend / rev * 100, 2) if rev else None,
+            "avg_seller_price": round(avg_seller, 2) if avg_seller else None,
+            "avg_customer_price": round(avg_customer, 2) if avg_customer else None,
+            "spp_pct": spp_pct_val,
         }
         # Берём только выбранные метрики
         out.append(MatrixRow(date=d.isoformat(), values={k: values.get(k) for k in selected}))
