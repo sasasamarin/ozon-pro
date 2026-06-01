@@ -10,6 +10,7 @@ import { useState } from 'react'
 import { useQuery, useMutation } from '@tanstack/react-query'
 import { Upload, CheckCircle2, AlertTriangle, FileSpreadsheet, Loader2 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { XlsxCoverageMatrix } from '@/components/XlsxCoverageMatrix'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import type { OzonAccountSummary } from '@/stores/cabinet'
@@ -128,6 +129,13 @@ export function UnitEconomyImport() {
           Эти данные публичный API не отдаёт.
         </p>
       </div>
+
+      <Card className="p-5">
+        <h2 className="text-base font-semibold text-fg mb-3">
+          Покрытие XLSX по месяцам
+        </h2>
+        <XlsxCoverageMatrix monthsBack={12} />
+      </Card>
 
       <Card className="p-5 max-w-3xl">
         <div className="grid gap-4">

@@ -145,6 +145,78 @@ async def upload_status(
     ]
 
 
+@router.get("/coverage", response_model=dict)
+async def upload_coverage(
+    months_back: int = 12,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Матрица покрытия XLSX: кабинет × последние N месяцев. Возвращает структуру
+    {cabinets: [...], months: [...], coverage: {cabinet_id: {month: {sku, imported_at}}}},
+    которая позволяет UI отрисовать grid с галочками/крестиками.
+
+    Принцип «честность»: юзер должен видеть НЕ ТОЛЬКО что загружено, но и
+    чего НЕ ХВАТАЕТ — какие месяцы остались без точных чисел Ozon.
+    """
+    from datetime import date, timedelta
+    from sqlalchemy import select, text as _txt
+
+    # Список кабинетов
+    cab_rows = (await db.execute(
+        select(OzonAccount.id, OzonAccount.name).where(
+            OzonAccount.company_id == current_user.company_id,
+            OzonAccount.deleted_at.is_(None),
+        ).order_by(OzonAccount.name)
+    )).all()
+    cabinets = [{"id": str(r.id), "name": r.name} for r in cab_rows]
+
+    # Список последних N месяцев (включая текущий)
+    today = date.today()
+    months: list[str] = []
+    y, m = today.year, today.month
+    for _ in range(months_back):
+        months.append(date(y, m, 1).isoformat())
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    months.sort()  # от старого к новому
+
+    # Загруженные пары (cabinet_id, month) → данные
+    if cabinets:
+        rows = (await db.execute(_txt("""
+            SELECT
+              cabinet_id::text AS cid,
+              month::text AS m,
+              COUNT(DISTINCT sku) AS sku_cnt,
+              MAX(imported_at)::text AS imp_at
+            FROM monthly_unit_economy
+            WHERE cabinet_id = ANY(CAST(:accs AS uuid[]))
+              AND month >= CAST(:m_from AS date)
+            GROUP BY cabinet_id, month
+        """), {
+            "accs": [c["id"] for c in cabinets],
+            "m_from": months[0],
+        })).all()
+    else:
+        rows = []
+
+    # coverage[cabinet_id][month] = {sku_count, imported_at}
+    coverage: dict[str, dict[str, dict]] = {c["id"]: {} for c in cabinets}
+    for r in rows:
+        coverage[r.cid][r.m[:10]] = {
+            "sku_count": r.sku_cnt,
+            "imported_at": r.imp_at,
+        }
+
+    return {
+        "cabinets": cabinets,
+        "months": months,
+        "coverage": coverage,
+    }
+
+
 @router.post("/commit", response_model=dict)
 async def commit_upload(
     file: UploadFile = File(...),

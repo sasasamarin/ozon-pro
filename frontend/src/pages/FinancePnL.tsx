@@ -8,6 +8,7 @@ import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
+import { XlsxCoverageMatrix } from '@/components/XlsxCoverageMatrix'
 
 interface PnLRow {
   label: string
@@ -321,30 +322,20 @@ function XlsxCoverageBanner() {
   }
 
   return (
-    <Card className="p-3 bg-blue-50/60 border-blue-200/60 text-sm">
-      <div className="flex items-start gap-3">
+    <Card className="p-3 bg-blue-50/30 border-blue-200/60 text-sm">
+      <div className="flex items-start gap-3 mb-2">
         <FileSpreadsheet className="w-5 h-5 text-blue-700 mt-0.5 shrink-0" />
         <div className="flex-1">
-          <strong className="text-blue-900">Точные числа Ozon загружены:</strong>
-          <div className="mt-1 space-y-0.5">
-            {Object.entries(byCabinet).map(([cab, ups]) => (
-              <div key={cab} className="text-xs text-fg-muted">
-                <span className="font-medium text-fg">{cab}:</span>{' '}
-                {ups.slice(0, 6).map((u) => {
-                  const m = new Date(u.month).toLocaleDateString('ru', { month: 'short', year: 'numeric' })
-                  const d = new Date(u.imported_at).toLocaleDateString('ru', { day: '2-digit', month: '2-digit' })
-                  return `${m} (загр. ${d})`
-                }).join(' · ')}
-              </div>
-            ))}
-          </div>
+          <strong className="text-blue-900">Покрытие XLSX «Экономика магазина»:</strong>
+          <span className="text-xs text-fg-muted ml-2">наведи на ячейку для деталей</span>
         </div>
         <Link to="/finance/unit-economy/import"
               className="text-xs font-medium px-3 py-1.5 rounded-md border border-border-subtle hover:bg-bg-subtle inline-flex items-center gap-1.5 shrink-0">
           <FileSpreadsheet className="w-3.5 h-3.5" />
-          Добавить
+          Загрузить
         </Link>
       </div>
+      <XlsxCoverageMatrix monthsBack={12} compact />
     </Card>
   )
 }
