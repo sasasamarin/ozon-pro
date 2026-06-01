@@ -37,6 +37,7 @@ celery_app = Celery(
         "app.workers.tasks.enrich_customer_price",
         "app.workers.tasks.reconcile_realization",
         "app.workers.tasks.sync_category_tree",
+        "app.workers.tasks.sync_placement_reports",
     ],
 )
 
@@ -165,6 +166,15 @@ celery_app.conf.beat_schedule = {
     "sync-category-tree-weekly": {
         "task": "app.workers.tasks.sync_category_tree.sync_category_tree",
         "schedule": crontab(day_of_week=0, hour=1, minute=0),  # вс 01:00 UTC
+    },
+    # Отчёты «Размещение по товарам» (seller_placement_by_products) — точные
+    # per-SKU финрасходы (storage/реклама/эквайринг). Ozon генерирует их
+    # асинхронно, мы просто скачиваем готовые из /v1/report/list.
+    # Раз в час достаточно: отчёты появляются после ручной выгрузки в UI
+    # либо по автоматическому расписанию Ozon (обычно после закрытия месяца).
+    "sync-placement-reports-hourly": {
+        "task": "app.workers.tasks.sync_placement_reports.sync_placement_reports",
+        "schedule": crontab(minute=15),  # каждый час в :15
     },
     # Backup БД работает на хосте VPS через systemd timer (scripts/backup_db.sh).
     # Решение принято осознанно: pg_dump на хосте не зависит от Docker rebuild
