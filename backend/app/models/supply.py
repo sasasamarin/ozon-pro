@@ -106,6 +106,7 @@ class SupplyItem(Base):
         UUID(as_uuid=True), ForeignKey("products.id", ondelete="SET NULL"), nullable=True
     )
     offer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
     qty: Mapped[int] = mapped_column(Integer, nullable=False)
     final_unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -134,6 +135,7 @@ class SupplyCost(Base):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
     scope: Mapped[str] = mapped_column(String(10), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

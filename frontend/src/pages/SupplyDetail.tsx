@@ -17,10 +17,13 @@ interface ProductLookup {
 }
 interface SupplyItem {
   id?: string; product_id: string | null; offer_id: string | null
-  product_name?: string | null; qty: number; final_unit_cost: number | null; note: string | null
+  product_name?: string | null; name: string | null
+  qty: number; final_unit_cost: number | null; note: string | null
 }
 interface SupplyCost {
-  id?: string; name: string; amount: number; scope: 'supply' | 'item'
+  id?: string; name: string; amount: number
+  currency: 'USD' | 'RUB' | null
+  scope: 'supply' | 'item'
   supply_item_index?: number | null; supply_item_id?: string | null; note: string | null
 }
 interface SupplyDoc {
@@ -89,11 +92,12 @@ export function SupplyDetailPage() {
     })
     setItems(existing.items.map(i => ({
       id: i.id, product_id: i.product_id, offer_id: i.offer_id,
-      product_name: i.product_name, qty: i.qty,
-      final_unit_cost: i.final_unit_cost, note: i.note,
+      product_name: i.product_name, name: i.name,
+      qty: i.qty, final_unit_cost: i.final_unit_cost, note: i.note,
     })))
     setCosts(existing.costs.map(c => ({
-      id: c.id, name: c.name, amount: c.amount, scope: c.scope, note: c.note,
+      id: c.id, name: c.name, amount: c.amount,
+      currency: c.currency, scope: c.scope, note: c.note,
       supply_item_index: c.supply_item_id
         ? existing.items.findIndex(i => i.id === c.supply_item_id)
         : null,
@@ -123,10 +127,12 @@ export function SupplyDetailPage() {
         supply_date: form.supply_date || null,
         items: items.map(i => ({
           product_id: i.product_id, offer_id: i.offer_id,
-          qty: i.qty, final_unit_cost: i.final_unit_cost, note: i.note,
+          name: i.name, qty: i.qty,
+          final_unit_cost: i.final_unit_cost, note: i.note,
         })),
         costs: costs.map(c => ({
-          name: c.name, amount: Number(c.amount), scope: c.scope,
+          name: c.name, amount: Number(c.amount),
+          currency: c.currency, scope: c.scope,
           supply_item_index: c.scope === 'item' ? c.supply_item_index : null,
           note: c.note,
         })),
@@ -253,57 +259,69 @@ export function SupplyDetailPage() {
       <Card className="p-4">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium text-fg">Позиции (SKU)</h2>
-          <button onClick={() => setItems([...items, { product_id: null, offer_id: null, qty: 1, final_unit_cost: null, note: null }])}
+          <button onClick={() => setItems([...items, { product_id: null, offer_id: null, name: null, qty: 1, final_unit_cost: null, note: null }])}
                   className="text-xs text-accent hover:underline">+ позиция</button>
         </div>
         {items.length === 0 && <div className="text-xs text-fg-muted py-2">Добавь товары из каталога</div>}
-        {items.map((it, idx) => (
-          <div key={idx} className="grid grid-cols-12 gap-2 mb-2 items-start">
-            <div className="col-span-5">
-              <select value={it.product_id || ''}
-                      onChange={(e) => {
-                        const p = products?.find(x => x.id === e.target.value)
-                        setItems(items.map((i, i2) => i2 === idx ? {
-                          ...i, product_id: p?.id || null, offer_id: p?.offer_id || null,
-                          product_name: p?.name,
-                        } : i))
-                      }}
-                      className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
-                <option value="">— SKU —</option>
-                {products?.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.offer_id} — {p.name.slice(0, 40)} ({p.cabinet_name})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <input type="number" value={it.qty}
-                   onChange={(e) => setItems(items.map((i, i2) => i2 === idx ? { ...i, qty: parseInt(e.target.value) || 0 } : i))}
-                   placeholder="шт" className="col-span-1 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
-            <input type="number" value={it.final_unit_cost ?? ''}
-                   onChange={(e) => setItems(items.map((i, i2) => i2 === idx ? { ...i, final_unit_cost: e.target.value ? parseFloat(e.target.value) : null } : i))}
-                   placeholder="себес/ед ₽" className="col-span-2 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
-            <input value={it.note ?? ''}
-                   onChange={(e) => setItems(items.map((i, i2) => i2 === idx ? { ...i, note: e.target.value || null } : i))}
-                   placeholder="заметка по позиции" className="col-span-3 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
-            <button onClick={() => setItems(items.filter((_, i2) => i2 !== idx))}
-                    className="col-span-1 text-fg-muted hover:text-rose-600 py-1.5">
-              <Trash2 className="size-4" />
-            </button>
-            {sumByItem(idx) > 0 && (
-              <div className="col-span-12 text-[10px] text-fg-muted pl-2">
-                Σ затрат на этот товар: <b>{formatCurrency(sumByItem(idx))}</b> (справочно)
+        {items.map((it, idx) => {
+          const isNewItem = !it.product_id  // SKU не выбран → товар «новый», вне каталога
+          return (
+            <div key={idx} className="border border-fg-subtle/15 rounded-md p-3 mb-2 space-y-2">
+              <div className="grid grid-cols-12 gap-2 items-start">
+                <div className="col-span-5">
+                  <label className="text-[10px] text-fg-muted uppercase block mb-1">SKU из каталога</label>
+                  <select value={it.product_id || ''}
+                          onChange={(e) => {
+                            const p = products?.find(x => x.id === e.target.value)
+                            setItems(items.map((i, i2) => i2 === idx ? {
+                              ...i, product_id: p?.id || null, offer_id: p?.offer_id || null,
+                              product_name: p?.name,
+                            } : i))
+                          }}
+                          className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
+                    <option value="">— новый товар (не из каталога) —</option>
+                    {products?.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.offer_id} — {p.name.slice(0, 40)} ({p.cabinet_name})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <input type="number" value={it.qty}
+                       onChange={(e) => setItems(items.map((i, i2) => i2 === idx ? { ...i, qty: parseInt(e.target.value) || 0 } : i))}
+                       placeholder="шт" className="col-span-1 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg self-end" />
+                <input type="number" value={it.final_unit_cost ?? ''}
+                       onChange={(e) => setItems(items.map((i, i2) => i2 === idx ? { ...i, final_unit_cost: e.target.value ? parseFloat(e.target.value) : null } : i))}
+                       placeholder="себес/ед ₽" className="col-span-2 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg self-end" />
+                <input value={it.note ?? ''}
+                       onChange={(e) => setItems(items.map((i, i2) => i2 === idx ? { ...i, note: e.target.value || null } : i))}
+                       placeholder="заметка" className="col-span-3 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg self-end" />
+                <button onClick={() => setItems(items.filter((_, i2) => i2 !== idx))}
+                        className="col-span-1 text-fg-muted hover:text-rose-600 py-1.5 self-end">
+                  <Trash2 className="size-4" />
+                </button>
               </div>
-            )}
-          </div>
-        ))}
+              {isNewItem && (
+                <input value={it.name ?? ''}
+                       onChange={(e) => setItems(items.map((i, i2) => i2 === idx ? { ...i, name: e.target.value || null } : i))}
+                       placeholder="Название нового товара (обязательно для не-каталожных)"
+                       className="w-full px-2 py-1.5 border border-amber-300 rounded text-sm bg-amber-50/30" />
+              )}
+              {sumByItem(idx) > 0 && (
+                <div className="text-[10px] text-fg-muted">
+                  Σ затрат на этот товар: <b>{formatCurrency(sumByItem(idx))}</b> (справочно)
+                </div>
+              )}
+            </div>
+          )
+        })}
       </Card>
 
       {/* Затраты */}
       <Card className="p-4">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium text-fg">Затраты</h2>
-          <button onClick={() => setCosts([...costs, { name: '', amount: 0, scope: 'supply', note: null }])}
+          <button onClick={() => setCosts([...costs, { name: '', amount: 0, currency: null, scope: 'supply', note: null }])}
                   className="text-xs text-accent hover:underline">+ затрата</button>
         </div>
         {costs.length === 0 && <div className="text-xs text-fg-muted py-2">Доставка, растаможка, документы, сертификаты…</div>}
@@ -314,7 +332,14 @@ export function SupplyDetailPage() {
                    placeholder="доставка" className="col-span-3 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
             <input type="number" value={c.amount}
                    onChange={(e) => setCosts(costs.map((cc, i2) => i2 === idx ? { ...cc, amount: parseFloat(e.target.value) || 0 } : cc))}
-                   placeholder="₽" className="col-span-2 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
+                   placeholder="сумма" className="col-span-2 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
+            <select value={c.currency || ''}
+                    onChange={(e) => setCosts(costs.map((cc, i2) => i2 === idx ? { ...cc, currency: (e.target.value || null) as any } : cc))}
+                    className="col-span-1 px-1 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
+              <option value="">—</option>
+              <option value="RUB">₽</option>
+              <option value="USD">$</option>
+            </select>
             <select value={c.scope}
                     onChange={(e) => setCosts(costs.map((cc, i2) => i2 === idx ? { ...cc, scope: e.target.value as any, supply_item_index: null } : cc))}
                     className="col-span-2 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
@@ -327,13 +352,15 @@ export function SupplyDetailPage() {
                       className="col-span-2 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
                 <option value="">— SKU —</option>
                 {items.map((i, i2) => (
-                  <option key={i2} value={i2}>{i.offer_id || `#${i2 + 1}`}</option>
+                  <option key={i2} value={i2}>
+                    {i.product_id ? (i.offer_id || `#${i2 + 1}`) : (i.name || `новый #${i2 + 1}`)}
+                  </option>
                 ))}
               </select>
             ) : <div className="col-span-2" />}
             <input value={c.note ?? ''}
                    onChange={(e) => setCosts(costs.map((cc, i2) => i2 === idx ? { ...cc, note: e.target.value || null } : cc))}
-                   placeholder="заметка по затрате" className="col-span-2 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
+                   placeholder="заметка" className="col-span-1 px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg" />
             <button onClick={() => setCosts(costs.filter((_, i2) => i2 !== idx))}
                     className="col-span-1 text-fg-muted hover:text-rose-600 py-1.5">
               <Trash2 className="size-4" />

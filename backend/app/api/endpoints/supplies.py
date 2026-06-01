@@ -59,16 +59,17 @@ MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 МБ
 class SupplyItemIn(BaseModel):
     product_id: uuid.UUID | None = None
     offer_id: str | None = None
+    name: str | None = None
     qty: int = Field(..., gt=0)
     final_unit_cost: Decimal | None = None
     note: str | None = None
-    # Если фронт передаст id — апдейтим (для PATCH), иначе создаём
     id: uuid.UUID | None = None
 
 
 class SupplyCostIn(BaseModel):
     name: str
     amount: Decimal = Field(..., ge=0)
+    currency: Literal["USD", "RUB"] | None = None
     scope: Literal["supply", "item"] = "supply"
     supply_item_index: int | None = Field(
         None, description="Индекс позиции в массиве items (если scope=item), нумерация с 0",
@@ -103,6 +104,7 @@ class SupplyItemRow(BaseModel):
     product_id: str | None
     offer_id: str | None
     product_name: str | None
+    name: str | None
     qty: int
     final_unit_cost: float | None
     note: str | None
@@ -112,6 +114,7 @@ class SupplyCostRow(BaseModel):
     id: str
     name: str
     amount: float
+    currency: str | None
     scope: str
     supply_item_id: str | None
     note: str | None
@@ -246,6 +249,7 @@ async def _to_detail(db: AsyncSession, supply: Supply) -> SupplyDetail:
                 product_name=(
                     product_names.get(it.product_id) if it.product_id else None
                 ),
+                name=it.name,
                 qty=it.qty,
                 final_unit_cost=(
                     float(it.final_unit_cost) if it.final_unit_cost is not None else None
@@ -256,7 +260,8 @@ async def _to_detail(db: AsyncSession, supply: Supply) -> SupplyDetail:
         ],
         costs=[
             SupplyCostRow(
-                id=str(c.id), name=c.name, amount=float(c.amount), scope=c.scope,
+                id=str(c.id), name=c.name, amount=float(c.amount),
+                currency=c.currency, scope=c.scope,
                 supply_item_id=str(c.supply_item_id) if c.supply_item_id else None,
                 note=c.note,
             )
@@ -413,6 +418,7 @@ async def create_supply(
             supply_id=supply.id,
             product_id=it_in.product_id,
             offer_id=offer_id,
+            name=it_in.name,
             qty=it_in.qty,
             final_unit_cost=it_in.final_unit_cost,
             note=it_in.note,
@@ -432,6 +438,7 @@ async def create_supply(
             supply_item_id=item_id,
             name=c_in.name,
             amount=c_in.amount,
+            currency=c_in.currency,
             scope=c_in.scope,
             note=c_in.note,
         ))
@@ -498,6 +505,7 @@ async def update_supply(
             supply_id=supply.id,
             product_id=it_in.product_id,
             offer_id=offer_id,
+            name=it_in.name,
             qty=it_in.qty,
             final_unit_cost=it_in.final_unit_cost,
             note=it_in.note,
@@ -516,6 +524,7 @@ async def update_supply(
             supply_item_id=item_id,
             name=c_in.name,
             amount=c_in.amount,
+            currency=c_in.currency,
             scope=c_in.scope,
             note=c_in.note,
         ))
