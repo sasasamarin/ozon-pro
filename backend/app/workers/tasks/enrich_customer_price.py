@@ -33,7 +33,8 @@ log = structlog.get_logger()
 UTC = timezone.utc
 
 _BATCH = 50              # сколько postings обогащаем одним проходом без sleep
-_BATCH_SLEEP_SEC = 30    # пауза между батчами (для 100 RPM throttle)
+_BATCH_SLEEP_SEC = 5     # пауза между батчами (Ozon /v2/posting/fbo/get лимит ~500 RPM)
+_CONCURRENT_REQUESTS = 10  # семафор параллельных API-вызовов внутри батча
 _MAX_RETRIES = 3
 
 
@@ -74,12 +75,34 @@ async def _enrich_async(
         accounts = (await db.execute(accounts_query)).scalars().all()
         log.info("enrich_customer_price_start", accounts=len(accounts), max_postings=max_postings)
 
-        for ac in accounts:
-            await _enrich_account(db, ac, stats, max_postings=max_postings, since_date=since_date)
+    # Кабинеты параллельно (rate-limit per Client-Id, не глобальный)
+    per_acc_stats = await asyncio.gather(*[
+        _enrich_account_isolated(SessionLocal, ac.id, max_postings, since_date)
+        for ac in accounts
+    ], return_exceptions=True)
+    for s in per_acc_stats:
+        if isinstance(s, dict):
+            for k in ("processed", "updated", "skipped", "errors"):
+                stats[k] += s.get(k, 0)
 
     stats["finished_at"] = datetime.now(UTC).isoformat()
     log.info("enrich_customer_price_done", **stats)
     return stats
+
+
+async def _enrich_account_isolated(
+    SessionLocal, account_id: uuid.UUID,
+    max_postings: int | None, since_date: str | None,
+) -> dict:
+    """Wrapper — каждый кабинет получает свою DB-сессию для параллели."""
+    s = {"processed": 0, "updated": 0, "skipped": 0, "errors": 0}
+    async with SessionLocal() as db:
+        ac = (await db.execute(select(OzonAccount).where(
+            OzonAccount.id == account_id
+        ))).scalar_one_or_none()
+        if ac:
+            await _enrich_account(db, ac, s, max_postings=max_postings, since_date=since_date)
+    return s
 
 
 async def _enrich_account(
@@ -122,40 +145,53 @@ async def _enrich_account(
     cid = decrypt_secret(account.client_id_encrypted)
     apk = decrypt_secret(account.api_key_encrypted)
 
+    sem = asyncio.Semaphore(_CONCURRENT_REQUESTS)
+
+    async def _process_posting(client: OzonSellerClient, p_num: str) -> tuple[str, dict[int, float] | None]:
+        """Параллельный воркер — fetch с семафором для rate-limit."""
+        async with sem:
+            try:
+                return p_num, await _fetch_customer_prices_by_sku(client, p_num)
+            except Exception:
+                log.exception("enrich_posting_failed", posting=p_num)
+                return p_num, None
+
     async with OzonSellerClient(cid, apk) as client:
         for batch_idx, batch_start in enumerate(range(0, len(postings), _BATCH)):
             batch = postings[batch_start:batch_start + _BATCH]
-            for p_num in batch:
-                try:
-                    # Возвращает {ozon_sku: customer_price} — для матчинга per-item.
-                    # Раньше брали products[0].customer_price и писали ВСЕМ позициям
-                    # посту → если в посту >1 товара с разными ценами, Жирафу
-                    # присваивалось значение чужого товара (видели 81419, 86946).
-                    sku_to_cp = await _fetch_customer_prices_by_sku(client, p_num)
-                    if not sku_to_cp:
-                        stats["skipped"] += 1
-                        continue
-                    rows_updated = 0
-                    for sku, cp in sku_to_cp.items():
-                        res = await db.execute(text("""
-                            UPDATE order_items oi
-                            SET customer_price = :cp
-                            FROM orders o
-                            WHERE oi.order_id = o.id
-                              AND o.posting_number = :p
-                              AND oi.ozon_sku = :sku
-                              AND oi.customer_price IS NULL
-                        """), {"cp": cp, "p": p_num, "sku": sku})
-                        rows_updated += res.rowcount
-                    if rows_updated > 0:
-                        stats["updated"] += 1
-                    stats["processed"] += 1
-                except Exception:
-                    log.exception("enrich_posting_failed", posting=p_num)
+            # Параллельно тянем customer_price для 50 постов одного батча
+            # (с семафором 10 одновременных запросов, чтобы не упасть в 429)
+            results = await asyncio.gather(*[
+                _process_posting(client, p) for p in batch
+            ])
+
+            # Применяем результаты по очереди (DB транзакция)
+            for p_num, sku_to_cp in results:
+                if sku_to_cp is None:
                     stats["errors"] += 1
                     stats["processed"] += 1
                     continue
+                if not sku_to_cp:
+                    stats["skipped"] += 1
+                    stats["processed"] += 1
+                    continue
+                rows_updated = 0
+                for sku, cp in sku_to_cp.items():
+                    res = await db.execute(text("""
+                        UPDATE order_items oi
+                        SET customer_price = :cp
+                        FROM orders o
+                        WHERE oi.order_id = o.id
+                          AND o.posting_number = :p
+                          AND oi.ozon_sku = :sku
+                          AND oi.customer_price IS NULL
+                    """), {"cp": cp, "p": p_num, "sku": sku})
+                    rows_updated += res.rowcount
+                if rows_updated > 0:
+                    stats["updated"] += 1
+                stats["processed"] += 1
             await db.commit()
+
             log.info(
                 "enrich_batch_done",
                 account=str(account.id),
@@ -165,7 +201,7 @@ async def _enrich_account(
                 updated=stats["updated"],
                 errors=stats["errors"],
             )
-            # throttle между батчами
+            # throttle между батчами (5s вместо 30s — параллельные запросы укладываются)
             if batch_start + _BATCH < len(postings):
                 await asyncio.sleep(_BATCH_SLEEP_SEC)
 
