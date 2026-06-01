@@ -38,24 +38,31 @@ export function Credit() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-3xl font-semibold text-fg tracking-tight">Кредиты и финансирование</h1>
+        <h1 className="text-3xl font-semibold text-fg tracking-tight">Услуги ускоренного вывода Ozon</h1>
         <p className="text-sm text-fg-muted mt-1.5">
-          Все финансовые продукты Ozon: авансы, кредиты, рассрочки
+          Досрочная выплата + Гибкий график выплат. Это <b>не кредит</b> — Ozon удерживает
+          комиссию с ваших денег за ускорение выплат. Тела/процента в API нет, суммы уже
+          учтены в транзакциях.{' '}
+          <a href="/loans" className="text-accent hover:underline">
+            Для настоящих банковских займов →
+          </a>
         </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <Card className="p-5 border-2 border-rose-200 bg-rose-50/30">
-          <p className="text-[11px] uppercase text-fg-muted">Активный долг</p>
-          <p className="text-2xl font-semibold text-rose-700 mt-1 tabular-nums">
+        <Card className="p-5">
+          <p className="text-[11px] uppercase text-fg-muted">Удержано Ozon (оборот услуг)</p>
+          <p className="text-2xl font-semibold text-fg mt-1 tabular-nums">
             {formatCurrency(data?.total_active_debt ?? 0)}
           </p>
+          <p className="text-[11px] text-fg-muted mt-1">не «долг», а сумма уже списанных комиссий</p>
         </Card>
         <Card className="p-5">
-          <p className="text-[11px] uppercase text-fg-muted">Проценты в P&L (всего)</p>
+          <p className="text-[11px] uppercase text-fg-muted">Учтено в P&L (через transactions)</p>
           <p className="text-2xl font-semibold text-fg mt-1 tabular-nums">
             {formatCurrency(data?.total_pnl_interest ?? 0)}
           </p>
+          <p className="text-[11px] text-fg-muted mt-1">эти услуги уже как расход — без дублирования</p>
         </Card>
       </div>
 

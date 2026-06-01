@@ -75,6 +75,7 @@ from app.models.financing import (  # noqa: F401
     OzonFinancing,
     OzonFinancingMovement,
 )
+from app.models.loan import Loan, LoanPayment  # noqa: F401
 from app.models.market import (  # noqa: F401
     CrossPlatform,
     MarketCompetitor,
@@ -169,6 +170,9 @@ __all__ = [
     "FinancingStatus",
     "FinancingSource",
     "FinancingMovementType",
+    # Настоящие займы (ручной ввод, Ветка 1 ТЗ flowoi_tz_loans.md)
+    "Loan",
+    "LoanPayment",
     # Phase 2 — представления денег + сверка
     "FinancialReport",
     "FinancialReportType",

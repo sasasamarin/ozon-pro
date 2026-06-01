@@ -557,19 +557,14 @@ export const NAV_GROUPS: NavGroup[] = [
     header: 'Кредиты',
     items: [
       {
-        path: '/credits',
-        label: 'Все кредиты',
+        path: '/loans',
+        label: 'Кредиты (вручную)',
         icon: CreditCard,
-        placeholder: {
-          description: 'Кредиты, рассрочки, факторинг — все обязательства.',
-          plannedFeatures: [
-            'Список долгов с остатками и ставками',
-            'Дата следующего платежа и сумма',
-            'Прогноз общей переплаты',
-            'Категории: банковский кредит, рассрочка, факторинг',
-            'Документы и контакты банков',
-          ],
-        },
+      },
+      {
+        path: '/credit',
+        label: 'Услуги ускоренного вывода Ozon',
+        icon: Landmark,
       },
       {
         path: '/credits/schedule',

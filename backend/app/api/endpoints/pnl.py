@@ -32,6 +32,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import Company, Order, OrderItem, OzonAccount, Product, Transaction, User
 from app.models.cost import CostConfidence, ProductCostHistory
+from app.models.loan import LoanPayment
 from app.models.marketplace import Return
 from app.services.tax import calc_tax
 
@@ -224,6 +225,30 @@ async def _returned_revenue(
     return float(res.scalar() or 0)
 
 
+async def _loan_interest_for_window(
+    db: AsyncSession, *, company_id: uuid.UUID, dt_from: datetime, dt_to: datetime,
+) -> tuple[float, float]:
+    """
+    Возвращает (interest_part, fee_part) по плановой дате pay_date в окне.
+
+    Тело займа (principal_part) НИКОГДА не учитывается в P&L — оно только
+    в ДДС. Это базовое правило ТЗ flowoi_tz_loans.md.
+
+    Метод начисления (pay_date), а не кассовый (paid_at) — стандарт для P&L.
+    """
+    row = (await db.execute(
+        select(
+            func.coalesce(func.sum(LoanPayment.interest_part), 0),
+            func.coalesce(func.sum(LoanPayment.fee_part), 0),
+        ).where(
+            LoanPayment.company_id == company_id,
+            LoanPayment.pay_date >= dt_from.date(),
+            LoanPayment.pay_date <= dt_to.date(),
+        )
+    )).one()
+    return float(row[0] or 0), float(row[1] or 0)
+
+
 async def _missing_costs(db: AsyncSession, *, accs: list[uuid.UUID]) -> tuple[bool, int]:
     if not accs:
         return False, 0
@@ -280,6 +305,15 @@ async def get_pnl(
     gross_profit = effective_revenue - cogs
     total_expenses = sum(expenses.values())
     marginal_profit = gross_profit - total_expenses
+
+    # Проценты по кредитам (Ветка 1 ТЗ flowoi_tz_loans.md) — финансовый расход.
+    # Тело займа в P&L НЕ попадает.
+    loan_interest, loan_fee = await _loan_interest_for_window(
+        db, company_id=current_user.company_id,
+        dt_from=period_from, dt_to=period_to,
+    )
+    loan_finance_cost = loan_interest + loan_fee
+    profit_before_tax = marginal_profit - loan_finance_cost
 
     has_missing, missing_n = await _missing_costs(db, accs=accs)
 
@@ -348,6 +382,22 @@ async def get_pnl(
         is_subtotal=True,
     ))
 
+    # Проценты по кредитам — финансовый расход (между маржой и налогом).
+    # Тело займа в P&L НЕ показывается вообще, оно только в ДДС.
+    if loan_finance_cost > 0:
+        rows.append(PnLRow(
+            label="− Проценты по кредитам",
+            amount=round(-loan_finance_cost, 2),
+            pct_of_revenue=pct(-loan_finance_cost),
+            is_negative=True,
+        ))
+        rows.append(PnLRow(
+            label="ПРИБЫЛЬ ДО НАЛОГА",
+            amount=round(profit_before_tax, 2),
+            pct_of_revenue=pct(profit_before_tax),
+            is_subtotal=True,
+        ))
+
     # === Налог по компании-режиму ===
     company = (await db.execute(
         select(Company).where(Company.id == current_user.company_id)
@@ -358,8 +408,11 @@ async def get_pnl(
     # База налога — effective_revenue (после возвратов).
     # УСН Доходы: возвраты по ФНС уменьшают налоговую базу.
     # УСН Дох-Расх / ОСНО: налог от прибыли, где revenue уже без возвратов.
+    # На УСН Дох-Расх и ОСНО проценты по кредитам уменьшают налоговую базу
+    # (gross_profit = profit_before_tax). На УСН Доходы base = revenue, проценты
+    # на налог не влияют — calc_tax сам это учитывает по tax_regime.
     tax_res = calc_tax(
-        revenue=effective_revenue, gross_profit=marginal_profit,
+        revenue=effective_revenue, gross_profit=profit_before_tax,
         tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
     )
     if tax_res.vat_amount > 0:
@@ -393,10 +446,15 @@ async def get_pnl(
         pr_eff = pr_rev - pr_returned
         pr_cogs = await _cogs_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
         pr_exp = await _expenses_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
+        pr_int, pr_fee = await _loan_interest_for_window(
+            db, company_id=current_user.company_id,
+            dt_from=prev_from, dt_to=prev_to,
+        )
         prev_revenue = pr_rev
         prev_marginal = pr_eff - pr_cogs - sum(pr_exp.values())
+        prev_profit_before_tax = prev_marginal - (pr_int + pr_fee)
         prev_tax = calc_tax(
-            revenue=pr_eff, gross_profit=prev_marginal,
+            revenue=pr_eff, gross_profit=prev_profit_before_tax,
             tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
         )
         prev_net = prev_tax.net_profit

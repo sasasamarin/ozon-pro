@@ -21,6 +21,7 @@ from app.api.endpoints import (
     expenses,
     funnel,
     funnel_v2,
+    loans,
     reconciliation,
     company_settings,
     product_economics,
@@ -140,4 +141,5 @@ api_router.include_router(
     plan_purchase.router, prefix="/analytics/plan-purchase", tags=["analytics"]
 )
 api_router.include_router(credit.router, prefix="/credit", tags=["credit"])
+api_router.include_router(loans.router, prefix="/loans", tags=["loans"])
 api_router.include_router(email_logs.router, prefix="/email", tags=["email"])

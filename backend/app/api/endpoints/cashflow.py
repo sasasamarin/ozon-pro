@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import OzonAccount, Transaction, User
+from app.models.loan import Loan, LoanPayment
 
 router = APIRouter()
 UTC = timezone.utc
@@ -114,19 +115,67 @@ async def get_cashflow(
         .order_by(bucket)
     )).all()
 
+    # Аккумулятор по бакетам (общий для transactions и loans).
+    buckets: dict[str, dict[str, float]] = {}
+    def add(period_start: str, *, inflow: float = 0.0, outflow: float = 0.0) -> None:
+        slot = buckets.setdefault(period_start, {"inflow": 0.0, "outflow": 0.0})
+        slot["inflow"] += inflow
+        slot["outflow"] += outflow
+
+    for r in rows:
+        add(r.bucket.date().isoformat(),
+            inflow=float(r.inflow or 0), outflow=float(r.outflow or 0))
+
+    # === Кредиты/займы — Ветка 1 ТЗ flowoi_tz_loans.md ===
+    # Выдача займа = +inflow (по issued_at), фактически уплаченные платежи =
+    # −outflow по paid_at (тело + процент + комиссия — все в ДДС).
+    loan_bucket = func.date_trunc(trunc_unit, Loan.issued_at).label("bucket")
+    loan_in_rows = (await db.execute(
+        select(loan_bucket, func.coalesce(func.sum(Loan.principal), 0))
+        .where(
+            Loan.company_id == current_user.company_id,
+            Loan.issued_at >= period_from.date(),
+            Loan.issued_at < period_to.date(),
+        )
+        .group_by(loan_bucket)
+    )).all()
+    for b, amount in loan_in_rows:
+        add(b.date().isoformat(), inflow=float(amount or 0))
+
+    pay_bucket = func.date_trunc(trunc_unit, LoanPayment.paid_at).label("bucket")
+    loan_out_rows = (await db.execute(
+        select(
+            pay_bucket,
+            func.coalesce(func.sum(
+                LoanPayment.principal_part + LoanPayment.interest_part + LoanPayment.fee_part
+            ), 0),
+        )
+        .where(
+            LoanPayment.company_id == current_user.company_id,
+            LoanPayment.is_paid.is_(True),
+            LoanPayment.paid_at >= period_from.date(),
+            LoanPayment.paid_at < period_to.date(),
+        )
+        .group_by(pay_bucket)
+    )).all()
+    for b, amount in loan_out_rows:
+        add(b.date().isoformat(), outflow=float(amount or 0))
+
+    # Сортируем бакеты по дате и собираем series с cumulative.
     series: list[CashflowPoint] = []
     cum = 0.0
     total_in = 0.0
     total_out = 0.0
-    for r in rows:
-        inflow = float(r.inflow or 0)
-        outflow = float(r.outflow or 0)
+    for period_start in sorted(buckets.keys()):
+        slot = buckets[period_start]
+        inflow = slot["inflow"]
+        outflow = slot["outflow"]
         net = inflow - outflow
         cum += net
         total_in += inflow
         total_out += outflow
         series.append(CashflowPoint(
-            period_start=r.bucket.date().isoformat(),
+            period_start=period_start,
             inflow=round(inflow, 2),
             outflow=round(outflow, 2),
             net=round(net, 2),

@@ -34,6 +34,7 @@ import { PlanVsFact } from '@/pages/PlanVsFact'
 import { PlanPurchase } from '@/pages/PlanPurchase'
 import { AccountBalance } from '@/pages/AccountBalance'
 import { Credit } from '@/pages/Credit'
+import { Loans } from '@/pages/Loans'
 import { Email } from '@/pages/Email'
 import { Settings } from '@/pages/Settings'
 import { SettingsReconciliation } from '@/pages/SettingsReconciliation'
@@ -112,6 +113,8 @@ export default function App() {
         <Route path="/finance/account-balance" element={<AccountBalance />} />
         <Route path="/credit" element={<Credit />} />
         <Route path="/credit/list" element={<Credit />} />
+        <Route path="/loans" element={<Loans />} />
+        <Route path="/credits" element={<Loans />} />
         <Route path="/email" element={<Email />} />
         <Route path="/email/templates" element={<Email />} />
         <Route path="/email/log" element={<Email />} />
@@ -155,6 +158,8 @@ export default function App() {
               item.path !== '/analytics/plan-vs-fact' &&
               item.path !== '/finance/account-balance' &&
               item.path !== '/credit/list' &&
+              item.path !== '/credits' &&
+              item.path !== '/loans' &&
               item.path !== '/email/templates' &&
               item.path !== '/email/log',
           )
