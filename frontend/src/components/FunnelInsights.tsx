@@ -147,7 +147,7 @@ export function FunnelInsights({
 function ShowsToOrdersChart({ qs }: { qs: string }) {
   // Состояние выбора overlay-метрик. Юзер может наложить произвольный набор.
   const [overlays, setOverlays] = useState<Set<string>>(
-    () => new Set(['impressions', 'orders', 'customer'])
+    () => new Set(['impressions', 'orders', 'customer', 'ad_spend'])
   )
   const toggle = (k: string) =>
     setOverlays((prev) => {

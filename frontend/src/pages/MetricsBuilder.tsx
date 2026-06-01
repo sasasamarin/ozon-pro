@@ -14,6 +14,7 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
+import { DateRangeBar } from '@/components/DateRangeBar'
 
 interface MetricInfo { key: string; label: string; group: string }
 interface MatrixRow { date: string; values: Record<string, number | null> }
@@ -112,12 +113,7 @@ export function MetricsBuilder() {
           </p>
         </div>
         <div className="flex gap-2">
-          {[7, 28, 30, 90].map((d) => (
-            <button key={d} onClick={() => setDays(d)} className={cn(
-              'px-3 py-1.5 rounded-md text-sm border',
-              days === d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
-            )}>{d}д</button>
-          ))}
+          <DateRangeBar days={days} onChange={setDays} presets={[7, 28, 30, 90]} />
         </div>
       </div>
 

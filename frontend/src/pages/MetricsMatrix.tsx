@@ -8,6 +8,7 @@ import { Loader2, Download, Grid3x3 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatNumber, cn } from '@/lib/utils'
+import { DateRangeBar } from '@/components/DateRangeBar'
 import { useCabinetStore } from '@/stores/cabinet'
 
 interface MetricInfo { key: string; label: string; group: string }
@@ -82,12 +83,7 @@ export function MetricsMatrix() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          {[7, 28, 30, 90, 365].map((d) => (
-            <button key={d} onClick={() => setDays(d)} className={cn(
-              'px-3 py-1.5 rounded-md text-sm border',
-              days === d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
-            )}>{d === 365 ? 'Год' : `${d}д`}</button>
-          ))}
+          <DateRangeBar days={days} onChange={setDays} />
           <span className="border-l border-border-subtle ml-1" />
           {(['day', 'week', 'month'] as const).map((g) => (
             <button key={g} onClick={() => setGranularity(g)} className={cn(

@@ -7,6 +7,7 @@ import { CostWarningBanner } from '@/components/ui/CostWarningBanner'
 import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
+import { DateRangeBar } from '@/components/DateRangeBar'
 import { useCabinetStore } from '@/stores/cabinet'
 import { XlsxCoverageMatrix } from '@/components/XlsxCoverageMatrix'
 
@@ -79,23 +80,7 @@ export function FinancePnL() {
           </p>
         </div>
         <div className="flex gap-2">
-          {[7, 28, 30, 90, 365].map((d) => (
-            <button
-              key={d}
-              onClick={() => setDays(d)}
-              className={cn(
-                'px-3 py-1.5 rounded-md text-sm border transition-colors',
-                days === d
-                  ? 'border-fg bg-fg text-bg'
-                  : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-              )}
-            >
-              {d === 7 && '7 дней'}
-              {d === 30 && '30 дней'}
-              {d === 90 && '90 дней'}
-              {d === 365 && 'Год'}
-            </button>
-          ))}
+          <DateRangeBar days={days} onChange={setDays} />
         </div>
       </div>
 

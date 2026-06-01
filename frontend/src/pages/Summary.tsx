@@ -4,6 +4,7 @@ import { Store, Loader2 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
+import { DateRangeBar } from '@/components/DateRangeBar'
 
 interface Row {
   cabinet_id: string
@@ -45,14 +46,7 @@ export function Summary() {
           </p>
         </div>
         <div className="flex gap-2">
-          {[7, 28, 30, 90, 365].map((d) => (
-            <button key={d} onClick={() => setDays(d)} className={cn(
-              'px-3 py-1.5 rounded-md text-sm border transition-colors',
-              days === d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-            )}>
-              {d === 7 && '7 дней'}{d === 28 && '28 дней'}{d === 30 && '30 дней'}{d === 90 && '90 дней'}{d === 365 && 'Год'}
-            </button>
-          ))}
+          <DateRangeBar days={days} onChange={setDays} />
         </div>
       </div>
 

@@ -35,13 +35,17 @@ class HealthResp(BaseModel):
     sources: list[SourceFreshness]
 
 
+# Свежесть теперь по sync_logs.finished_at (когда таска ПРОШЛА),
+# а не max(date) данных — для date-таблиц max(date) — это начало дня,
+# что давало ложную «stale» при свежем синке.
+# Каждый source маппится на одно или несколько method-имён в sync_logs.
 SOURCES = [
-    ("products", "Товары", "SELECT MAX(updated_at) FROM products"),
-    ("orders", "Заказы", "SELECT MAX(in_process_at) FROM orders"),
-    ("transactions", "Транзакции", "SELECT MAX(time) FROM transactions"),
-    ("analytics", "Аналитика воронки", "SELECT MAX(date)::timestamptz FROM analytics_daily"),
-    ("ads", "Реклама", "SELECT MAX(date)::timestamptz FROM ad_statistics"),
-    ("stocks", "Остатки", "SELECT MAX(time) FROM stocks"),
+    ("products", "Товары",            ["sync_products"]),
+    ("orders", "Заказы",              ["sync_orders_fbo", "sync_orders_fbs", "sync_orders"]),
+    ("transactions", "Транзакции",    ["sync_finance", "sync_transactions"]),
+    ("analytics", "Аналитика воронки",["sync_analytics_daily", "sync_analytics"]),
+    ("ads", "Реклама",                ["sync_ad_statistics", "sync_ads", "sync_ad_campaigns"]),
+    ("stocks", "Остатки",             ["sync_stocks"]),
 ]
 
 # Сколько минут считаем «свежим» для каждого источника
@@ -64,9 +68,12 @@ async def get_system_health(
     fresh = stale = 0
     out: list[SourceFreshness] = []
 
-    for code, label, query in SOURCES:
+    for code, label, methods in SOURCES:
         try:
-            last_at = (await db.execute(text(query))).scalar()
+            last_at = (await db.execute(text("""
+                SELECT MAX(finished_at) FROM sync_logs
+                WHERE method = ANY(:methods) AND status = 'success'
+            """), {"methods": methods})).scalar()
         except Exception:
             last_at = None
 

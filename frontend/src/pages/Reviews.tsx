@@ -4,6 +4,7 @@ import { Star, Loader2, MessageCircle, Image as ImageIcon } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { DateRangeBar } from '@/components/DateRangeBar'
 
 interface ReviewRow {
   id: string
@@ -58,14 +59,7 @@ export function Reviews() {
           </button>
         ))}
         <div className="flex gap-2 ml-auto">
-          {[7, 28, 30, 90, 365].map((d) => (
-            <button key={d} onClick={() => setDays(d)} className={cn(
-              'px-3 py-1.5 rounded-md text-sm border transition-colors',
-              days === d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-            )}>
-              {d === 30 && '30 дней'}{d === 90 && '90 дней'}{d === 365 && 'Год'}
-            </button>
-          ))}
+          <DateRangeBar days={days} onChange={setDays} />
         </div>
       </div>
 
