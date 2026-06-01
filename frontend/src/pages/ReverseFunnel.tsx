@@ -1,63 +1,105 @@
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Target, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Target, Sparkles, Loader2, TrendingUp, Megaphone, TrendingDown } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 
-interface FunnelKPI {
+type TargetMetric = 'revenue' | 'orders' | 'net_profit' | 'delivered'
+
+interface ScenarioOutput {
+  name: string
   impressions: number
-  to_cart: number
   orders: number
   delivered: number
-  cart_conv_pct: number | null
-  order_conv_pct: number | null
-  delivery_conv_pct: number | null
-  overall_conv_pct: number | null
+  seller_price: number
+  revenue: number
+  ad_spend: number
+  net_profit: number
+  drivers_explanation: string[]
 }
 
-/**
- * Обратная воронка: ввод цели → расчёт нужных показов/корзин.
- * Использует текущие конверсии воронки → масштабирует к нужной цели.
- */
-export function ReverseFunnel() {
-  const [targetRevenue, setTargetRevenue] = useState('5000000')
-  const [aov, setAov] = useState('5000')
-  const [days, setDays] = useState(28)
+interface ReverseScenario {
+  lever: 'impressions' | 'ad_spend' | 'seller_price'
+  label: string
+  feasible: boolean
+  reason: string | null
+  lever_value_pct: number | null
+  achieved: ScenarioOutput | null
+}
 
-  const { data: funnel } = useQuery<{ kpi: FunnelKPI }>({
-    queryKey: ['funnel-current', days],
-    queryFn: async () =>
-      (await api.get(`/analytics/funnel/?days=${days}&compare=false`)).data,
+interface ReverseFunnelResponse {
+  product_name: string
+  offer_id: string
+  target_metric: TargetMetric
+  target_value: number
+  days_analyzed: number
+  base: {
+    revenue: number
+    orders: number
+    delivered: number
+    net_profit: number
+    ad_spend: number
+    seller_price: number
+    impressions: number
+  }
+  scenarios: ReverseScenario[]
+}
+
+interface ProductOption {
+  id: string
+  name: string
+  offer_id: string
+}
+
+const METRIC_LABEL: Record<TargetMetric, string> = {
+  revenue: 'Выручка ₽',
+  orders: 'Заказы (шт)',
+  net_profit: 'Чистая прибыль ₽',
+  delivered: 'Доставлено (шт)',
+}
+
+const LEVER_ICON: Record<string, JSX.Element> = {
+  impressions: <TrendingUp className="w-4 h-4 text-indigo-600" />,
+  ad_spend: <Megaphone className="w-4 h-4 text-amber-600" />,
+  seller_price: <TrendingDown className="w-4 h-4 text-rose-600" />,
+}
+
+export function ReverseFunnel() {
+  const [productId, setProductId] = useState<string>('')
+  const [targetMetric, setTargetMetric] = useState<TargetMetric>('revenue')
+  const [targetValue, setTargetValue] = useState('5000000')
+  const [days, setDays] = useState(60)
+
+  const { data: products } = useQuery<ProductOption[]>({
+    queryKey: ['products-list-simple'],
+    queryFn: async () => {
+      const r = await api.get('/products/?limit=200')
+      return r.data.items?.map((p: { id: string; name: string; offer_id: string }) => ({
+        id: p.id, name: p.name, offer_id: p.offer_id,
+      })) ?? []
+    },
   })
 
-  const calc = useMemo(() => {
-    const target = parseFloat(targetRevenue) || 0
-    const avgPrice = parseFloat(aov) || 1
-    const neededDelivered = target / avgPrice
+  const solve = useMutation<ReverseFunnelResponse>({
+    mutationFn: async () => {
+      const r = await api.post('/analytics/reverse-funnel/solve', {
+        product_id: productId,
+        target_metric: targetMetric,
+        target_value: parseFloat(targetValue),
+        days,
+      })
+      return r.data
+    },
+  })
 
-    if (!funnel?.kpi) return null
-    const k = funnel.kpi
-    if (!k.delivery_conv_pct || !k.order_conv_pct || !k.cart_conv_pct) return null
-
-    const neededOrders = neededDelivered / (k.delivery_conv_pct / 100)
-    const neededCart = neededOrders / (k.order_conv_pct / 100)
-    const neededImpressions = neededCart / (k.cart_conv_pct / 100)
-
-    const currentRevenue = k.delivered * avgPrice
-    const ratio = target / Math.max(currentRevenue, 1)
-
-    return {
-      neededImpressions,
-      neededCart,
-      neededOrders,
-      neededDelivered,
-      currentRevenue,
-      ratio,
-    }
-  }, [targetRevenue, aov, funnel])
+  const result = solve.data
+  const fmt = (v: number) =>
+    targetMetric === 'revenue' || targetMetric === 'net_profit'
+      ? formatCurrency(v)
+      : formatNumber(v)
 
   return (
     <div className="flex flex-col gap-6">
@@ -68,11 +110,12 @@ export function ReverseFunnel() {
         </div>
         <h1 className="text-3xl font-semibold text-fg tracking-tight mt-3">Обратная воронка</h1>
         <p className="text-sm text-fg-muted mt-1.5">
-          Задай цель → AI рассчитает сколько показов / переходов в корзину нужно для её достижения.
+          Задай цель → расчёт через β-эластичности (трафик / реклама / цена) на твоих данных.
         </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* === Форма === */}
         <Card className="p-5 lg:col-span-1">
           <h3 className="text-base font-semibold text-fg mb-4 flex items-center gap-2">
             <Target className="w-4 h-4 text-fg-muted" />
@@ -80,71 +123,97 @@ export function ReverseFunnel() {
           </h3>
           <div className="flex flex-col gap-3">
             <div>
-              <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">
-                Целевая выручка ₽
-              </label>
-              <Input value={targetRevenue} onChange={(e) => setTargetRevenue(e.target.value)} type="number" />
+              <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">Товар</label>
+              <select
+                value={productId}
+                onChange={(e) => setProductId(e.target.value)}
+                className="w-full px-3 py-2 border border-fg-subtle/30 rounded-lg text-sm bg-bg"
+              >
+                <option value="">— выбери товар —</option>
+                {products?.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.offer_id} — {p.name.slice(0, 50)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">Метрика цели</label>
+              <select
+                value={targetMetric}
+                onChange={(e) => setTargetMetric(e.target.value as TargetMetric)}
+                className="w-full px-3 py-2 border border-fg-subtle/30 rounded-lg text-sm bg-bg"
+              >
+                {(Object.entries(METRIC_LABEL) as [TargetMetric, string][]).map(([k, v]) => (
+                  <option key={k} value={k}>{v}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">
-                Средний чек ₽
+                Значение цели
               </label>
-              <Input value={aov} onChange={(e) => setAov(e.target.value)} type="number" />
+              <Input value={targetValue} onChange={(e) => setTargetValue(e.target.value)} type="number" />
             </div>
             <div>
               <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">
-                Брать конверсии за
+                Окно для β-расчёта
               </label>
               <div className="flex gap-1.5">
-                {[7, 28, 30, 90, 365].map((d) => (
+                {[28, 60, 90, 180].map((d) => (
                   <button key={d} onClick={() => setDays(d)} className={cn(
                     'px-2 py-1 rounded text-xs border',
-                    days === d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+                    days === d ? 'border-fg bg-fg text-bg'
+                               : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
                   )}>{d}д</button>
                 ))}
               </div>
             </div>
+            <Button
+              onClick={() => solve.mutate()}
+              disabled={!productId || !targetValue || solve.isPending}
+              className="mt-2"
+            >
+              {solve.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Посчитать'}
+            </Button>
           </div>
-          {funnel?.kpi && (
-            <div className="mt-5 pt-4 border-t border-border-subtle text-xs text-fg-muted space-y-1">
-              <div className="font-medium text-fg mb-2">Текущие конверсии ({days} дн):</div>
-              <div>В корзину: <strong className="text-fg">{funnel.kpi.cart_conv_pct?.toFixed(2)}%</strong></div>
-              <div>Корзина→заказ: <strong className="text-fg">{funnel.kpi.order_conv_pct?.toFixed(2)}%</strong></div>
-              <div>Заказ→доставка: <strong className="text-fg">{funnel.kpi.delivery_conv_pct?.toFixed(2)}%</strong></div>
-              <div>Сквозная: <strong className="text-fg">{funnel.kpi.overall_conv_pct?.toFixed(2)}%</strong></div>
-            </div>
-          )}
         </Card>
 
+        {/* === Результат === */}
         <Card className="p-5 lg:col-span-2">
-          <h3 className="text-base font-semibold text-fg mb-4">Что нужно</h3>
-          {!calc ? (
-            <p className="text-sm text-fg-muted">Введите цель — AI рассчитает воронку.</p>
+          <h3 className="text-base font-semibold text-fg mb-4">3 сценария достижения</h3>
+
+          {!result ? (
+            <p className="text-sm text-fg-muted">
+              Выбери товар и метрику цели → нажми «Посчитать». Алгоритм найдёт нужное значение
+              рычага (трафик / бюджет / цена) через bisection по β-эластичностям.
+            </p>
           ) : (
             <>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-                <Tile label="Показы" value={formatNumber(calc.neededImpressions)} />
-                <Tile label="В корзину" value={formatNumber(calc.neededCart)} />
-                <Tile label="Заказы" value={formatNumber(calc.neededOrders)} />
-                <Tile label="Доставлено" value={formatNumber(calc.neededDelivered)} accent />
+              <div className="mb-4 grid grid-cols-2 gap-3 text-sm">
+                <div className="px-3 py-2 bg-bg-subtle/30 rounded">
+                  <div className="text-[10px] uppercase text-fg-muted">Сейчас за {result.days_analyzed}д</div>
+                  <div className="font-medium tabular-nums">
+                    {fmt(
+                      targetMetric === 'revenue' ? result.base.revenue
+                        : targetMetric === 'orders' ? result.base.orders
+                        : targetMetric === 'net_profit' ? result.base.net_profit
+                        : result.base.delivered
+                    )}
+                  </div>
+                </div>
+                <div className="px-3 py-2 bg-indigo-50 border border-indigo-200 rounded">
+                  <div className="text-[10px] uppercase text-indigo-700">Цель</div>
+                  <div className="font-medium tabular-nums text-indigo-900">
+                    {fmt(result.target_value)}
+                  </div>
+                </div>
               </div>
 
-              <div className="text-sm text-fg-muted space-y-1.5">
-                <div>Текущая выручка 30д: <strong className="text-fg">{formatCurrency(calc.currentRevenue)}</strong></div>
-                <div>Цель: <strong className="text-fg">{formatCurrency(parseFloat(targetRevenue))}</strong></div>
-                <div>Нужно вырасти в: <strong className={cn(
-                  calc.ratio > 1 ? 'text-rose-700' : 'text-emerald-700',
-                )}>{calc.ratio.toFixed(2)}×</strong></div>
-              </div>
-
-              <div className="mt-5 p-3 rounded-md bg-indigo-50 border border-indigo-200 text-sm text-indigo-900">
-                <strong>Сценарии для достижения:</strong>
-                <ul className="list-disc list-inside mt-2 space-y-0.5">
-                  <li>Увеличить рекламу для роста показов в {calc.ratio.toFixed(1)}× раз</li>
-                  <li>Улучшить карточки → +20% конверсии в корзину</li>
-                  <li>Снизить цену на 5% → +15% конверсии в заказ</li>
-                  <li>Добавить отзывы → +10% к выкупу</li>
-                </ul>
+              <div className="space-y-3">
+                {result.scenarios.map((sc) => (
+                  <ScenarioCard key={sc.lever} sc={sc} fmt={fmt} metric={targetMetric} />
+                ))}
               </div>
             </>
           )}
@@ -154,16 +223,77 @@ export function ReverseFunnel() {
   )
 }
 
-function Tile({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function ScenarioCard({
+  sc, fmt, metric,
+}: {
+  sc: ReverseScenario
+  fmt: (v: number) => string
+  metric: TargetMetric
+}) {
+  const a = sc.achieved
+  const actualValue = a ? (
+    metric === 'revenue' ? a.revenue
+    : metric === 'orders' ? a.orders
+    : metric === 'net_profit' ? a.net_profit
+    : a.delivered
+  ) : null
+
+  const leverText = sc.lever_value_pct != null && (
+    sc.lever === 'impressions' ? `${sc.lever_value_pct > 0 ? '+' : ''}${sc.lever_value_pct}% трафика`
+    : sc.lever === 'ad_spend' ? `${sc.lever_value_pct > 0 ? '+' : ''}${sc.lever_value_pct}% бюджет рекламы`
+    : `${sc.lever_value_pct > 0 ? '+' : ''}${sc.lever_value_pct}% к цене`
+  )
+
   return (
     <div className={cn(
-      'rounded-md border px-3 py-3',
-      accent ? 'border-indigo-300 bg-indigo-50' : 'border-border-subtle bg-bg-subtle/30',
+      'border rounded-md px-4 py-3',
+      sc.feasible
+        ? 'border-emerald-200 bg-emerald-50/30'
+        : 'border-amber-200 bg-amber-50/30',
     )}>
-      <div className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">{label}</div>
-      <div className={cn('text-lg font-semibold mt-1 tabular-nums', accent ? 'text-indigo-700' : 'text-fg')}>
-        {value}
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5">{LEVER_ICON[sc.lever]}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between">
+            <div className="font-medium text-fg">{sc.label}</div>
+            {sc.feasible ? (
+              <div className="text-sm font-semibold tabular-nums text-emerald-700">{leverText}</div>
+            ) : (
+              <div className="text-xs text-amber-700">недостижимо</div>
+            )}
+          </div>
+          {a && (
+            <div className="mt-2 grid grid-cols-4 gap-2 text-xs">
+              <Stat label="Показы" v={formatNumber(a.impressions)} />
+              <Stat label="Заказы" v={formatNumber(a.orders)} />
+              <Stat label="Реклама" v={formatCurrency(a.ad_spend)} />
+              <Stat label="Прибыль" v={formatCurrency(a.net_profit)} accent />
+            </div>
+          )}
+          {actualValue != null && (
+            <div className="mt-2 text-xs text-fg-muted">
+              Достигнутое значение метрики: <b className="text-fg">{fmt(actualValue)}</b>
+            </div>
+          )}
+          {sc.reason && (
+            <div className="mt-2 text-xs text-amber-800">⚠ {sc.reason}</div>
+          )}
+          {a?.drivers_explanation && a.drivers_explanation.length > 0 && (
+            <ul className="mt-2 text-[11px] text-fg-muted list-disc list-inside space-y-0.5">
+              {a.drivers_explanation.map((d, i) => <li key={i}>{d}</li>)}
+            </ul>
+          )}
+        </div>
       </div>
+    </div>
+  )
+}
+
+function Stat({ label, v, accent }: { label: string; v: string; accent?: boolean }) {
+  return (
+    <div>
+      <div className="text-[10px] text-fg-muted">{label}</div>
+      <div className={cn('font-medium tabular-nums', accent && 'text-emerald-700')}>{v}</div>
     </div>
   )
 }

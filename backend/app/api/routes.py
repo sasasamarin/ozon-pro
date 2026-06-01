@@ -142,4 +142,7 @@ api_router.include_router(
 )
 api_router.include_router(credit.router, prefix="/credit", tags=["credit"])
 api_router.include_router(loans.router, prefix="/loans", tags=["loans"])
+api_router.include_router(
+    reverse_funnel.router, prefix="/analytics/reverse-funnel", tags=["analytics"],
+)
 api_router.include_router(email_logs.router, prefix="/email", tags=["email"])
