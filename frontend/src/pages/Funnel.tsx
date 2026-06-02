@@ -13,6 +13,7 @@ import { FunnelInsights } from '@/components/FunnelInsights'
 import { DayExplanationDrawer } from '@/components/DayExplanationDrawer'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
+import { DateRangeBar } from '@/components/DateRangeBar'
 import { useCabinetStore } from '@/stores/cabinet'
 
 interface FunnelKPI {
@@ -163,6 +164,8 @@ export function Funnel() {
   const navigate = useNavigate()
 
   const days = parseInt(params.get('days') || '28', 10)
+  const dateFrom = params.get('date_from')
+  const dateTo = params.get('date_to')
   // Power BI-style multi-select: URL держит массив p=id1&p=id2&...
   const productIds = params.getAll('p')
   // Для обратной совместимости (старый код передавал один)
@@ -233,26 +236,31 @@ export function Funnel() {
 
   // Сборка query параметров: множественный ?p= + cabinet_ids
   const buildQs = (extra: Record<string, string> = {}): string => {
-    const p = new URLSearchParams({ days: String(days), ...extra })
+    const p = new URLSearchParams(extra)
+    if (dateFrom && dateTo) {
+      p.set('date_from', dateFrom); p.set('date_to', dateTo)
+    } else {
+      p.set('days', String(days))
+    }
     productIds.forEach((id) => p.append('product_ids', id))
     selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
     return p.toString()
   }
 
   const { data, isLoading, isFetching } = useQuery<FunnelV2Resp>({
-    queryKey: ['funnel-v2', selectedCabinetIds, days, productIds.join(','), compare],
+    queryKey: ['funnel-v2', selectedCabinetIds, days, dateFrom, dateTo, productIds.join(','), compare],
     queryFn: async () =>
       (await api.get(`/analytics/funnel/v2/?${buildQs({ compare })}`)).data,
   })
 
   const { data: daily, isFetching: dailyLoading } = useQuery<FunnelDaily[]>({
-    queryKey: ['funnel-v2', 'daily', selectedCabinetIds, days, productIds.join(',')],
+    queryKey: ['funnel-v2', 'daily', selectedCabinetIds, days, dateFrom, dateTo, productIds.join(',')],
     queryFn: async () => (await api.get(`/analytics/funnel/v2/daily?${buildQs()}`)).data,
     enabled: drillStep !== null,
   })
 
   const { data: bestWorst } = useQuery<BestWorstResp>({
-    queryKey: ['funnel-v2', 'bw', selectedCabinetIds, days, productIds.join(','), bwMetric],
+    queryKey: ['funnel-v2', 'bw', selectedCabinetIds, days, dateFrom, dateTo, productIds.join(','), bwMetric],
     queryFn: async () =>
       (await api.get(`/analytics/funnel/v2/best-worst-days?${buildQs({ metric: bwMetric })}`)).data,
   })
@@ -295,21 +303,16 @@ export function Funnel() {
 
       {/* TOOLBAR */}
       <Card className="p-3 flex flex-wrap items-center gap-2">
-        {PRESETS.map((p) => {
-          const active = String(days) === p.key
-          return (
-            <button key={p.key} onClick={() => updateParam('days', p.key)}
-              disabled={isFetching}
-              className={cn(
-                'px-3 py-1.5 rounded-md text-xs border transition-colors inline-flex items-center gap-1.5',
-                active ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-                isFetching && 'opacity-60 cursor-wait',
-              )}>
-              {active && isFetching && <Loader2 className="w-3 h-3 animate-spin" />}
-              {p.label}
-            </button>
-          )
-        })}
+        <DateRangeBar days={days} onChange={(r) => {
+          const p = new URLSearchParams(params)
+          p.set('days', String(r.days))
+          if (r.dateFrom && r.dateTo) {
+            p.set('date_from', r.dateFrom); p.set('date_to', r.dateTo)
+          } else {
+            p.delete('date_from'); p.delete('date_to')
+          }
+          setParams(p, { replace: true })
+        }} />
         <div className="w-px h-5 bg-border-subtle mx-2" />
         <span className="text-xs text-fg-muted">Сравнение:</span>
         {([
