@@ -64,6 +64,8 @@ export function DashboardBuilder() {
   const qc = useQueryClient()
   const { selectedCabinetIds } = useCabinetStore()
   const [days, setDays] = useState(28)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const [interval, setIntervalState] = useState<Interval>('day')
   const [editingCardId, setEditingCardId] = useState<string | null>(null)
 
@@ -149,7 +151,8 @@ export function DashboardBuilder() {
               ))}
             </div>
           </div>
-          <DateRangeBar days={days} onChange={setDays} />
+          <DateRangeBar days={days}
+            onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
           <button onClick={addCard}
                   className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover">
             <Plus className="size-4" /> Карточка
@@ -171,6 +174,8 @@ export function DashboardBuilder() {
               metrics={metrics || []}
               cabinetIds={selectedCabinetIds}
               days={days}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
               interval={interval}
               onDragStart={onDragStart}
               onDragOver={onDragOver}
@@ -197,13 +202,15 @@ export function DashboardBuilder() {
 // ============ Карточка с графиком ============
 
 function CardChart({
-  card, metrics, cabinetIds, days, interval,
+  card, metrics, cabinetIds, days, dateFrom, dateTo, interval,
   onDragStart, onDragOver, onDrop, onEdit, onDelete,
 }: {
   card: CardConfig
   metrics: MetricInfo[]
   cabinetIds: string[]
   days: number
+  dateFrom: string | null
+  dateTo: string | null
   interval: Interval
   onDragStart: (id: string) => void
   onDragOver: (e: React.DragEvent) => void
@@ -212,9 +219,14 @@ function CardChart({
   onDelete: () => void
 }) {
   const { data, isLoading } = useQuery<SeriesResponse>({
-    queryKey: ['series', card.metrics.map(m => m.key).sort().join(','), days, interval, cabinetIds.join(',')],
+    queryKey: ['series', card.metrics.map(m => m.key).sort().join(','), days, dateFrom, dateTo, interval, cabinetIds.join(',')],
     queryFn: async () => {
-      const params = new URLSearchParams({ days: String(days), interval })
+      const params = new URLSearchParams({ interval })
+      if (dateFrom && dateTo) {
+        params.set('date_from', dateFrom); params.set('date_to', dateTo)
+      } else {
+        params.set('days', String(days))
+      }
       card.metrics.forEach(m => params.append('metrics_keys', m.key))
       cabinetIds.forEach(c => params.append('cabinet_ids', c))
       return (await api.get(`/dashboard/builder/series?${params.toString()}`)).data

@@ -83,7 +83,7 @@ export function MetricsMatrix() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <DateRangeBar days={days} onChange={setDays} />
+          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
           <span className="border-l border-border-subtle ml-1" />
           {(['day', 'week', 'month'] as const).map((g) => (
             <button key={g} onClick={() => setGranularity(g)} className={cn(

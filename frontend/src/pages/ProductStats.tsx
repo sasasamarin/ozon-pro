@@ -47,6 +47,8 @@ export function ProductStats() {
   const [productId, setProductId] = useState<string>('')
   const [productSearch, setProductSearch] = useState('')
   const [days, setDays] = useState(30)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const [interval, setInterval] = useState<Interval>('day')
   const [mode, setMode] = useState<Mode>('table')
   const [selectedMetrics, setSelectedMetrics] = useState<Set<string>>(new Set())
@@ -90,9 +92,15 @@ export function ProductStats() {
   }, [products, productSearch])
 
   const { data: matrix, isLoading } = useQuery<MatrixResponse>({
-    queryKey: ['product-stats-matrix', productId, days, interval, Array.from(selectedMetrics).sort().join(',')],
+    queryKey: ['product-stats-matrix', productId, days, dateFrom, dateTo, interval, Array.from(selectedMetrics).sort().join(',')],
     queryFn: async () => {
-      const params = new URLSearchParams({ product_id: productId, interval, days: String(days) })
+      const params = new URLSearchParams({ product_id: productId, interval })
+      if (dateFrom && dateTo) {
+        params.set('date_from', dateFrom)
+        params.set('date_to', dateTo)
+      } else {
+        params.set('days', String(days))
+      }
       Array.from(selectedMetrics).forEach(m => params.append('metrics_keys', m))
       return (await api.get(`/products/stats/matrix?${params.toString()}`)).data
     },
@@ -191,7 +199,8 @@ export function ProductStats() {
               ))}
             </div>
           </div>
-          <DateRangeBar days={days} onChange={setDays} />
+          <DateRangeBar days={days}
+            onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
         </div>
       </Card>
 

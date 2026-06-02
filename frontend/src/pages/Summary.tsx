@@ -46,7 +46,7 @@ export function Summary() {
           </p>
         </div>
         <div className="flex gap-2">
-          <DateRangeBar days={days} onChange={setDays} />
+          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
         </div>
       </div>
 

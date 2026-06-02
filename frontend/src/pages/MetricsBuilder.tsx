@@ -113,7 +113,7 @@ export function MetricsBuilder() {
           </p>
         </div>
         <div className="flex gap-2">
-          <DateRangeBar days={days} onChange={setDays} presets={[7, 28, 30, 90]} />
+          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} presets={[7, 28, 30, 90]} />
         </div>
       </div>
 

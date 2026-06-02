@@ -1,22 +1,33 @@
 /**
- * Унифицированный date-range пикер для всех страниц.
+ * Унифицированный date-range пикер с ТОЧНЫМИ датами.
  *
- * Возвращает `days` (число), но поддерживает 3 режима выбора:
- *   - Пресеты: 7 / 28 / 30 / 90 / 365 дней
- *   - «Месяц»: выпадающий список последних 12 месяцев. Выбираем месяц →
- *     рассчитываем days = (сегодня - первое число месяца) + 1.
- *   - «Свободно»: 2 date input → days = (сегодня - date_from).
+ * Раньше возвращал только `days` — это приводило к расхождениям при
+ * выборе «Месяц/Свободно»: days=31 от сегодня = 31 день назад, а нужно
+ * точный диапазон.
  *
- * Эндпоинты у нас принимают `days` (или `date_from/date_to` опционально).
- * Если в будущем переключаемся на date_from/date_to — будет одна точка правки.
+ * Теперь возвращает:
+ *   { days, dateFrom, dateTo }
+ *  где dateFrom/dateTo = ISO 'YYYY-MM-DD' (точные границы).
+ *
+ * Пресет (7д/28д/30д/90д/Год) → dateFrom = today − N + 1, dateTo = today.
+ * Месяц → точные границы выбранного месяца.
+ * Свободно → как ввёл юзер.
+ *
+ * Старые места используют только `days` — продолжают работать.
+ * Новые места: используют dateFrom/dateTo для точной агрегации.
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
+
+export interface DateRange {
+  days: number
+  dateFrom: string  // ISO 'YYYY-MM-DD'
+  dateTo: string
+}
 
 interface Props {
   days: number
-  onChange: (days: number) => void
-  /** Какие пресеты показать. По умолчанию [7, 28, 30, 90, 365]. */
+  onChange: (range: DateRange) => void
   presets?: number[]
   className?: string
 }
@@ -25,16 +36,46 @@ const PRESET_LABEL: Record<number, string> = {
   7: '7д', 28: '28д', 30: '30д', 90: '90д', 180: '180д', 365: 'Год',
 }
 
-function monthsBack(n: number): { value: string; label: string; days: number }[] {
-  const out: { value: string; label: string; days: number }[] = []
+const MONTH_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн',
+                  'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+
+function iso(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function rangeFromDays(days: number): DateRange {
+  const to = new Date()
+  const from = new Date()
+  from.setDate(to.getDate() - days + 1)
+  return { days, dateFrom: iso(from), dateTo: iso(to) }
+}
+
+function rangeFromMonth(value: string): DateRange {
+  // value = "2026-05"
+  const [yy, mm] = value.split('-').map(Number)
+  const from = new Date(yy, mm - 1, 1)
+  const to = new Date(yy, mm, 0)  // последний день месяца
+  const days = Math.round((to.getTime() - from.getTime()) / 86400000) + 1
+  return { days, dateFrom: iso(from), dateTo: iso(to) }
+}
+
+function rangeFromCustom(from: string, to: string): DateRange {
+  if (!from) return rangeFromDays(30)
+  const d1 = new Date(from)
+  const d2 = to ? new Date(to) : new Date()
+  const days = Math.max(1, Math.round((d2.getTime() - d1.getTime()) / 86400000) + 1)
+  return { days, dateFrom: from, dateTo: to || iso(d2) }
+}
+
+function monthsBack(n: number): { value: string; label: string }[] {
+  const out: { value: string; label: string }[] = []
   const today = new Date()
-  const MONTH_RU = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек']
   for (let i = 0; i < n; i++) {
     const d = new Date(today.getFullYear(), today.getMonth() - i, 1)
-    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    const label = `${MONTH_RU[d.getMonth()]} ${d.getFullYear()}`
-    const days = Math.ceil((today.getTime() - d.getTime()) / 86400000) + 1
-    out.push({ value, label, days })
+    out.push({
+      value: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+      label: `${MONTH_RU[d.getMonth()]} ${d.getFullYear()}`,
+    })
   }
   return out
 }
@@ -50,25 +91,19 @@ export function DateRangeBar({
   const [to, setTo] = useState<string>('')
   const months = monthsBack(12)
 
-  const handleMonthChange = (v: string) => {
-    setMonth(v)
-    const m = months.find(x => x.value === v)
-    if (m) onChange(m.days)
+  const setPreset = (d: number) => { setMode('preset'); onChange(rangeFromDays(d)) }
+  const setMonthMode = (v: string) => { setMode('month'); setMonth(v); onChange(rangeFromMonth(v)) }
+  const setCustomMode = () => {
+    setMode('custom')
+    if (from) onChange(rangeFromCustom(from, to))
   }
-
-  const handleCustomApply = () => {
-    if (!from) return
-    const d1 = new Date(from)
-    const d2 = to ? new Date(to) : new Date()
-    const daysCalc = Math.max(1, Math.round((d2.getTime() - d1.getTime()) / 86400000) + 1)
-    onChange(daysCalc)
-  }
+  const applyCustom = () => onChange(rangeFromCustom(from, to))
 
   return (
     <div className={cn('flex flex-wrap gap-2 items-center', className)}>
       <div className="flex gap-1.5">
         {presets.map((d) => (
-          <button key={d} onClick={() => { setMode('preset'); onChange(d) }}
+          <button key={d} onClick={() => setPreset(d)}
                   className={cn(
                     'px-3 py-1.5 rounded-md text-sm border transition-colors',
                     mode === 'preset' && days === d
@@ -81,7 +116,7 @@ export function DateRangeBar({
       </div>
       <div className="flex gap-1.5 items-center">
         <select value={mode === 'month' ? month : ''}
-                onChange={(e) => { setMode('month'); handleMonthChange(e.target.value) }}
+                onChange={(e) => setMonthMode(e.target.value)}
                 className={cn(
                   'px-2 py-1.5 rounded-md text-sm border bg-bg',
                   mode === 'month' ? 'border-fg' : 'border-border-subtle text-fg-muted',
@@ -89,7 +124,7 @@ export function DateRangeBar({
           <option value="">Месяц…</option>
           {months.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
         </select>
-        <button onClick={() => setMode('custom')}
+        <button onClick={setCustomMode}
                 className={cn(
                   'px-3 py-1.5 rounded-md text-sm border transition-colors',
                   mode === 'custom'
@@ -106,8 +141,7 @@ export function DateRangeBar({
           <span className="text-fg-muted">…</span>
           <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
                  className="px-2 py-1 border border-border-subtle rounded bg-bg" />
-          <button onClick={handleCustomApply}
-                  disabled={!from}
+          <button onClick={applyCustom} disabled={!from}
                   className="px-2 py-1 bg-accent text-white rounded text-xs hover:bg-accent-hover disabled:opacity-50">
             Применить
           </button>

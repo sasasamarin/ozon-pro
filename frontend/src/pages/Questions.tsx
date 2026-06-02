@@ -49,7 +49,7 @@ export function Questions() {
           {onlyUnanswered ? 'Только без ответа' : 'Все вопросы'}
         </button>
         <div className="flex gap-2 ml-auto">
-          <DateRangeBar days={days} onChange={setDays} />
+          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
         </div>
       </div>
 

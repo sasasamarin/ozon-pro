@@ -82,7 +82,7 @@ export function Expenses() {
           </p>
         </div>
         <div className="flex gap-2">
-          <DateRangeBar days={days} onChange={setDays} />
+          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
           <Button onClick={() => setShowForm((v) => !v)}>
             <Plus className="w-4 h-4" /> Расход
           </Button>
