@@ -50,11 +50,17 @@ class SummaryResponse(BaseModel):
 @router.get("/", response_model=SummaryResponse)
 async def get_summary(
     days: int = Query(30, ge=1, le=365),
+    date_from: date_cls | None = Query(None),
+    date_to: date_cls | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SummaryResponse:
-    period_to = datetime.now(UTC)
-    period_from = period_to - timedelta(days=days)
+    if date_from and date_to:
+        period_from = datetime.combine(date_from, datetime.min.time(), tzinfo=UTC)
+        period_to = datetime.combine(date_to, datetime.max.time(), tzinfo=UTC)
+    else:
+        period_to = datetime.now(UTC)
+        period_from = period_to - timedelta(days=days)
 
     accs = (await db.execute(
         select(OzonAccount).where(

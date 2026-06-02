@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
+import { addDateParams } from '@/lib/dateParams'
 
 interface QuestionRow {
   id: string
@@ -23,11 +24,14 @@ interface QuestionRow {
 export function Questions() {
   const [onlyUnanswered, setOnlyUnanswered] = useState(false)
   const [days, setDays] = useState(90)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery<QuestionRow[]>({
-    queryKey: ['questions', days, onlyUnanswered],
+    queryKey: ['questions', days, dateFrom, dateTo, onlyUnanswered],
     queryFn: async () => {
-      const params = new URLSearchParams({ days: String(days), only_unanswered: String(onlyUnanswered) })
+      const params = new URLSearchParams({only_unanswered: String(onlyUnanswered) })
+      addDateParams(params, days, dateFrom, dateTo)
       return (await api.get(`/communications/questions?${params.toString()}`)).data
     },
   })
@@ -49,7 +53,7 @@ export function Questions() {
           {onlyUnanswered ? 'Только без ответа' : 'Все вопросы'}
         </button>
         <div className="flex gap-2 ml-auto">
-          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
+          <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
         </div>
       </div>
 

@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatNumber, cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
+import { addDateParams } from '@/lib/dateParams'
 import { useCabinetStore } from '@/stores/cabinet'
 
 interface MetricInfo { key: string; label: string; group: string }
@@ -23,6 +24,8 @@ const DEFAULT_SELECTED = new Set(['impressions', 'card_visits', 'orders', 'deliv
 export function MetricsMatrix() {
   const { selectedCabinetIds } = useCabinetStore()
   const [days, setDays] = useState(28)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const [granularity, setGranularity] = useState<'day' | 'week' | 'month'>('day')
   const [selected, setSelected] = useState<Set<string>>(new Set(DEFAULT_SELECTED))
 
@@ -33,7 +36,8 @@ export function MetricsMatrix() {
   })
 
   const qs = useMemo(() => {
-    const p = new URLSearchParams({ days: String(days), granularity })
+    const p = new URLSearchParams({granularity })
+    addDateParams(p, days, dateFrom, dateTo)
     selected.forEach((m) => p.append('metrics', m))
     selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
     return p.toString()
@@ -83,7 +87,7 @@ export function MetricsMatrix() {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
+          <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
           <span className="border-l border-border-subtle ml-1" />
           {(['day', 'week', 'month'] as const).map((g) => (
             <button key={g} onClick={() => setGranularity(g)} className={cn(

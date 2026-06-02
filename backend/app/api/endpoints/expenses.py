@@ -72,11 +72,18 @@ def _to_row(e: ExternalExpense) -> ExpenseRow:
 @router.get("/", response_model=ExpensesList)
 async def list_expenses(
     days: int = Query(90, ge=1, le=730),
+    date_from: date_cls | None = Query(None),
+    date_to: date_cls | None = Query(None),
     category: str | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ExpensesList:
-    cutoff = datetime.now(UTC).date() - timedelta(days=days)
+    if date_from and date_to:
+        cutoff = date_from
+        cutoff_to = date_to
+    else:
+        cutoff_to = datetime.now(UTC).date()
+        cutoff = cutoff_to - timedelta(days=days)
     q = select(ExternalExpense).where(
         ExternalExpense.user_id == current_user.id,
         ExternalExpense.date >= cutoff,
@@ -138,10 +145,17 @@ async def delete_expense(
 @router.get("/stats", response_model=ExpenseStats)
 async def expense_stats(
     days: int = Query(90, ge=1, le=730),
+    date_from: date_cls | None = Query(None),
+    date_to: date_cls | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ExpenseStats:
-    cutoff = datetime.now(UTC).date() - timedelta(days=days)
+    if date_from and date_to:
+        cutoff = date_from
+        cutoff_to = date_to
+    else:
+        cutoff_to = datetime.now(UTC).date()
+        cutoff = cutoff_to - timedelta(days=days)
     rows = (await db.execute(
         select(
             ExternalExpense.category,

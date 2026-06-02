@@ -41,23 +41,26 @@ class Metric:
 # === Полный каталог 45 метрик ===
 METRICS: list[Metric] = [
     # ---- Трафик и воронка ----
-    Metric("impressions",         "Показы",              "Трафик",
-           "Сумма показов карточки в поиске + на PDP за день (analytics_daily).",
+    Metric("impressions",         "Просмотры карточки",  "Трафик",
+           "hits_view_search + hits_view_pdp — пользователь посмотрел карточку. "
+           "ЭТО НЕ «Показы» из Ozon UI Аналитики (≈4× больше — это карточка в "
+           "выдаче ДО клика, доступна только через Premium-отчёт, не через "
+           "/v1/analytics/data). Расхождение с Ozon UI здесь нормальное.",
            "api", "number", "sum"),
     Metric("ad_impressions",      "Рекламные показы",    "Трафик",
-           "Показы за счёт рекламных кампаний (ad_statistics.impressions).",
+           "ad_statistics.impressions — реклама показала карточку.",
            "api", "number", "sum"),
     Metric("ad_imp_share",        "Доля рекл. показов",  "Трафик",
-           "ad_impressions / impressions × 100% — какая часть показов оплачена.",
+           "ad_impressions / impressions × 100%.",
            "derived", "percent", "weighted_by", "impressions"),
-    Metric("imp_search",          "Показы в поиске и каталоге", "Трафик",
-           "hits_view_search из analytics_daily.",
+    Metric("imp_search",          "Просмотры в поиске",  "Трафик",
+           "hits_view_search — карточка просмотрена из поисковой выдачи.",
            "api", "number", "sum"),
     Metric("ad_imp_search",       "Рекл. показы в поиске", "Трафик",
-           "Рекламные показы в поиске (ad_statistics, если разбито по типам).",
+           "Рекламные показы в поиске (если разбито по типам).",
            "api", "number", "sum"),
-    Metric("imp_pdp",             "Показы PDP",          "Трафик",
-           "hits_view_pdp — показы на странице товара.",
+    Metric("imp_pdp",             "Просмотры PDP",       "Трафик",
+           "hits_view_pdp — просмотры на странице товара.",
            "api", "number", "sum"),
     Metric("position_search",     "Позиция в поиске",    "Трафик",
            "Средняя позиция в выдаче за день (analytics_daily.position_category).",

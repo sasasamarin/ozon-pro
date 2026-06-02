@@ -45,15 +45,23 @@ class MarkerCreate(BaseModel):
 @router.get("/", response_model=list[MarkerRow])
 async def list_markers(
     days: int = Query(90, ge=1, le=730),
+    date_from: date_cls | None = Query(None),
+    date_to: date_cls | None = Query(None),
     product_id: str | None = Query(None),
     marker_type: str | None = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[MarkerRow]:
-    cutoff = datetime.now(UTC) - timedelta(days=days)
+    if date_from and date_to:
+        from_dt = datetime.combine(date_from, datetime.min.time(), tzinfo=UTC)
+        to_dt = datetime.combine(date_to, datetime.max.time(), tzinfo=UTC)
+    else:
+        to_dt = datetime.now(UTC)
+        from_dt = to_dt - timedelta(days=days)
     q = select(Marker).where(
         Marker.company_id == current_user.company_id,
-        Marker.created_at >= cutoff,
+        Marker.created_at >= from_dt,
+        Marker.created_at <= to_dt,
     )
     if product_id:
         try:

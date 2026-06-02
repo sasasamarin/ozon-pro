@@ -73,6 +73,8 @@ async def _prods(db: AsyncSession, ids: list[uuid.UUID]) -> dict[uuid.UUID, Prod
 @router.get("/reviews", response_model=list[ReviewRow])
 async def list_reviews(
     days: int = Query(90, ge=1, le=730),
+    date_from: date_cls | None = Query(None),
+    date_to: date_cls | None = Query(None),
     rating: int | None = Query(None, ge=1, le=5),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -80,7 +82,12 @@ async def list_reviews(
     accs = await _accs(db, current_user.company_id)
     if not accs:
         return []
-    cutoff = datetime.now(UTC) - timedelta(days=days)
+    if date_from and date_to:
+        cutoff = datetime.combine(date_from, datetime.min.time(), tzinfo=UTC)
+        cutoff_to = datetime.combine(date_to, datetime.max.time(), tzinfo=UTC)
+    else:
+        cutoff_to = datetime.now(UTC)
+        cutoff = cutoff_to - timedelta(days=days)
     q = select(Review).where(
         Review.ozon_account_id.in_(list(accs.keys())),
         Review.created_at_ozon >= cutoff,
@@ -116,6 +123,8 @@ async def list_reviews(
 @router.get("/questions", response_model=list[QuestionRow])
 async def list_questions(
     days: int = Query(90, ge=1, le=730),
+    date_from: date_cls | None = Query(None),
+    date_to: date_cls | None = Query(None),
     only_unanswered: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -123,7 +132,12 @@ async def list_questions(
     accs = await _accs(db, current_user.company_id)
     if not accs:
         return []
-    cutoff = datetime.now(UTC) - timedelta(days=days)
+    if date_from and date_to:
+        cutoff = datetime.combine(date_from, datetime.min.time(), tzinfo=UTC)
+        cutoff_to = datetime.combine(date_to, datetime.max.time(), tzinfo=UTC)
+    else:
+        cutoff_to = datetime.now(UTC)
+        cutoff = cutoff_to - timedelta(days=days)
     q = select(Question).where(
         Question.ozon_account_id.in_(list(accs.keys())),
         Question.created_at_ozon >= cutoff,

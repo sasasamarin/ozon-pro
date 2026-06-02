@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
+import { dateParams } from '@/lib/dateParams'
 
 interface Row {
   cabinet_id: string
@@ -28,9 +29,14 @@ interface Resp {
 
 export function Summary() {
   const [days, setDays] = useState(30)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const { data, isLoading } = useQuery<Resp>({
-    queryKey: ['summary', days],
-    queryFn: async () => (await api.get(`/analytics/summary/?days=${days}`)).data,
+    queryKey: ['summary', days, dateFrom, dateTo],
+    queryFn: async () => {
+      const p = dateParams(days, dateFrom, dateTo)
+      return (await api.get(`/analytics/summary/?${p.toString()}`)).data
+    },
   })
 
   const totalRevenue = (data?.rows || []).reduce((s, r) => s + r.revenue, 0)
@@ -46,7 +52,7 @@ export function Summary() {
           </p>
         </div>
         <div className="flex gap-2">
-          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
+          <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
         </div>
       </div>
 

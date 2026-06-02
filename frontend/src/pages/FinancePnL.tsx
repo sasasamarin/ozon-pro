@@ -8,6 +8,7 @@ import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
+import { addDateParams } from '@/lib/dateParams'
 import { useCabinetStore } from '@/stores/cabinet'
 import { XlsxCoverageMatrix } from '@/components/XlsxCoverageMatrix'
 
@@ -50,12 +51,15 @@ interface PnLResp {
 export function FinancePnL() {
   const { selectedCabinetIds } = useCabinetStore()
   const [days, setDays] = useState(30)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const navigate = useNavigate()
 
   const { data, isLoading } = useQuery<PnLResp>({
     queryKey: ['pnl', selectedCabinetIds, days],
     queryFn: async () => {
-      const params = new URLSearchParams({ days: String(days), compare: 'true' })
+      const params = new URLSearchParams({compare: 'true' })
+      addDateParams(params, days, dateFrom, dateTo)
       selectedCabinetIds.forEach((id) => params.append('cabinet_ids', id))
       const res = await api.get(`/finance/pnl/?${params.toString()}`)
       return res.data
@@ -80,7 +84,7 @@ export function FinancePnL() {
           </p>
         </div>
         <div className="flex gap-2">
-          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
+          <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
         </div>
       </div>
 

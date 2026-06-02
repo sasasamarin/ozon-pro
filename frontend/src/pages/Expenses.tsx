@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
+import { dateParams } from '@/lib/dateParams'
 
 interface ExpenseRow {
   id: string
@@ -40,11 +41,16 @@ const CATEGORY_COLORS: Record<string, string> = {
 export function Expenses() {
   const qc = useQueryClient()
   const [days, setDays] = useState(90)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
 
   const { data, isLoading } = useQuery<{ rows: ExpenseRow[]; total_amount: number }>({
-    queryKey: ['expenses', days],
-    queryFn: async () => (await api.get(`/finance/expenses/?days=${days}`)).data,
+    queryKey: ['expenses', days, dateFrom, dateTo],
+    queryFn: async () => {
+      const p = dateParams(days, dateFrom, dateTo)
+      return (await api.get(`/finance/expenses/?${p.toString()}`)).data
+    },
   })
 
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
@@ -82,7 +88,7 @@ export function Expenses() {
           </p>
         </div>
         <div className="flex gap-2">
-          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
+          <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
           <Button onClick={() => setShowForm((v) => !v)}>
             <Plus className="w-4 h-4" /> Расход
           </Button>

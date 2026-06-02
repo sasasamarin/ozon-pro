@@ -15,6 +15,7 @@ import { api } from '@/lib/api'
 import { formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
 import { DateRangeBar } from '@/components/DateRangeBar'
+import { addDateParams } from '@/lib/dateParams'
 
 interface MetricInfo { key: string; label: string; group: string }
 interface MatrixRow { date: string; values: Record<string, number | null> }
@@ -25,6 +26,8 @@ type ChartType = 'line' | 'bar' | 'scatter'
 export function MetricsBuilder() {
   const { selectedCabinetIds } = useCabinetStore()
   const [days, setDays] = useState(28)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const [chartType, setChartType] = useState<ChartType>('line')
   const [xMetric, setXMetric] = useState<string>('date')     // 'date' = ось времени
   const [yMetrics, setYMetrics] = useState<string[]>(['impressions', 'orders'])
@@ -36,7 +39,8 @@ export function MetricsBuilder() {
   })
 
   const qs = useMemo(() => {
-    const p = new URLSearchParams({ days: String(days) })
+    const p = new URLSearchParams({})
+    addDateParams(p, days, dateFrom, dateTo)
     yMetrics.forEach((m) => p.append('metrics', m))
     if (xMetric !== 'date') p.append('metrics', xMetric)
     selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
@@ -113,7 +117,7 @@ export function MetricsBuilder() {
           </p>
         </div>
         <div className="flex gap-2">
-          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} presets={[7, 28, 30, 90]} />
+          <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} presets={[7, 28, 30, 90]} />
         </div>
       </div>
 

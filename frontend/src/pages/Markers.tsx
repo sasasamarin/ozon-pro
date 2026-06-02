@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
+import { dateParams } from '@/lib/dateParams'
 
 interface MarkerRow {
   id: string
@@ -60,11 +61,16 @@ const TYPE_COLORS: Record<string, string> = {
 export function Markers() {
   const qc = useQueryClient()
   const [days, setDays] = useState(90)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
 
   const { data, isLoading } = useQuery<MarkerRow[]>({
-    queryKey: ['markers', days],
-    queryFn: async () => (await api.get(`/markers/?days=${days}`)).data,
+    queryKey: ['markers', days, dateFrom, dateTo],
+    queryFn: async () => {
+      const p = dateParams(days, dateFrom, dateTo)
+      return (await api.get(`/markers/?${p.toString()}`)).data
+    },
   })
 
   const { data: products } = useQuery<ProductLite[]>({
@@ -106,7 +112,7 @@ export function Markers() {
           </p>
         </div>
         <div className="flex gap-2">
-          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
+          <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
           <Button onClick={() => setShowForm((v) => !v)}>
             <Plus className="w-4 h-4" /> Маркер
           </Button>

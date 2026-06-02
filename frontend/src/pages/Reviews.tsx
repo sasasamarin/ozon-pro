@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
+import { addDateParams } from '@/lib/dateParams'
 
 interface ReviewRow {
   id: string
@@ -27,11 +28,14 @@ interface ReviewRow {
 export function Reviews() {
   const [rating, setRating] = useState<number | undefined>(undefined)
   const [days, setDays] = useState(90)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery<ReviewRow[]>({
-    queryKey: ['reviews', days, rating],
+    queryKey: ['reviews', days, dateFrom, dateTo, rating],
     queryFn: async () => {
-      const params = new URLSearchParams({ days: String(days) })
+      const params = new URLSearchParams({})
+      addDateParams(params, days, dateFrom, dateTo)
       if (rating) params.append('rating', String(rating))
       return (await api.get(`/communications/reviews?${params.toString()}`)).data
     },
@@ -59,7 +63,7 @@ export function Reviews() {
           </button>
         ))}
         <div className="flex gap-2 ml-auto">
-          <DateRangeBar days={days} onChange={(r) => setDays(r.days)} />
+          <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
         </div>
       </div>
 
