@@ -177,7 +177,10 @@ async def _fetch_daily_metrics(
             rows[d] = {}
         return rows[d]
 
-    # 1. analytics_daily — показы / клики (=session_view) / корзины / заказы / выкуплено
+    # 1. analytics_daily — ТОЛЬКО UX-метрики воронки (показы / клики / корзина).
+    # Они приходят от Ozon Аналитики с лагом 1-2 дня — это нормально.
+    # Заказы / выкуплено / выручка для свежих дней лагают (вчера обычно
+    # ordered_units=0) — поэтому берём из order_items (sync ежечасный, в реалтайме).
     ad_rows = (await db.execute(text("""
         SELECT date,
                COALESCE(hits_view_search,0)+COALESCE(hits_view_pdp,0) AS impressions,
@@ -185,12 +188,7 @@ async def _fetch_daily_metrics(
                COALESCE(hits_view_pdp,0) AS imp_pdp,
                COALESCE(session_view_search,0)+COALESCE(session_view_pdp,0) AS clicks,
                COALESCE(hits_tocart_search,0)+COALESCE(hits_tocart_pdp,0) AS cart_count,
-               COALESCE(ordered_units,0) AS orders_units,
-               COALESCE(delivered_units,0) AS delivered,
-               COALESCE(returns,0) AS returns_,
-               COALESCE(cancellations,0) AS cancelled,
-               COALESCE(position_category,0)::float AS position_search,
-               COALESCE(revenue,0)::float AS rev
+               COALESCE(position_category,0)::float AS position_search
         FROM analytics_daily WHERE product_id = :pid AND date >= :df AND date <= :dt
     """), {"pid": str(product_id), "df": date_from, "dt": date_to})).all()
     for r in ad_rows:
@@ -200,12 +198,42 @@ async def _fetch_daily_metrics(
         d["imp_pdp"] = float(r.imp_pdp or 0)
         d["clicks"] = float(r.clicks or 0)
         d["cart_count"] = float(r.cart_count or 0)
-        d["orders"] = float(r.orders_units or 0)
-        d["delivered"] = float(r.delivered or 0)
-        d["returned_after"] = float(r.returns_ or 0)
-        d["cancelled"] = float(r.cancelled or 0)
         d["position_search"] = float(r.position_search or 0) or None
-        d["revenue"] = float(r.rev or 0)
+
+    # 1b. orders + order_items — РЕАЛЬНЫЕ заказы и выкуп (свежие).
+    # Совпадает с Ozon Seller UI «Заказы» 1:1.
+    orders_rows = (await db.execute(text("""
+        SELECT DATE(o.order_created_at) AS d,
+               SUM(oi.quantity) AS orders_qty,
+               SUM(oi.quantity) FILTER (WHERE o.status = 'delivered') AS delivered_qty,
+               SUM(oi.quantity) FILTER (WHERE o.status = 'cancelled') AS cancelled_qty,
+               SUM(oi.quantity) FILTER (WHERE o.status IN ('awaiting_packaging','awaiting_deliver','delivering','arrived')) AS pending_qty,
+               SUM(oi.price * oi.quantity)::float AS revenue
+        FROM order_items oi JOIN orders o ON o.id = oi.order_id
+        WHERE oi.product_id = :pid
+          AND o.order_created_at >= :df
+          AND o.order_created_at < (CAST(:dt AS date) + INTERVAL '1 day')
+        GROUP BY 1
+    """), {"pid": str(product_id), "df": date_from, "dt": date_to})).all()
+    for r in orders_rows:
+        d = _ensure(r.d)
+        d["orders"] = float(r.orders_qty or 0)
+        d["delivered"] = float(r.delivered_qty or 0)
+        d["cancelled"] = float(r.cancelled_qty or 0)
+        d["pending_decision"] = float(r.pending_qty or 0)
+        d["revenue"] = float(r.revenue or 0)
+
+    # 1c. returns — выкуплено и вернули (по дате возврата)
+    returns_rows = (await db.execute(text("""
+        SELECT DATE(return_date) AS d, SUM(quantity)::float AS returned_qty
+        FROM returns
+        WHERE product_id = :pid
+          AND return_date >= :df AND return_date <= :dt
+        GROUP BY 1
+    """), {"pid": str(product_id), "df": date_from, "dt": date_to})).all()
+    for r in returns_rows:
+        d = _ensure(r.d)
+        d["returned_after"] = float(r.returned_qty or 0)
 
     # 2. ad_statistics — реклама
     ad_stat = (await db.execute(text("""
@@ -225,12 +253,9 @@ async def _fetch_daily_metrics(
         d["ad_orders"] = float(r.orders or 0)
         d["ad_spend"] = float(r.spend or 0)
 
-    # 3. order_items — цены / выручка (если analytics_daily ничего не дал)
-    oi_rows = (await db.execute(text("""
+    # 3. Цены — средневзвешенные по qty за день
+    price_rows = (await db.execute(text("""
         SELECT DATE(o.order_created_at) d,
-               COUNT(*) AS items,
-               SUM(oi.quantity) AS qty,
-               SUM(oi.price * oi.quantity)::float AS revenue,
                AVG(oi.price)::float AS avg_price,
                SUM(oi.customer_price * oi.quantity)::float / NULLIF(SUM(oi.quantity), 0) AS avg_cp
         FROM order_items oi JOIN orders o ON o.id = oi.order_id
@@ -238,11 +263,8 @@ async def _fetch_daily_metrics(
           AND o.order_created_at >= :df AND o.order_created_at < (CAST(:dt AS date) + INTERVAL '1 day')
         GROUP BY 1
     """), {"pid": str(product_id), "df": date_from, "dt": date_to})).all()
-    for r in oi_rows:
+    for r in price_rows:
         d = _ensure(r.d)
-        # revenue из order_items имеет приоритет если analytics не дал
-        if not d.get("revenue"):
-            d["revenue"] = float(r.revenue or 0)
         d["seller_price"] = float(r.avg_price or 0) or None
         d["customer_price"] = float(r.avg_cp or 0) or None
 

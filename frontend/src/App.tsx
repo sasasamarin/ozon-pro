@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { Login } from '@/pages/Login'
 import { Register } from '@/pages/Register'
 import { Dashboard } from '@/pages/Dashboard'
+import { DashboardBuilder } from '@/pages/DashboardBuilder'
 import { Cabinets } from '@/pages/Cabinets'
 import { CabinetNew } from '@/pages/CabinetNew'
 import { CabinetEdit } from '@/pages/CabinetEdit'
@@ -67,7 +68,8 @@ export default function App() {
         }
       >
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/dashboard" element={<DashboardBuilder />} />
+        <Route path="/dashboard/legacy" element={<Dashboard />} />
         <Route path="/cabinets" element={<Cabinets />} />
         <Route path="/cabinets/new" element={<CabinetNew />} />
         <Route path="/cabinets/:id" element={<CabinetEdit />} />
