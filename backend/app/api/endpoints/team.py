@@ -257,7 +257,11 @@ async def accept_invitation(
         )
         db.add(user)
         await db.flush()
-    # else: пароль не меняем (если юзер уже зареган — пусть входит своим)
+    else:
+        # Существующий юзер: переключаем основную компанию на ту, в которую
+        # пригласили. Все endpoints читают current_user.company_id → юзер
+        # увидит кабинет приглашающего. Пароль не трогаем.
+        user.company_id = inv.company_id
 
     # CompanyMember — проверяем чтобы не дублировать
     existing_member = (await db.execute(
