@@ -212,8 +212,12 @@ async def _aggregate(
     if product_ids:
         where.append(AnalyticsDaily.product_id.in_(product_ids))
     q = select(
-        # Показы всего = hits_view_search + hits_view_pdp
-        func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
+        # Показы всего = общая метрика Ozon hits_view (≈4× от search+pdp, совпадает
+        # с кабинетом). Fallback на search+pdp для строк до ре-синка (hits_view IS NULL).
+        func.coalesce(func.sum(func.coalesce(
+            AnalyticsDaily.hits_view,
+            AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
+        )), 0).label("imp"),
         # Показы в поиске и каталоге (для конверсии «поиск→карточка»)
         func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp_search"),
         # Посещения карточки = session_view_pdp (как в кабинете Ozon).
@@ -412,6 +416,11 @@ async def get_funnel_daily(
     rows = (await db.execute(
         select(
             AnalyticsDaily.date.label("d"),
+            # Показы всего = hits_view (с fallback на search+pdp до ре-синка)
+            func.coalesce(func.sum(func.coalesce(
+                AnalyticsDaily.hits_view,
+                AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
+            )), 0).label("imp_total"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp_s"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("imp_p"),
             # «Посещения карточки» = session_view_pdp (как в кабинете Ozon).
@@ -454,7 +463,7 @@ async def get_funnel_daily(
     for r in rows:
         imp_s = int(r.imp_s or 0)
         imp_p = int(r.imp_p or 0)
-        imp = imp_s + imp_p
+        imp = int(r.imp_total or 0)  # «Показы всего» = hits_view (Ozon UI), не search+pdp
         clicks = int(r.clicks or 0)
         cart_s = int(r.cart_s or 0)
         cart_p = int(r.cart_p or 0)
@@ -523,7 +532,10 @@ async def best_worst_days(
     rows = (await db.execute(
         select(
             AnalyticsDaily.date.label("d"),
-            func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
+            func.coalesce(func.sum(func.coalesce(
+                AnalyticsDaily.hits_view,
+                AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
+            )), 0).label("imp"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
             func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
@@ -734,7 +746,10 @@ async def funnel_correlations(
     rows = (await db.execute(
         select(
             AnalyticsDaily.date.label("d"),
-            func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
+            func.coalesce(func.sum(func.coalesce(
+                AnalyticsDaily.hits_view,
+                AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
+            )), 0).label("imp"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
         )
         .select_from(AnalyticsDaily)

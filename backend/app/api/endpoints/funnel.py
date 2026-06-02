@@ -3,8 +3,8 @@
 
 GET /api/v1/analytics/funnel?days=30&cabinet_ids=...&compare=true
 
-Шаги воронки (агрегируем search + pdp):
-  1. Показы = hits_view_search + hits_view_pdp
+Шаги воронки:
+  1. Показы = hits_view (общая метрика Ozon UI; fallback search+pdp до ре-синка)
   2. В корзину = hits_tocart_search + hits_tocart_pdp
   3. Заказы = ordered_units
   4. Доставлено = delivered_units
@@ -132,7 +132,10 @@ async def _funnel_for_window(
         await db.execute(
             select(
                 func.coalesce(
-                    func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0
+                    func.sum(func.coalesce(
+                        AnalyticsDaily.hits_view,
+                        AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
+                    )), 0
                 ).label("impressions"),
                 func.coalesce(
                     func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0
@@ -245,7 +248,10 @@ async def funnel_top_products(
     if not accs:
         return []
 
-    imp_expr = func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp)
+    imp_expr = func.sum(func.coalesce(
+        AnalyticsDaily.hits_view,
+        AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
+    ))
     cart_expr = func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp)
     orders_expr = func.sum(AnalyticsDaily.ordered_units)
     deliv_expr = func.sum(AnalyticsDaily.delivered_units)
@@ -340,7 +346,10 @@ async def funnel_single_product(
 
     row = (await db.execute(
         select(
-            func.coalesce(func.sum(AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp), 0).label("imp"),
+            func.coalesce(func.sum(func.coalesce(
+                AnalyticsDaily.hits_view,
+                AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
+            )), 0).label("imp"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
             func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),

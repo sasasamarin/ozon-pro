@@ -145,8 +145,8 @@ async def _fetch_daily_cabinet(
     # analytics_daily через products (там нет cabinet_id напрямую)
     ad_rows = (await db.execute(text("""
         SELECT ad.date,
-               SUM(COALESCE(hits_view_search,0)+COALESCE(hits_view_pdp,0))::float AS impressions,
-               SUM(COALESCE(session_view_search,0)+COALESCE(session_view_pdp,0))::float AS clicks,
+               SUM(COALESCE(hits_view, hits_view_search+hits_view_pdp))::float AS impressions,
+               SUM(COALESCE(session_view, session_view_search+session_view_pdp))::float AS clicks,
                SUM(COALESCE(hits_tocart_search,0)+COALESCE(hits_tocart_pdp,0))::float AS cart_count,
                AVG(COALESCE(position_category,0)::float) AS position_search
         FROM analytics_daily ad

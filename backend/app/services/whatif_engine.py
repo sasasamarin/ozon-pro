@@ -104,7 +104,7 @@ async def compute_betas(db: AsyncSession, *, product_id: uuid.UUID, days: int = 
     # Воронка из AnalyticsDaily
     rows = (await db.execute(text("""
         SELECT date,
-               COALESCE(hits_view_search,0)+COALESCE(hits_view_pdp,0) imp,
+               COALESCE(hits_view, hits_view_search+hits_view_pdp) imp,
                COALESCE(session_view_pdp,0) cv,
                COALESCE(hits_tocart_search,0)+COALESCE(hits_tocart_pdp,0) cart,
                COALESCE(ordered_units,0) orders,

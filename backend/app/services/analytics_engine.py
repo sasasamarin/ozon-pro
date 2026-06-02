@@ -148,7 +148,7 @@ async def get_full_context(
 
     # ─── Воронка ───
     funnel = (await db.execute(text("""
-        SELECT SUM(hits_view_search + hits_view_pdp)::bigint impressions,
+        SELECT SUM(COALESCE(hits_view, hits_view_search + hits_view_pdp))::bigint impressions,
                SUM(session_view_pdp)::bigint card_visits,
                SUM(hits_tocart_search + hits_tocart_pdp)::bigint to_cart,
                SUM(ordered_units)::bigint orders,

@@ -41,7 +41,7 @@ UTC = timezone.utc
 
 class DayMetrics(BaseModel):
     """Сырые метрики дня."""
-    impressions: int                 # hits_view_search + hits_view_pdp
+    impressions: int                 # hits_view (Ozon UI), fallback search+pdp
     impressions_search: int          # hits_view_search
     card_visits: int                 # session_view_pdp
     orders: int                      # ordered_units
@@ -161,6 +161,10 @@ async def explain_day(
     ad_query = (
         select(
             AnalyticsDaily.date,
+            func.sum(func.coalesce(
+                AnalyticsDaily.hits_view,
+                AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
+            )).label("hits_total"),
             func.sum(AnalyticsDaily.hits_view_search).label("hits_search"),
             func.sum(AnalyticsDaily.hits_view_pdp).label("hits_pdp"),
             func.sum(AnalyticsDaily.session_view_pdp).label("sess_pdp"),
@@ -186,7 +190,7 @@ async def explain_day(
 
     # day metrics из AnalyticsDaily
     if target:
-        impressions = int((target.hits_search or 0) + (target.hits_pdp or 0))
+        impressions = int(target.hits_total or 0)  # «Показы всего» = hits_view (Ozon UI)
         impressions_search = int(target.hits_search or 0)
         card_visits = int(target.sess_pdp or 0)
         orders_n = int(target.orders_n or 0)
@@ -207,7 +211,7 @@ async def explain_day(
     )
 
     # Период (без целевого дня)
-    impressions_list = [int((r.hits_search or 0) + (r.hits_pdp or 0)) for r in others]
+    impressions_list = [int(r.hits_total or 0) for r in others]
     card_visits_list = [int(r.sess_pdp or 0) for r in others]
     orders_list = [int(r.orders_n or 0) for r in others]
     revenue_list = [float(r.rev or 0) for r in others]
