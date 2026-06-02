@@ -57,12 +57,21 @@ export function Credit() {
           </p>
           <p className="text-[11px] text-fg-muted mt-1">не «долг», а сумма уже списанных комиссий</p>
         </Card>
-        <Card className="p-5">
-          <p className="text-[11px] uppercase text-fg-muted">Учтено в P&L (через transactions)</p>
-          <p className="text-2xl font-semibold text-fg mt-1 tabular-nums">
-            {formatCurrency(data?.total_pnl_interest ?? 0)}
+        <Card className="p-5 border-2 border-emerald-200 bg-emerald-50/30">
+          <p className="text-[11px] uppercase text-emerald-700 font-medium">P&L — без двойного счёта</p>
+          <p className="text-base font-medium text-emerald-900 mt-2">
+            Эти услуги учтены ровно один раз — в основной таблице транзакций
           </p>
-          <p className="text-[11px] text-fg-muted mt-1">эти услуги уже как расход — без дублирования</p>
+          <p className="text-xs text-emerald-700 mt-1.5">
+            Цифра «Удержано Ozon» — справочно. В P&L дополнительно НЕ суммируется,
+            иначе ~1.49 М ₽ early_payout посчитались бы дважды.
+            <br />
+            <a
+              href="https://github.com/sasasamarin/ozon-pro/blob/main/docs/loans_diagnostic.md"
+              target="_blank" rel="noopener noreferrer"
+              className="text-accent hover:underline"
+            >Диагностика двойного счёта →</a>
+          </p>
         </Card>
       </div>
 

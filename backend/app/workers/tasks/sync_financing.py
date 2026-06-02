@@ -194,10 +194,14 @@ async def _sync_one_account(
                         "seq": seq,
                         "movement_type": FinancingMovementType.WITHHOLDING.value,
                         "amount": amount,
-                        # EarlyPaymentAccrual = % за досрочную выплату → P&L
-                        # FlexiblePaymentSchedule = удержание комиссии → не P&L (это
-                        # уже отражено в другом месте, мы тут только трекаем cashflow)
-                        "affects_pnl": tx.operation_type == "OperationMarketplaceServiceEarlyPaymentAccrual",
+                        # ВАЖНО: ВСЕГДА False. ozon_financing_movements — это
+                        # ЗЕРКАЛО уже учтённых в transactions удержаний (one-to-one
+                        # по operation_type), не отдельный расход. Если поставить
+                        # True — любой будущий код, считающий SUM(WHERE affects_pnl)
+                        # поверх этой таблицы, ДВОЙНИТ ~1.49 М ₽ early_payout (см.
+                        # docs/loans_diagnostic.md). Таблица — только витрина для
+                        # страницы /credit.
+                        "affects_pnl": False,
                         "affects_cashflow": True,
                         "affects_debt": 0,
                         "raw_data": {
