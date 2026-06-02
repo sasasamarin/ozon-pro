@@ -171,6 +171,37 @@ METRICS: list[Metric] = [
            "forecast_net_profit / forecast_units.",
            "model", "currency", "weighted_by", "forecast_units"),
 
+    # ---- Семантика (Premium Plus /v1/analytics/product-queries) ----
+    Metric("unique_search_users", "Уник. пользователей из поиска", "Семантика",
+           "Сколько уникальных юзеров видели карточку в поиске Ozon.",
+           "api", "number", "sum"),
+    Metric("unique_view_users",   "Уник. посетителей карточки",   "Семантика",
+           "Уникальные юзеры открыли карточку.",
+           "api", "number", "sum"),
+    Metric("search_position",     "Позиция в поиске",             "Семантика",
+           "Средняя позиция товара в поиске.",
+           "api", "number", "weighted_by", "unique_search_users"),
+    Metric("search_view_conversion", "Конверсия поиск→карточка, %", "Семантика",
+           "Из видевших в поиске — сколько % открыли карточку.",
+           "api", "percent", "weighted_by", "unique_search_users"),
+    Metric("search_gmv",          "Выручка с поиска, ₽",          "Семантика",
+           "GMV от пользователей из поисковой выдачи.",
+           "api", "currency", "sum"),
+
+    # ---- Реализация (Premium Plus /v1/finance/realization/by-day) ----
+    Metric("realization_qty",     "Реализация шт (точно)",        "Реализация",
+           "Точное qty продано (отчёт Ozon, не агрегат).",
+           "api", "number", "sum"),
+    Metric("realization_avg_cp",  "Цена покупателя (точно)",      "Реализация",
+           "Точная weighted_avg customer_price из realization/by-day.",
+           "api", "currency", "weighted_by", "realization_qty"),
+    Metric("realization_bonus",   "СПП-компенсация Ozon",         "Реализация",
+           "Bonus от Ozon продавцу за СПП-скидки.",
+           "api", "currency", "sum"),
+    Metric("realization_fee",     "Комиссия Ozon (точно)",        "Реализация",
+           "Точная комиссия Ozon из realization/by-day.",
+           "api", "currency", "sum"),
+
     # ---- Остатки ----
     Metric("stock_warehouse",     "Остаток на складе",   "Остатки",
            "Σ free_to_sell по всем складам — на конец дня (last).",
@@ -197,7 +228,8 @@ METRICS: list[Metric] = [
 
 
 METRICS_BY_KEY = {m.key: m for m in METRICS}
-METRIC_GROUPS = ["Трафик", "Заказы", "Цена", "Реклама", "Прогноз", "Остатки"]
+METRIC_GROUPS = ["Трафик", "Заказы", "Цена", "Реклама",
+                 "Семантика", "Реализация", "Прогноз", "Остатки"]
 
 
 def aggregate_bucket(metric: Metric, daily_rows: list[dict]) -> float | None:

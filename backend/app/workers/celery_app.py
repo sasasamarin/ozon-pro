@@ -39,6 +39,7 @@ celery_app = Celery(
         "app.workers.tasks.reconcile_realization",
         "app.workers.tasks.sync_category_tree",
         "app.workers.tasks.sync_placement_reports",
+        "app.workers.tasks.sync_premium",
     ],
 )
 

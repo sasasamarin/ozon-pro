@@ -271,6 +271,39 @@ async def _fetch_daily_metrics(
         d["seller_price"] = float(r.avg_price or 0) or None
         d["customer_price"] = float(r.avg_cp or 0) or None
 
+    # 3b. product_queries_daily — Premium Plus: семантика товара
+    pq_rows = (await db.execute(text("""
+        SELECT date,
+               unique_search_users::float AS usu,
+               unique_view_users::float AS uvu,
+               position::float AS pos,
+               view_conversion::float AS vc,
+               gmv::float AS gmv
+        FROM product_queries_daily
+        WHERE product_id = :pid AND date >= :df AND date <= :dt
+    """), {"pid": str(product_id), "df": date_from, "dt": date_to})).all()
+    for r in pq_rows:
+        d = _ensure(r.date)
+        d["unique_search_users"] = float(r.usu or 0) or None
+        d["unique_view_users"] = float(r.uvu or 0) or None
+        d["search_position"] = float(r.pos or 0) or None
+        d["search_view_conversion"] = float(r.vc or 0) or None
+        d["search_gmv"] = float(r.gmv or 0)
+
+    # 3c. realization_daily — Premium Plus: точная посуточная реализация
+    rd_rows = (await db.execute(text("""
+        SELECT day, qty_sold::float AS qty, weighted_cp::float AS cp,
+               sum_bonus::float AS bonus, sum_fee::float AS fee
+        FROM realization_daily
+        WHERE product_id = :pid AND day >= :df AND day <= :dt
+    """), {"pid": str(product_id), "df": date_from, "dt": date_to})).all()
+    for r in rd_rows:
+        d = _ensure(r.day)
+        d["realization_qty"] = float(r.qty or 0)
+        d["realization_avg_cp"] = float(r.cp or 0) or None
+        d["realization_bonus"] = float(r.bonus or 0)
+        d["realization_fee"] = float(r.fee or 0)
+
     # 4. stocks — последний снимок дня
     stocks_rows = (await db.execute(text("""
         SELECT DATE(time) d,
