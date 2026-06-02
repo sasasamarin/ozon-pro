@@ -41,16 +41,18 @@ _ANALYTICS_ENDPOINT = "/v1/analytics/data"  # ключ в sync_state
 
 _METRICS = [
     # Ozon AnalyticsGetDataRequest.Metrics: max 14 items.
+    # ОБЩИЕ hits_view/session_view добавлены — это «Показы Ozon UI» (≈4× от
+    # search+pdp). conv_tocart_search/pdp убраны (вычисляем из hits).
     "ordered_units",
     "revenue",
+    "hits_view",         # ← общая «Показы» = Ozon UI
     "hits_view_search",
     "hits_view_pdp",
     "hits_tocart_search",
     "hits_tocart_pdp",
+    "session_view",      # ← общая «Уникальные посетители»
     "session_view_search",
     "session_view_pdp",
-    "conv_tocart_search",
-    "conv_tocart_pdp",
     "delivered_units",
     "returns",
     "cancellations",
@@ -348,10 +350,10 @@ async def _chunk_async(
                     stmt = pg_insert(AnalyticsDaily).values(rows)
                     update_cols = (
                         "ordered_units", "revenue",
+                        "hits_view", "session_view",
                         "hits_view_search", "hits_view_pdp",
                         "hits_tocart_search", "hits_tocart_pdp",
                         "session_view_search", "session_view_pdp",
-                        "conv_tocart_search", "conv_tocart_pdp",
                         "delivered_units", "returns", "cancellations",
                         "position_category",
                     )
@@ -540,14 +542,14 @@ def _metric_row(m: dict) -> dict:
     return {
         "ordered_units": _to_int(m.get("ordered_units")),
         "revenue": _to_float(m.get("revenue")),
+        "hits_view": _to_int(m.get("hits_view")),
         "hits_view_search": _to_int(m.get("hits_view_search")),
         "hits_view_pdp": _to_int(m.get("hits_view_pdp")),
         "hits_tocart_search": _to_int(m.get("hits_tocart_search")),
         "hits_tocart_pdp": _to_int(m.get("hits_tocart_pdp")),
+        "session_view": _to_int(m.get("session_view")),
         "session_view_search": _to_int(m.get("session_view_search")),
         "session_view_pdp": _to_int(m.get("session_view_pdp")),
-        "conv_tocart_search": _to_float(m.get("conv_tocart_search")),
-        "conv_tocart_pdp": _to_float(m.get("conv_tocart_pdp")),
         "delivered_units": _to_int(m.get("delivered_units")),
         "returns": _to_int(m.get("returns")),
         "cancellations": _to_int(m.get("cancellations")),

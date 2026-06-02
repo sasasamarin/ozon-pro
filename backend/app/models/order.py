@@ -271,12 +271,14 @@ class AnalyticsDaily(Base):
     )
 
     # Показы
+    hits_view: Mapped[int | None] = mapped_column(Integer, nullable=True)  # общая «Показы Ozon UI»
     hits_view_search: Mapped[int] = mapped_column(Integer, default=0)  # в поиске
     hits_view_pdp: Mapped[int] = mapped_column(Integer, default=0)  # карточки
     hits_tocart_search: Mapped[int] = mapped_column(Integer, default=0)
     hits_tocart_pdp: Mapped[int] = mapped_column(Integer, default=0)
 
     # Сессии
+    session_view: Mapped[int | None] = mapped_column(Integer, nullable=True)  # общая «Уникальные посетители»
     session_view_search: Mapped[int] = mapped_column(Integer, default=0)
     session_view_pdp: Mapped[int] = mapped_column(Integer, default=0)
 

@@ -41,11 +41,13 @@ class Metric:
 # === Полный каталог 45 метрик ===
 METRICS: list[Metric] = [
     # ---- Трафик и воронка ----
-    Metric("impressions",         "Просмотры карточки",  "Трафик",
+    Metric("impressions",         "Показы",              "Трафик",
+           "Общая метрика «Показы» = карточка в выдаче (analytics_daily.hits_view). "
+           "Совпадает с Ozon UI Аналитика → Показы (≈4× от search+pdp разбивки).",
+           "api", "number", "sum"),
+    Metric("impressions_legacy",  "Просмотры карточки",  "Трафик",
            "hits_view_search + hits_view_pdp — пользователь посмотрел карточку. "
-           "ЭТО НЕ «Показы» из Ozon UI Аналитики (≈4× больше — это карточка в "
-           "выдаче ДО клика, доступна только через Premium-отчёт, не через "
-           "/v1/analytics/data). Расхождение с Ozon UI здесь нормальное.",
+           "Подмножество «Показов» (только после клика на карточку).",
            "api", "number", "sum"),
     Metric("ad_impressions",      "Рекламные показы",    "Трафик",
            "ad_statistics.impressions — реклама показала карточку.",
