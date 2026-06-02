@@ -48,23 +48,33 @@ async def _sync_product_queries_async(
     for acc in accounts:
         async with SessionLocal() as db:
             sku_to_id = await load_extended_sku_map(db, acc.id)
+        # skus обязательны в API (1-1000) → батчи
+        all_skus = list(sku_to_id.keys())
+        if not all_skus:
+            continue
+        sku_batches = [all_skus[i:i+1000] for i in range(0, len(all_skus), 1000)]
+
         cid = decrypt_secret(acc.client_id_encrypted)
         apk = decrypt_secret(acc.api_key_encrypted)
         async with OzonSellerClient(cid, apk) as client:
             for d in days:
                 df = f"{d.isoformat()}T00:00:00Z"
                 dt = f"{d.isoformat()}T23:59:59Z"
-                try:
-                    r = await client._request(
-                        "POST", "/v1/analytics/product-queries",
-                        json={"date_from": df, "date_to": dt, "page_size": 1000},
-                    )
-                    items = r.get("items") or []
-                except OzonAPIError as e:
-                    log.warning("product_queries_fail", account=str(acc.id),
-                                date=d.isoformat(), err=str(e)[:120])
+                items = []
+                for batch in sku_batches:
+                    try:
+                        r = await client._request(
+                            "POST", "/v1/analytics/product-queries",
+                            json={"date_from": df, "date_to": dt,
+                                  "skus": [str(s) for s in batch],
+                                  "page_size": 1000},
+                        )
+                        items.extend(r.get("items") or [])
+                    except OzonAPIError as e:
+                        if "no data" not in str(e).lower():
+                            log.warning("product_queries_fail", account=str(acc.id),
+                                        date=d.isoformat(), err=str(e)[:120])
                     await asyncio.sleep(_PAGE_SLEEP_S)
-                    continue
 
                 bulk = []
                 for it in items:
