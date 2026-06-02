@@ -101,8 +101,17 @@ METRICS: list[Metric] = [
            "derived", "percent", "weighted_by", "clicks"),
 
     # ---- Заказы и продажи ----
-    Metric("revenue",             "Сумма заказов, ₽",    "Заказы",
-           "Σ price × qty за день (order_items × orders).",
+    Metric("revenue",             "Сумма заказов (по цене продавца), ₽", "Заказы",
+           "Σ price × qty за день по order_items. ВСЕ статусы (включая в пути, "
+           "отмены). Это НЕ выручка продавца — берётся цена ДО фактической "
+           "доставки, без Баллов и Программ партнёров. Для P&L и налога "
+           "использовать seller_revenue.",
+           "api", "currency", "sum"),
+    Metric("seller_revenue",      "Выручка продавца, ₽", "Заказы",
+           "Σ accruals_for_sale из transactions (OperationAgentDeliveredToCustomer): "
+           "что Ozon РЕАЛЬНО начислил продавцу = Выручка + Баллы за скидки + "
+           "Программы партнёров. Только по доставленным заказам, по operation_date. "
+           "База маржи и налога. Источник истины P&L.",
            "api", "currency", "sum"),
     Metric("orders",              "Заказы (шт)",         "Заказы",
            "Сколько заказов за день.",

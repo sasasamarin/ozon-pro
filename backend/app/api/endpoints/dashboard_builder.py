@@ -206,6 +206,22 @@ async def _fetch_daily_cabinet(
         d["seller_price"] = float(r.seller_price or 0) or None
         d["customer_price"] = float(r.customer_price or 0) or None
 
+    # seller_revenue — accruals_for_sale из transactions (что Ozon реально
+    # начислил продавцу, включая Баллы за скидки и Программы партнёров).
+    # Источник истины P&L. По operation_date — это дата ДОСТАВКИ, не заказа.
+    sr_rows = (await db.execute(text("""
+        SELECT operation_date::date AS d,
+               COALESCE(SUM(accruals_for_sale), 0)::float AS sr
+        FROM transactions
+        WHERE ozon_account_id = ANY(:cabs)
+          AND operation_type = 'OperationAgentDeliveredToCustomer'
+          AND operation_date >= :df
+          AND operation_date <= :dt
+        GROUP BY 1
+    """), params)).all()
+    for r in sr_rows:
+        _ensure(r.d)["seller_revenue"] = float(r.sr or 0)
+
     # returns
     ret = (await db.execute(text("""
         SELECT DATE(return_date) d, SUM(quantity)::float qty
