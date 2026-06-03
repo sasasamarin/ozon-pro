@@ -110,6 +110,10 @@ class FunnelDailyPoint(BaseModel):
     # Средняя «цена покупателя с СПП» за день — драйвер спроса, не влияет на выручку
     avg_customer_price: float | None = None
     avg_seller_price: float | None = None
+    # Рекламный расход за день (Performance API daily, AdStatistics.spend) —
+    # для оверлея на графике воронки. Без этого поля Pydantic молча
+    # отбрасывает kwarg и фронт строит график без рекламной линии.
+    ad_spend: float | None = None
 
 
 class BestWorstDay(BaseModel):
