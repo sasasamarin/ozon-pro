@@ -122,7 +122,10 @@ async def category_monthly(
             if ym and "-" in ym and len(ym) == 7:
                 rows.append({"ym": ym, "revenue": revenue, "ordered_units": units})
         rows.sort(key=lambda x: x["ym"])
-        _CACHE[key] = (now, {"rows": rows})
+        # Не кэшируем пустой результат — иначе из-за 429/transient ошибки
+        # навсегда залипнем на «нет данных». Повторим в следующий заход.
+        if rows:
+            _CACHE[key] = (now, {"rows": rows})
         return _select_metric(rows, metric)
 
 

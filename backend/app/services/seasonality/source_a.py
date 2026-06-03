@@ -230,7 +230,7 @@ async def detect_cabinet(
             FROM order_items oi
             JOIN orders o ON o.id = oi.order_id
             JOIN products p ON p.id = oi.product_id
-            WHERE p.ozon_account_id = :cid AND p.archived_at IS NULL
+            WHERE p.ozon_account_id = :cid AND p.is_archived = false
             GROUP BY 1, 2
         ),
         per_sku_history AS (
@@ -240,7 +240,7 @@ async def detect_cabinet(
                 MAX(DATE(o.order_created_at)) AS last_d
             FROM order_items oi JOIN orders o ON o.id = oi.order_id
             JOIN products p ON p.id = oi.product_id
-            WHERE p.ozon_account_id = :cid AND p.archived_at IS NULL
+            WHERE p.ozon_account_id = :cid AND p.is_archived = false
             GROUP BY 1
         )
         SELECT p.id::text AS id, p.name, p.offer_id, p.ozon_sku,
@@ -252,7 +252,7 @@ async def detect_cabinet(
         FROM products p
         LEFT JOIN per_sku_history h ON h.product_id = p.id
         LEFT JOIN per_sku_month psm ON psm.product_id = p.id
-        WHERE p.ozon_account_id = :cid AND p.archived_at IS NULL
+        WHERE p.ozon_account_id = :cid AND p.is_archived = false
         GROUP BY p.id, p.name, p.offer_id, p.ozon_sku, h.first_d, h.last_d
         ORDER BY p.name
     """), {"cid": str(cabinet_id)})).all()
