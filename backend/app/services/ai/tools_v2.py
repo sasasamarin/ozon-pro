@@ -335,15 +335,16 @@ async def unit_economics(
     if not seller:
         return {"error": "Нет цены продавца"}
 
-    # Средние коэффициенты Ozon — комиссия 41%, эквайринг ~1.5%, логистика ~10%
-    # (брифовые). Точные числа подтягиваются из последних transactions.
-    comm_pct = 0.41
-    acq_pct = 0.015
-    log_pct = 0.10
-
+    # Источник коэффициентов — services/finance_consts.py (единая константа,
+    # 41% было исторической ОШИБКОЙ из старого reconcile_realization).
+    from app.services.finance_consts import (
+        DEFAULT_COMMISSION_PCT, ACQUIRING_PCT_DEFAULT, LOGISTICS_PER_UNIT_DEFAULT,
+    )
+    comm_pct = DEFAULT_COMMISSION_PCT / 100  # 25%
+    acq_pct = ACQUIRING_PCT_DEFAULT / 100    # 1.5%
     commission = seller * comm_pct
     acquiring = seller * acq_pct
-    logistics = seller * log_pct
+    logistics = LOGISTICS_PER_UNIT_DEFAULT  # ₽/шт, не %
     mp_costs = commission + acquiring + logistics
     margin_before_cogs = seller - mp_costs
     margin = margin_before_cogs - cost if cost else None
@@ -354,9 +355,10 @@ async def unit_economics(
         "product_id": p.id, "name": p.name,
         "price_rub": round(seller, 2),
         "cost_rub": round(cost, 2) if cost else None,
-        "mp_costs_pct_estimates": {
-            "commission_pct": comm_pct * 100, "acquiring_pct": acq_pct * 100,
-            "logistics_pct": log_pct * 100,
+        "mp_costs_estimates": {
+            "commission_pct": comm_pct * 100,
+            "acquiring_pct": acq_pct * 100,
+            "logistics_rub_per_unit": LOGISTICS_PER_UNIT_DEFAULT,
         },
         "mp_costs_total_rub": round(mp_costs, 2),
         "margin_before_cogs_rub": round(margin_before_cogs, 2),
