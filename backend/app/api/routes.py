@@ -26,6 +26,7 @@ from app.api.endpoints import (
     product_stats,
     seasonality,
     ai_chat,
+    ai_chat_v2,
     storage_warning,
     dashboard_builder,
     supplies,
