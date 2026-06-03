@@ -301,19 +301,22 @@ async def get_pnl(
     effective_revenue = revenue - returned_revenue
     cogs = await _cogs_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
     expenses = await _expenses_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    financing_fees = await _ozon_financing_fees_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
 
     gross_profit = effective_revenue - cogs
     total_expenses = sum(expenses.values())
     marginal_profit = gross_profit - total_expenses
 
-    # Проценты по кредитам (Ветка 1 ТЗ flowoi_tz_loans.md) — финансовый расход.
-    # Тело займа в P&L НЕ попадает.
+    # Проценты по кредитам (ручной ввод) + услуги досрочных выплат Озона (API)
     loan_interest, loan_fee = await _loan_interest_for_window(
         db, company_id=current_user.company_id,
         dt_from=period_from, dt_to=period_to,
     )
     loan_finance_cost = loan_interest + loan_fee
-    profit_before_tax = marginal_profit - loan_finance_cost
+
+    # Складываем ручные проценты и комиссии Озона
+    total_finance_cost = loan_finance_cost + financing_fees
+    profit_before_tax = marginal_profit - total_finance_cost
 
     has_missing, missing_n = await _missing_costs(db, accs=accs)
 
@@ -384,13 +387,22 @@ async def get_pnl(
 
     # Проценты по кредитам — финансовый расход (между маржой и налогом).
     # Тело займа в P&L НЕ показывается вообще, оно только в ДДС.
-    if loan_finance_cost > 0:
-        rows.append(PnLRow(
-            label="− Проценты по кредитам",
-            amount=round(-loan_finance_cost, 2),
-            pct_of_revenue=pct(-loan_finance_cost),
-            is_negative=True,
-        ))
+    # Проценты по кредитам и комиссии за досрочные выплаты Озона
+    if loan_finance_cost > 0 or financing_fees > 0:
+        if loan_finance_cost > 0:
+            rows.append(PnLRow(
+                label="− Проценты по кредитам (банк)",
+                amount=round(-loan_finance_cost, 2),
+                pct_of_revenue=pct(-loan_finance_cost),
+                is_negative=True,
+            ))
+        if financing_fees > 0:
+            rows.append(PnLRow(
+                label="− Услуги ускоренного вывода Ozon (досрочные выплаты)",
+                amount=round(-financing_fees, 2),
+                pct_of_revenue=pct(-financing_fees),
+                is_negative=True,
+            ))
         rows.append(PnLRow(
             label="ПРИБЫЛЬ ДО НАЛОГА",
             amount=round(profit_before_tax, 2),
@@ -486,3 +498,23 @@ async def get_pnl(
         prev_marginal_profit=round(prev_marginal, 2) if prev_marginal is not None else None,
         prev_net_profit=round(prev_net, 2) if prev_net is not None else None,
     )
+
+async def _ozon_financing_fees_for_window(
+    db: AsyncSession, *, accs: list[uuid.UUID], dt_from: datetime, dt_to: datetime
+) -> float:
+    """Суммирует удержания Ozon за досрочные выплаты и гибкий график из транзакций."""
+    if not accs:
+        return 0.0
+    row = await db.execute(
+        select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0))
+        .where(
+            Transaction.ozon_account_id.in_(accs),
+            Transaction.time >= dt_from,
+            Transaction.time < dt_to,
+            Transaction.operation_type.in_([
+                "OperationMarketplaceFlexiblePaymentSchedule",
+                "OperationMarketplaceServiceEarlyPaymentAccrual"
+            ]),
+        )
+    )
+    return float(row.scalar() or 0)
