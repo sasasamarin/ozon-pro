@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     AI_DEFAULT_MODEL: str = "claude-sonnet-4-6"
     AI_MAX_TOOL_ITERATIONS: int = 6  # защита от бесконечного tool-цикла
 
+    # AI Phase 1 (FLOWOI_AI_TZ §8): OpenAI для function calling.
+    # Ключ ТОЛЬКО на бэкенде (env), фронт не видит. Если не задан — endpoint
+    # отдаёт 503 с инструкцией добавить ключ.
+    OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = ""  # пусто = https://api.openai.com/v1. Можно прокси.
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_MAX_TOOL_ITERATIONS: int = 6
+
     # --- SENTRY ---
     SENTRY_DSN: str = ""
     SENTRY_ENVIRONMENT: str = "development"

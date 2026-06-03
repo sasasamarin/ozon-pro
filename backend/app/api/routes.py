@@ -83,6 +83,10 @@ api_router.include_router(
 api_router.include_router(
     ai_chat.router, prefix="/ai", tags=["ai"]
 )
+# AI Phase 1 — новые endpoints поверх ai_chat_sessions/messages (OpenAI function calling)
+api_router.include_router(
+    ai_chat_v2.router, prefix="/ai", tags=["ai"]
+)
 api_router.include_router(
     storage_warning.router, prefix="/storage-warning", tags=["analytics"]
 )

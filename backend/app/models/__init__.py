@@ -47,6 +47,11 @@ from app.models.ai import (  # noqa: F401
     AIModel,
     AIUsageMonthly,
 )
+from app.models.ai_chat import (  # noqa: F401
+    AIChatSession,
+    AIChatMessage,
+    ChatRole,
+)
 from app.models.alert import (  # noqa: F401
     AlertHistory,
     AlertMarkerType,
