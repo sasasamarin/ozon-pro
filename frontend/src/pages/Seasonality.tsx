@@ -121,16 +121,22 @@ export function Seasonality() {
   const [granularity, setGranularity] = useState<Granularity>('month')
   const [sourcePref, setSourcePref] = useState<SourcePref>('auto')
 
-  // Список продуктов кабинета — для выбора SKU
-  const { data: products } = useQuery<Array<{ id: string; name: string; offer_id: string }>>({
+  // Список продуктов компании. Backend сам фильтрует по company_id.
+  // Если выбран кабинет — добавляем cabinet_ids, иначе все товары.
+  const { data: products } = useQuery<Array<{
+    id: string; name: string; offer_id: string;
+    ozon_sku: number; is_archived: boolean; cabinet_id: string
+  }>>({
     queryKey: ['seasonality-products', cabinetId],
     queryFn: async () => {
-      const params = new URLSearchParams({ archived: 'false', limit: '500' })
+      const params = new URLSearchParams()
       if (cabinetId) params.append('cabinet_ids', cabinetId)
-      const r = await api.get(`/products?${params.toString()}`)
-      return r.data.items || r.data
+      const url = '/products/' + (params.toString() ? '?' + params.toString() : '')
+      const r = await api.get(url)
+      // /products/ возвращает плоский массив, не {items: [...]}
+      const list = Array.isArray(r.data) ? r.data : (r.data.items || [])
+      return list.filter((p: { is_archived: boolean }) => !p.is_archived)
     },
-    enabled: !!cabinetId,
   })
 
   const profileQuery = useQuery<ProfileResp>({
@@ -171,6 +177,30 @@ export function Seasonality() {
     queryKey: ['seasonality-events'],
     queryFn: async () => (await api.get('/seasonality/events')).data,
   })
+
+  // Прогноз пика — только для конкретного SKU (на кабинет суммировать
+  // не имеет смысла — каждый товар своя сезонность).
+  interface ForecastRow {
+    year: number; month: number;
+    seasonal_index: number | null
+    forecast_units: number | null
+  }
+  interface ForecastResp {
+    source: string
+    confidence: ConfidenceBlock
+    base_monthly: number | null
+    rows: ForecastRow[]
+  }
+  const forecastQuery = useQuery<ForecastResp>({
+    queryKey: ['seasonality-forecast', productId, metric],
+    queryFn: async () => {
+      const params = new URLSearchParams({ metric, horizon_months: '12' })
+      params.append('product_id', productId!)
+      return (await api.get(`/seasonality/forecast?${params.toString()}`)).data
+    },
+    enabled: !!productId,
+  })
+  const forecast = forecastQuery.data
 
   const profile = profileQuery.data
   const yoy = yoyQuery.data
@@ -429,6 +459,42 @@ export function Seasonality() {
           </table>
         </div>
       </Card>
+
+      {/* === Прогноз пика (только для SKU) === */}
+      {productId && forecast && forecast.rows.length > 0 && (
+        <Card className="p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-base font-semibold text-fg flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-fg-muted" />
+              Прогноз пика — следующие 12 месяцев
+            </h2>
+            <span className="text-xs px-2 py-0.5 bg-amber-50 text-amber-700 rounded">
+              source: model · оценка
+            </span>
+          </div>
+          <p className="text-xs text-fg-muted mb-3">
+            Базовая скорость = {forecast.base_monthly?.toFixed(0) ?? '—'} шт/мес
+            (среднее за последние 90 дней). Прогноз = базовая × сезонный индекс.
+          </p>
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={forecast.rows.map(r => ({
+              label: `${MONTH_NAMES[r.month-1]} ${String(r.year).slice(2)}`,
+              forecast: r.forecast_units,
+              index: r.seasonal_index,
+            }))}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip
+                formatter={(v: number, name: string) =>
+                  name === 'forecast' ? `${formatNumber(v)} шт` : v?.toFixed(2)
+                }
+              />
+              <Bar dataKey="forecast" name="Прогноз продаж (шт)" fill="#f59e0b" />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      )}
 
       {/* === Календарь событий === */}
       <Card className="p-5">

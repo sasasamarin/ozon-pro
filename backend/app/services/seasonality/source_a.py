@@ -213,49 +213,83 @@ async def detect_cabinet(
     И истории ≥365 дней. Иначе — «ровный» или «недостаточно данных».
 
     Помесячный индекс = (продажи в месяце) / (среднемесячные).
+
+    ОПТИМИЗАЦИЯ: всё одним SQL вместо N+N*M запросов.
+    19 SKU × profile с историей раньше брали 60+ сек (timeout).
+    Теперь — одна агрегация GROUP BY product_id, month.
     """
-    # 1) Список SKU кабинета с base-метаданными
-    prods = (await db.execute(text("""
-        SELECT p.id::text AS id, p.name, p.offer_id, p.ozon_sku
+    metric_sum = _metric_select(metric)
+
+    # Один SQL: для каждого SKU собираем (min_date, max_date, помесячные суммы)
+    rows = (await db.execute(text(f"""
+        WITH per_sku_month AS (
+            SELECT
+                oi.product_id,
+                EXTRACT(MONTH FROM o.order_created_at)::int AS m,
+                {metric_sum} AS val
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN products p ON p.id = oi.product_id
+            WHERE p.ozon_account_id = :cid AND p.archived_at IS NULL
+            GROUP BY 1, 2
+        ),
+        per_sku_history AS (
+            SELECT
+                oi.product_id,
+                MIN(DATE(o.order_created_at)) AS first_d,
+                MAX(DATE(o.order_created_at)) AS last_d
+            FROM order_items oi JOIN orders o ON o.id = oi.order_id
+            JOIN products p ON p.id = oi.product_id
+            WHERE p.ozon_account_id = :cid AND p.archived_at IS NULL
+            GROUP BY 1
+        )
+        SELECT p.id::text AS id, p.name, p.offer_id, p.ozon_sku,
+               h.first_d, h.last_d,
+               COALESCE(json_agg(
+                   json_build_object('m', psm.m, 'val', psm.val)
+                   ORDER BY psm.m
+               ) FILTER (WHERE psm.m IS NOT NULL), '[]'::json) AS month_data
         FROM products p
+        LEFT JOIN per_sku_history h ON h.product_id = p.id
+        LEFT JOIN per_sku_month psm ON psm.product_id = p.id
         WHERE p.ozon_account_id = :cid AND p.archived_at IS NULL
+        GROUP BY p.id, p.name, p.offer_id, p.ozon_sku, h.first_d, h.last_d
         ORDER BY p.name
     """), {"cid": str(cabinet_id)})).all()
 
-    if not prods:
+    if not rows:
         return {"items": []}
 
     items = []
-    for p in prods:
-        hs = await history_for_product(db, uuid.UUID(p.id))
-        verdict = "insufficient"   # default
+    for r in rows:
+        days = (r.last_d - r.first_d).days if (r.first_d and r.last_d) else 0
+        c, note, _ = _confidence_from_days(days)
+        verdict = "insufficient"
         peak_month: int | None = None
         amplitude: float | None = None
 
-        if hs.days_history >= 365:
-            prof = await profile(
-                db, product_id=uuid.UUID(p.id),
-                metric=metric, granularity="month",
-            )
-            indexes = [b["index"] for b in prof["buckets"] if b["index"] is not None]
-            if len(indexes) >= 6:
-                lo, hi = min(indexes), max(indexes)
-                amplitude = round(hi / lo, 2) if lo else None
-                if amplitude and amplitude > threshold_ratio:
-                    verdict = "seasonal"
-                    # пик = месяц с max index
-                    peak_month = max(prof["buckets"], key=lambda b: b["index"] or 0)["bucket"]
-                else:
-                    verdict = "flat"
-            else:
-                verdict = "insufficient"
+        if days >= 365:
+            md = r.month_data if isinstance(r.month_data, list) else (r.month_data or [])
+            vals = [(int(x["m"]), float(x["val"] or 0)) for x in md if x.get("m")]
+            if len(vals) >= 6:
+                avg = sum(v for _, v in vals) / len(vals)
+                if avg > 0:
+                    indexes = [(m, v / avg) for m, v in vals]
+                    only_idx = [i for _, i in indexes]
+                    lo, hi = min(only_idx), max(only_idx)
+                    amplitude = round(hi / lo, 2) if lo else None
+                    if amplitude and amplitude > threshold_ratio:
+                        verdict = "seasonal"
+                        peak_month = max(indexes, key=lambda x: x[1])[0]
+                    else:
+                        verdict = "flat"
 
         items.append({
-            "product_id": p.id, "name": p.name,
-            "offer_id": p.offer_id, "ozon_sku": p.ozon_sku,
-            "days_history": hs.days_history,
-            "confidence": hs.confidence,
-            "verdict": verdict,         # seasonal | flat | insufficient
+            "product_id": r.id, "name": r.name,
+            "offer_id": r.offer_id, "ozon_sku": r.ozon_sku,
+            "days_history": days,
+            "confidence": c,
+            "verdict": verdict,
             "peak_month": peak_month,
             "amplitude_ratio": amplitude,
         })

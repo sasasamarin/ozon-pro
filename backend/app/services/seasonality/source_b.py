@@ -37,10 +37,15 @@ _LOCK = asyncio.Lock()
 
 
 async def _fetch_category_monthly(
-    db: AsyncSession, *, account_id: uuid.UUID, metric: Metric,
+    db: AsyncSession, *, account_id: uuid.UUID,
     date_from: str, date_to: str,
 ) -> list[dict]:
-    """Один вызов /v1/analytics/data с dimension=['category','month']."""
+    """
+    Один вызов /v1/analytics/data с dimension=['category','month'].
+    Берём ОБЕ метрики (revenue, ordered_units) одним запросом —
+    /v1/analytics/data 1 req/мин ratelimit, нужно сразу всё.
+    Дубль метрики в запросе → 400, поэтому всегда уникальные.
+    """
     acc = (await db.execute(
         select(OzonAccount).where(OzonAccount.id == account_id)
     )).scalar_one_or_none()
@@ -56,7 +61,7 @@ async def _fetch_category_monthly(
                 json={
                     "date_from": date_from, "date_to": date_to,
                     "dimension": ["category", "month"],
-                    "metrics": [metric, "ordered_units"],
+                    "metrics": ["revenue", "ordered_units"],
                     "limit": 1000,
                 },
                 headers={
@@ -82,42 +87,48 @@ async def category_monthly(
     date_to: str | None = None,
 ) -> list[dict]:
     """
-    Возвращает [{ym: '2025-01', value: 10692374, count: 1173}, ...]
+    Возвращает [{ym: '2025-01', value: <metric>, count: <ordered_units>}, ...]
     из категорийного агрегата кабинета. Кэшируется 24ч.
 
-    На фронте используется как Source B для fallback, когда у SKU
-    собственной истории мало (<365 дней).
+    Запрос всегда тащит обе метрики (revenue + ordered_units), кэш ключ —
+    только account_id (metric не влияет на запрос).
     """
     from datetime import date as date_cls
     if not date_to:
         date_to = date_cls.today().isoformat()
-    key = (str(account_id), metric)
+    key = (str(account_id), "both")
     now = time.time()
 
     async with _LOCK:
         hit = _CACHE.get(key)
         if hit and (now - hit[0]) < _CACHE_TTL:
-            return hit[1]["rows"]
+            cached = hit[1]["rows"]
+            return _select_metric(cached, metric)
 
         raw = await _fetch_category_monthly(
-            db, account_id=account_id, metric=metric,
+            db, account_id=account_id,
             date_from=date_from, date_to=date_to,
         )
-        # Парсим в плоский формат
+        # Парсим: dimensions=[{id:'YYYY-MM'}], metrics=[revenue, ordered_units]
         rows = []
         for item in raw:
             dims = item.get("dimensions", [])
             metrics = item.get("metrics", [])
-            if not dims or len(metrics) < 1:
+            if not dims or len(metrics) < 2:
                 continue
-            ym = dims[0].get("id")  # 'YYYY-MM'
-            value = float(metrics[0] or 0)
-            count = float(metrics[1] or 0) if len(metrics) > 1 else 0
+            ym = dims[0].get("id")
+            revenue = float(metrics[0] or 0)
+            units = float(metrics[1] or 0)
             if ym and "-" in ym and len(ym) == 7:
-                rows.append({"ym": ym, "value": value, "count": count})
+                rows.append({"ym": ym, "revenue": revenue, "ordered_units": units})
         rows.sort(key=lambda x: x["ym"])
         _CACHE[key] = (now, {"rows": rows})
-        return rows
+        return _select_metric(rows, metric)
+
+
+def _select_metric(rows: list[dict], metric: Metric) -> list[dict]:
+    """Выбираем нужную метрику из закэшированной пары (revenue, ordered_units)."""
+    return [{"ym": r["ym"], "value": r[metric], "count": r["ordered_units"]} for r in rows]
 
 
 async def profile_from_category(
