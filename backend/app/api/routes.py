@@ -26,6 +26,7 @@ from app.api.endpoints import (
     product_stats,
     seasonality,
     ai_chat,
+    storage_warning,
     dashboard_builder,
     supplies,
     reconciliation,
@@ -81,6 +82,9 @@ api_router.include_router(
 )
 api_router.include_router(
     ai_chat.router, prefix="/ai", tags=["ai"]
+)
+api_router.include_router(
+    storage_warning.router, prefix="/storage-warning", tags=["analytics"]
 )
 api_router.include_router(
     day_explanation.router, prefix="/analytics/day-explanation", tags=["analytics"]

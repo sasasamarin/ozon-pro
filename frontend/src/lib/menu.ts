@@ -183,6 +183,11 @@ export const NAV_GROUPS: NavGroup[] = [
         },
       },
       {
+        path: '/analytics/storage-warning',
+        label: 'Не попасть на хранение',
+        icon: AlertTriangle,
+      },
+      {
         path: '/analytics/seasonality',
         label: 'Сезонность',
         icon: Calendar,
