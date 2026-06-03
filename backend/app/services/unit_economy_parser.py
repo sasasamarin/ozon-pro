@@ -49,7 +49,12 @@ COLUMN_MAP: dict[str, str] = {
     # XLSX «Общие расходы» точно покрывает календарный месяц → пишем в
     # storage_from_xlsx (приоритет в P&L через COALESCE). Поле storage —
     # легаси, оставлено для отката (см. миграцию 0020).
+    # Ozon меняет заголовок в разных вариантах отчёта — поддерживаем все.
     "Стоимость размещения": "storage_from_xlsx",
+    "Платное размещение": "storage_from_xlsx",
+    "Стоимость хранения": "storage_from_xlsx",
+    "Хранение": "storage_from_xlsx",
+    "Размещение": "storage_from_xlsx",
     "Обработка возврата": "return_handling",
     "Обратная логистика": "reverse_logistics",
     "Утилизация": "disposal",
