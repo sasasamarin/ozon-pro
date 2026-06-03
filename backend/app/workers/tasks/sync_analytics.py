@@ -59,11 +59,11 @@ _METRICS = [
     "position_category",
 ]
 
-_CHUNK_DAYS = 30
-_PAGE_SLEEP_S = 2.0          # Дросселируем /v1/analytics/data (rate ≤ 1 RPS у Ozon)
-_RATE_LIMIT_BASE_S = 5.0     # База для exp backoff при 429 без Retry-After
-_RATE_LIMIT_MAX_S = 120.0    # Потолок одного sleep при 429
-_MAX_RETRIES_ON_429 = 6
+_CHUNK_DAYS = 90             # Будем качать по 90 дней за 1 запрос (Озон это разрешает, и это сократит число запросов в 3 раза!)
+_PAGE_SLEEP_S = 15.0         # Если страниц несколько, будем спать по 15 секунд между ними, чтобы Озон не злился
+_RATE_LIMIT_BASE_S = 15.0    # Если поймали 429, первый сон будет 15 сек (который потом удваивается)
+_RATE_LIMIT_MAX_S = 180.0    # Максимальный сон при ошибке Озона — 3 минуты
+_MAX_RETRIES_ON_429 = 5
 # Rolling-окно: последние N дней пересинхриваем даже если cursor >= today.
 # /v1/analytics/data Ozon может пересчитать агрегаты последних 7 дней
 # (досчёт сессий, конверсий по поздним продажам).
@@ -127,10 +127,15 @@ async def _orchestrate(
 
     # Кабинеты параллельно. Внутри кабинета чанки последовательно
     # (rate-limit /v1/analytics/data действует на Client-Id, у каждого кабинета свой).
-    cabinet_results = await asyncio.gather(*[
-        _sync_cabinet_chunks(SessionLocal, acc, date_from, today)
-        for acc in accounts
-    ], return_exceptions=True)
+    # Синхронизируем кабинеты строго по очереди, чтобы не перегружать Озон запросами с одного IP
+    cabinet_results = []
+    for acc in accounts:
+        try:
+            res = await _sync_cabinet_chunks(SessionLocal, acc, date_from, today)
+            cabinet_results.append(res)
+        except Exception as e:
+            cabinet_results.append(e)
+        await asyncio.sleep(5.0)  # Мягкая пауза 5 секунд перед переходом к следующему кабинету
 
     summary = {
         "total_chunks": 0, "success": 0, "failed": 0, "skipped": 0,

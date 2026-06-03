@@ -131,7 +131,7 @@ curl -I https://flowoi.ru
 ```bash
 cd /home/ozonpro/app
 cp .env .env.dev.bak                    # бэкап старого
-cp .env.production.template .env
+cp .env .env
 
 # !!! РУЧНО заменить CHANGE_ME для:
 #   SECRET_KEY, FERNET_KEY, JWT_SECRET
