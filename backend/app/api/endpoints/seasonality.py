@@ -46,6 +46,7 @@ class ProfileResp(BaseModel):
     buckets: list[dict]
     annual_avg: float
     based_on_months: int | None = None
+    unavailable_reason: str | None = None  # 'rate_limit_ozon' | None — для Source B
 
 
 class YoyResp(BaseModel):
@@ -203,6 +204,7 @@ async def get_profile(
         metric=metric, granularity="month",
         buckets=data["buckets"], annual_avg=data["annual_avg"],
         based_on_months=data["based_on_months"],
+        unavailable_reason=source_b.get_last_fail_reason(cab_id),
     )
 
 

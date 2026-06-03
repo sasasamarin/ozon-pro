@@ -36,6 +36,10 @@ _CACHE_TTL = 24 * 3600  # 24 часа
 _LOCK = asyncio.Lock()
 
 
+# Запоминаем последнюю причину провала для UI (rate_limit / no_data / error)
+_LAST_FAIL_REASON: dict[str, str] = {}
+
+
 async def _fetch_category_monthly(
     db: AsyncSession, *, account_id: uuid.UUID,
     date_from: str, date_to: str,
@@ -70,14 +74,24 @@ async def _fetch_category_monthly(
                 },
             )
             if resp.status_code != 200:
+                _LAST_FAIL_REASON[str(account_id)] = (
+                    "rate_limit_ozon" if resp.status_code == 429
+                    else f"http_{resp.status_code}"
+                )
                 log.warning("source_b_fetch_failed",
                             status=resp.status_code, body=resp.text[:200])
                 return []
             j = resp.json().get("result", {}).get("data", [])
+            _LAST_FAIL_REASON.pop(str(account_id), None)
             return j
         except Exception as e:
+            _LAST_FAIL_REASON[str(account_id)] = "exception"
             log.exception("source_b_fetch_exception", err=str(e))
             return []
+
+
+def get_last_fail_reason(account_id: uuid.UUID) -> str | None:
+    return _LAST_FAIL_REASON.get(str(account_id))
 
 
 async def category_monthly(

@@ -46,6 +46,7 @@ interface ProfileResp {
   buckets: ProfileBucket[]
   annual_avg: number
   based_on_months?: number
+  unavailable_reason?: string | null
 }
 
 interface YoyResp {
@@ -392,7 +393,16 @@ export function Seasonality() {
         <p className="text-xs text-fg-muted mb-3">
           Индекс = продажи периода / среднегодовые. <b>&gt;1</b> = пик, <b>&lt;1</b> = провал.
         </p>
-        {profile && profile.buckets.length > 0 ? (
+        {profile?.unavailable_reason === 'rate_limit_ozon' && (
+          <div className="rounded-md border border-amber-200 bg-amber-50/60 p-3 text-sm text-amber-900 mb-3 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+            <div>
+              Ozon Premium API временно ограничил запрос (rate limit ≈ 1 запрос/мин по «Категория»).
+              Попробуйте через минуту или выберите источник «Только свои».
+            </div>
+          </div>
+        )}
+        {profile && profile.buckets.length > 0 && (profile.annual_avg ?? 0) > 0 ? (
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={profileChart}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
