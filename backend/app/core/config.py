@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     CLAUDE_MODEL_HAIKU: str = "claude-haiku-4-5"
     CLAUDE_MODEL_SONNET: str = "claude-sonnet-4-6"
     CLAUDE_MODEL_OPUS: str = "claude-opus-4-7"
+    # Прокси к Anthropic для VPS в РФ. Если задан — все AI-вызовы через него.
+    # Прокси принимает {model, messages, tools, system} и возвращает Anthropic-формат.
+    AI_PROXY_URL: str = ""
+    AI_PROXY_TOKEN: str = ""
+    AI_DEFAULT_MODEL: str = "claude-sonnet-4-6"
+    AI_MAX_TOOL_ITERATIONS: int = 6  # защита от бесконечного tool-цикла
 
     # --- SENTRY ---
     SENTRY_DSN: str = ""

@@ -25,6 +25,7 @@ from app.api.endpoints import (
     reverse_funnel,
     product_stats,
     seasonality,
+    ai_chat,
     dashboard_builder,
     supplies,
     reconciliation,
@@ -77,6 +78,9 @@ api_router.include_router(
 )
 api_router.include_router(
     seasonality.router, prefix="/seasonality", tags=["seasonality"]
+)
+api_router.include_router(
+    ai_chat.router, prefix="/ai", tags=["ai"]
 )
 api_router.include_router(
     day_explanation.router, prefix="/analytics/day-explanation", tags=["analytics"]
