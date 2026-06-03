@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Login } from '@/pages/Login'
 import { AcceptInvite } from '@/pages/AcceptInvite'
+import { Seasonality } from '@/pages/Seasonality'
 import { Register } from '@/pages/Register'
 import { Dashboard } from '@/pages/Dashboard'
 import { DashboardBuilder } from '@/pages/DashboardBuilder'
@@ -115,6 +116,7 @@ export default function App() {
         <Route path="/ai/chat" element={<AIChat />} />
         <Route path="/ai" element={<AIChat />} />
         <Route path="/analytics/reverse-funnel" element={<ReverseFunnel />} />
+        <Route path="/analytics/seasonality" element={<Seasonality />} />
         <Route path="/analytics/plan-vs-fact" element={<PlanVsFact />} />
         <Route path="/analytics/plan-purchase" element={<PlanPurchase />} />
         <Route path="/finance/account-balance" element={<AccountBalance />} />
@@ -165,6 +167,7 @@ export default function App() {
               item.path !== '/team/invitations' &&
               item.path !== '/ai/chat' &&
               item.path !== '/analytics/reverse-funnel' &&
+              item.path !== '/analytics/seasonality' &&
               item.path !== '/analytics/plan-vs-fact' &&
               item.path !== '/finance/account-balance' &&
               item.path !== '/credit/list' &&
