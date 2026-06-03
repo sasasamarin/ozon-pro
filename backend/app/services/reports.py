@@ -167,6 +167,33 @@ async def poll_report_status(
 # === 4. DOWNLOAD + PARSE ===================================================
 
 
+async def get_fresh_report_url(
+    db: AsyncSession, account_id: uuid.UUID, report_code: str,
+) -> str | None:
+    """
+    POST /v1/report/info с кодом → свежий signed S3 URL (валидный 3 часа).
+
+    /v1/report/list часто отдаёт уже-истёкший URL (signature is too old).
+    Поэтому всегда тянем свежий через /info перед скачиванием.
+    """
+    acc = (await db.execute(
+        select(OzonAccount).where(OzonAccount.id == account_id)
+    )).scalar_one_or_none()
+    if not acc:
+        return None
+    cid = decrypt_secret(acc.client_id_encrypted)
+    apk = decrypt_secret(acc.api_key_encrypted)
+    async with OzonSellerClient(cid, apk) as client:
+        try:
+            info = await client._request(
+                "POST", "/v1/report/info", json={"code": report_code},
+            )
+            return (info.get("result") or {}).get("file") or None
+        except Exception as e:  # noqa: BLE001
+            log.exception("report_info_failed", code=report_code, err=str(e))
+            return None
+
+
 async def download_xlsx(file_url: str) -> bytes | None:
     """Скачать XLSX по downloadable-URL Ozon (S3)."""
     if not file_url:
@@ -270,10 +297,14 @@ async def download_and_parse(
             "error": f"Отчёт не готов (status={info.status})",
             "report_status": info.status,
         }
-    if not info.file_url:
-        return {"error": "Нет URL для скачивания"}
 
-    content = await download_xlsx(info.file_url)
+    # ВАЖНО: /v1/report/list отдаёт уже-устаревший signed URL ('signature is
+    # too old'). Берём СВЕЖИЙ через /v1/report/info (валиден 3 часа).
+    fresh_url = await get_fresh_report_url(db, account_id, report_code)
+    if not fresh_url:
+        return {"error": "Не удалось получить свежий URL через /v1/report/info"}
+
+    content = await download_xlsx(fresh_url)
     if not content:
         return {"error": "Не удалось скачать XLSX"}
 
