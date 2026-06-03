@@ -47,6 +47,57 @@ _CHUNK_DAYS = 7  # размер sub-chunk'а — безопасно уклады
 
 
 # ============================================================
+# SCHEMA VALIDATOR (P0 #12 — ранний детектор breaking changes Ozon)
+# ============================================================
+
+# Baseline-поля из /v3/finance/transaction/list (зафиксировано 2026-06-03,
+# см. docs/transaction_list_v3_baseline.md). Если хотя бы одно из них
+# пропадёт в response — P&L/cashflow сломаются. Changelog Ozon 2026-07-06
+# меняет именно этот endpoint.
+_REQUIRED_TX_FIELDS = {
+    "operation_id",        # PK дедупа
+    "operation_type",      # классификация
+    "operation_date",      # для группировки по дням
+    "amount",              # деньги
+    "services",            # детальный breakdown расходов
+}
+_OPTIONAL_TX_FIELDS = {
+    "accruals_for_sale",   # seller_revenue база — если пропадёт, P&L обвалится
+    "sale_commission", "operation_type_name", "posting",
+    "items", "type", "delivery_charge", "return_delivery_charge",
+}
+
+
+def _validate_tx_schema(sample_op: dict, *, account_id: str) -> None:
+    """Проверка структуры одной операции на breaking changes.
+    Логирует warning если поля пропали/изменились.
+    """
+    keys = set(sample_op.keys())
+    missing_required = _REQUIRED_TX_FIELDS - keys
+    missing_optional = _OPTIONAL_TX_FIELDS - keys
+    extra = keys - _REQUIRED_TX_FIELDS - _OPTIONAL_TX_FIELDS
+
+    if missing_required:
+        log.error(
+            "tx_schema_BREAKING_required_missing",
+            account=account_id, missing=sorted(missing_required),
+            sample_keys=sorted(keys),
+            hint="См. docs/transaction_list_v3_baseline.md. P&L может сломаться.",
+        )
+    if missing_optional:
+        log.warning(
+            "tx_schema_optional_missing",
+            account=account_id, missing=sorted(missing_optional),
+        )
+    if extra:
+        log.info(
+            "tx_schema_new_fields",
+            account=account_id, new=sorted(extra),
+            hint="Новые поля от Ozon — добавь в _OPTIONAL_TX_FIELDS если используешь.",
+        )
+
+
+# ============================================================
 # ORCHESTRATOR
 # ============================================================
 
@@ -276,6 +327,13 @@ async def _sync_chunk(
                         )
                         if not operations:
                             break
+
+                        # Schema-validator на первой странице каждого chunk'а:
+                        # ловим breaking changes Ozon (P0 #12, changelog 2026-07-06).
+                        # Если поля исчезли/переименованы — warning в логах ДО
+                        # того как P&L сломается в UI. См. docs/transaction_list_v3_baseline.md
+                        if page == 1 and operations:
+                            _validate_tx_schema(operations[0], account_id=str(cab_uuid))
 
                         rows = []
                         for op in operations:
