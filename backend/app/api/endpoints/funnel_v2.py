@@ -459,6 +459,24 @@ async def get_funnel_daily(
     """), price_params)).all()
     price_map = {pr.d: (pr.avg_cust, pr.avg_sell) for pr in price_rows}
 
+    # Рекламный спенд по дням (AdStatistics из Performance API). Раньше
+    # /daily собирал точки без этого запроса → ad_spend=null → на графике
+    # воронки не было рекламного оверлея.
+    ad_where = [
+        AdStatistics.ozon_account_id.in_(accs),
+        AdStatistics.date >= date_from,
+        AdStatistics.date <= date_to,
+    ]
+    if pids:
+        ad_where.append(AdStatistics.product_id.in_(pids))
+    ad_rows = (await db.execute(
+        select(
+            AdStatistics.date.label("d"),
+            func.coalesce(func.sum(AdStatistics.spend), 0).label("spend"),
+        ).where(*ad_where).group_by(AdStatistics.date)
+    )).all()
+    ad_spend_by_day = {r.d: float(r.spend or 0) for r in ad_rows}
+
     out: list[FunnelDailyPoint] = []
     for r in rows:
         imp_s = int(r.imp_s or 0)
@@ -482,6 +500,7 @@ async def get_funnel_daily(
             to_cart_pdp=cart_p,
             orders=orders,
             delivered=deliv,
+            ad_spend=ad_spend_by_day.get(r.d),
             returns=int(r.returns_ or 0),
             revenue=float(r.revenue or 0),
             overall_conv_pct=_safe_pct(deliv, imp),
