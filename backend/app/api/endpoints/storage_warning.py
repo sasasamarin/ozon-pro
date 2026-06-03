@@ -93,18 +93,39 @@ async def storage_warning(
         cab_filter = "AND oa.id = :cab"
         params["cab"] = str(cabinet_id)
 
-    # ОДИН большой SQL — всё одной агрегацией, без N+1.
-    # 1) текущий остаток (последний снимок)
-    # 2) скорость продаж за 30 дней (delivered)
-    # 3) выручка 30 дней (по seller_price из order_items.price)
-    # 4) расход на хранение за 30 дней (placement_storage_daily)
+    # ОДИН большой SQL — всё одной агрегацией.
+    # Stock-блок копирует паттерн из products.py: FBO_WH (per-warehouse)
+    # ИЛИ AGG/FBO/FBS/RFBS, но не оба — иначе дубли (видели stock=23427).
+    # storage_30d матчится через order_items.ozon_sku (variant SKU), не
+    # products.ozon_sku (primary) — placement_storage_daily.sku хранится
+    # как variant.
     rows = (await db.execute(text(f"""
-        WITH last_stock AS (
-            SELECT product_id, SUM(GREATEST(free_to_sell - reserved, 0))::int AS stock
-            FROM stocks
-            WHERE time > NOW() - INTERVAL '2 days'
-              AND warehouse_type IN ('AGG','FBO','FBO_WH','FBS','RFBS')
+        WITH last_wh AS (
+            SELECT product_id, MAX(time) t FROM stocks
+            WHERE warehouse_type='FBO_WH' AND time > NOW() - INTERVAL '7 days'
             GROUP BY product_id
+        ),
+        last_agg AS (
+            SELECT product_id, MAX(time) t FROM stocks
+            WHERE warehouse_type IN ('AGG','FBO','FBS','RFBS')
+              AND time > NOW() - INTERVAL '7 days'
+            GROUP BY product_id
+        ),
+        wh_sum AS (
+            SELECT s.product_id,
+                   COALESCE(SUM(GREATEST(s.free_to_sell - s.reserved, 0)), 0)::int AS total
+            FROM stocks s JOIN last_wh l ON l.product_id=s.product_id AND l.t=s.time
+            WHERE s.warehouse_type='FBO_WH'
+            GROUP BY s.product_id
+        ),
+        agg_sum AS (
+            SELECT s.product_id,
+                   COALESCE(SUM(GREATEST(s.free_to_sell - s.reserved, 0)), 0)::int AS total
+            FROM stocks s JOIN last_agg l ON l.product_id=s.product_id AND l.t=s.time
+            WHERE s.warehouse_type IN ('FBS','RFBS')
+               OR (s.warehouse_type IN ('AGG','FBO')
+                   AND NOT EXISTS (SELECT 1 FROM last_wh w WHERE w.product_id=s.product_id))
+            GROUP BY s.product_id
         ),
         velocity_30d AS (
             SELECT oi.product_id,
@@ -114,27 +135,37 @@ async def storage_warning(
             WHERE o.order_created_at >= NOW() - INTERVAL '30 days'
             GROUP BY oi.product_id
         ),
+        product_variant_skus AS (
+            -- mapping product_id ↔ все variant SKU встречавшиеся в заказах
+            SELECT DISTINCT oi.product_id, oi.ozon_sku
+            FROM order_items oi
+            WHERE oi.product_id IS NOT NULL AND oi.ozon_sku > 0
+        ),
         storage_30d AS (
-            SELECT ps.cabinet_id, ps.sku,
+            SELECT pvs.product_id,
                    SUM(ABS(ps.storage_cost))::float AS storage_30d
             FROM placement_storage_daily ps
+            JOIN product_variant_skus pvs ON pvs.ozon_sku = ps.sku
+            JOIN products p2 ON p2.id = pvs.product_id
             WHERE ps.day >= CURRENT_DATE - INTERVAL '30 days'
-            GROUP BY ps.cabinet_id, ps.sku
+              AND ps.cabinet_id = p2.ozon_account_id
+            GROUP BY pvs.product_id
         )
         SELECT
             p.id::text                AS product_id,
             p.name, p.offer_id, p.ozon_sku,
             oa.id::text               AS cabinet_id,
             oa.name                   AS cabinet_name,
-            COALESCE(ls.stock, 0)     AS stock,
+            (COALESCE(wh.total, 0) + COALESCE(ag.total, 0))::int AS stock,
             COALESCE(v.daily, 0)::float AS daily_velocity,
             COALESCE(v.revenue_30d, 0)::float AS revenue_30d,
             COALESCE(s.storage_30d, 0)::float AS storage_30d
         FROM products p
         JOIN ozon_accounts oa ON oa.id = p.ozon_account_id
-        LEFT JOIN last_stock ls ON ls.product_id = p.id
+        LEFT JOIN wh_sum wh ON wh.product_id = p.id
+        LEFT JOIN agg_sum ag ON ag.product_id = p.id
         LEFT JOIN velocity_30d v ON v.product_id = p.id
-        LEFT JOIN storage_30d s ON s.cabinet_id = oa.id AND s.sku = p.ozon_sku
+        LEFT JOIN storage_30d s ON s.product_id = p.id
         WHERE oa.company_id = :cid
           AND oa.deleted_at IS NULL
           AND p.is_archived = false
