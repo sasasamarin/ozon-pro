@@ -183,6 +183,29 @@ async def _cogs_for_window(
     return float(row.scalar() or 0)
 
 
+async def _returned_cogs_for_window(
+    db: AsyncSession, *, accs: list[uuid.UUID], dt_from: datetime, dt_to: datetime
+) -> float:
+    """Возвращает себестоимость возвращенных товаров (чтобы не списывать их в убыток)."""
+    if not accs:
+        return 0.0
+    row = await db.execute(
+        select(
+            func.coalesce(
+                func.sum(Return.quantity * func.coalesce(Product.cost_price, 0)), 0
+            )
+        )
+        .select_from(Return)
+        .join(Product, Product.id == Return.product_id)
+        .where(
+            Return.ozon_account_id.in_(accs),
+            Return.return_date >= dt_from,
+            Return.return_date < dt_to,
+        )
+    )
+    return float(row.scalar() or 0)
+
+
 async def _expenses_for_window(
     db: AsyncSession, *, accs: list[uuid.UUID], dt_from: datetime, dt_to: datetime
 ) -> dict[str, float]:
@@ -299,7 +322,9 @@ async def get_pnl(
     revenue = seller_revenue
     returned_revenue = await _returned_revenue(db, accs=accs, dt_from=period_from, dt_to=period_to)
     effective_revenue = revenue - returned_revenue
-    cogs = await _cogs_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    delivered_cogs = await _cogs_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    returned_cogs = await _returned_cogs_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
+    cogs = delivered_cogs - returned_cogs  # Возвращаем себестоимость на баланс
     expenses = await _expenses_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
     financing_fees = await _ozon_financing_fees_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
 

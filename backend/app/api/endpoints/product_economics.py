@@ -294,14 +294,20 @@ async def get_economics(
 
     # returns per-product за тот же период (по return_date — «зеркало Ozon»)
     ret_rows = (await db.execute(text("""
-        SELECT product_id::text pid, COALESCE(SUM(return_amount), 0)::float ret_sum
-        FROM returns
-        WHERE ozon_account_id = ANY(:accs)
-          AND return_date >= :df
-          AND return_date < (CAST(:dt AS date) + interval '1 day')
-        GROUP BY product_id
-    """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
-    ret_by_prod: dict[str, float] = {r.pid: float(r.ret_sum or 0) for r in ret_rows}
+            SELECT product_id::text pid, 
+                   COALESCE(SUM(return_amount), 0)::float ret_sum,
+                   COALESCE(SUM(quantity), 0)::int ret_qty
+            FROM returns
+            WHERE ozon_account_id = ANY(:accs)
+              AND return_date >= :df
+              AND return_date < (CAST(:dt AS date) + interval '1 day')
+            GROUP BY product_id
+        """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
+
+    ret_data_by_prod: dict[str, dict] = {
+        r.pid: {"amount": float(r.ret_sum or 0), "qty": int(r.ret_qty or 0)}
+        for r in ret_rows
+    }
 
     # === MONTHLY UNIT ECONOMY: точные XLSX-числа из «Экономика магазина» ===
     # Storage берём по принципу COALESCE: сначала storage_from_xlsx (ручной XLSX,
@@ -529,15 +535,16 @@ async def get_economics(
                 sources["ad_spend_total"] = "xlsx"
             ozon_profit_x = float(xlsx["xprofit"] or 0) if xlsx["xprofit"] else None
 
-        cost_total = (cost_per * qty) if cost_per else 0.0
-        returned_revenue = ret_by_prod.get(r.product_id, 0.0)
+        ret_data = ret_data_by_prod.get(r.product_id, {"amount": 0.0, "qty": 0})
+        returned_revenue = ret_data["amount"]
+        returned_qty = ret_data["qty"]
 
-        # Эффективная выручка: с XLSX добавляем компенсацию СПП,
-        # без — просто revenue минус возвраты.
-        if xlsx:
-            effective_revenue = revenue + spp_points + partner_programs - returned_revenue
-        else:
-            effective_revenue = revenue - returned_revenue
+        # Вычитаем из COGS себестоимость возвращенных товаров (они вернулись на склад)
+        effective_qty = max(0, qty - returned_qty)
+        cost_total = (cost_per * effective_qty) if cost_per else 0.0
+
+        # Выручка oi.price уже включает все баллы Озона. Не плюсуем их второй раз из XLSX!
+        effective_revenue = revenue - returned_revenue
 
         # op_profit = effective_revenue − все расходы Ozon − реклама − cost
         # Не двойной учёт: comm_total / log_total / acq_total суммируют все
