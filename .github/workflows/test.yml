@@ -20,4 +20,19 @@ jobs:
           pip install -e ".[dev]"
       - name: Run pytest
         working-directory: backend
+        # Dummy env — pydantic-settings валидирует PostgresDsn/RedisDsn при
+        # импорте app.core.config (и далее по цепочке app.services.*).
+        # Без них pytest падает на collection (exit 2). Сами тесты не ходят
+        # в БД/Redis — это юнит-тесты на pure-функциях.
+        env:
+          DATABASE_URL: "postgresql+asyncpg://test:test@localhost/test"
+          DATABASE_URL_SYNC: "postgresql://test:test@localhost/test"
+          REDIS_URL: "redis://localhost:6379/0"
+          CELERY_BROKER_URL: "redis://localhost:6379/0"
+          CELERY_RESULT_BACKEND: "redis://localhost:6379/0"
+          ENCRYPTION_KEY: "Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Q="
+          JWT_SECRET_KEY: "ci-test-secret"
+          ALLOWED_HOSTS: "*"
+          CORS_ORIGINS: "*"
+          ENVIRONMENT: "test"
         run: pytest tests/ -v
