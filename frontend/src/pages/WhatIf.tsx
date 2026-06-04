@@ -91,16 +91,7 @@ export function WhatIf() {
   }, [betasData, JSON.stringify(scenarios)])
 
   if (!selectedProductId) {
-    return (
-      <Card className="p-8 text-center">
-        <Sliders className="w-12 h-12 mx-auto text-fg-subtle mb-3" />
-        <h2 className="text-lg font-semibold text-fg">Симулятор «Что если»</h2>
-        <p className="text-sm text-fg-muted mt-2 max-w-md mx-auto">
-          Выбери товар в Topbar → симулятор посчитает <strong>эластичности из ТВОИХ данных</strong>
-          и даст играть с ценой / рекламой / конверсией. Покажет какой сценарий выгоднее по чистой прибыли.
-        </p>
-      </Card>
-    )
+    return <WhatIfProductPicker />
   }
 
   if (betasLoading || !betasData) {
@@ -364,5 +355,69 @@ function RowMetric({ label, value, bold = false, dim = false }: {
         {value}
       </span>
     </div>
+  )
+}
+
+
+// === Inline product picker (empty state) ===
+function WhatIfProductPicker() {
+  const { setSelectedProduct } = useProductFilter()
+  const [search, setSearch] = useState('')
+  const { data: products = [] } = useQuery<Array<{ id: string; name: string; offer_id: string; ozon_sku: number }>>({
+    queryKey: ['products-min-for-whatif'],
+    queryFn: async () => (await api.get('/products/?limit=500')).data?.items || (await api.get('/products/?limit=500')).data || [],
+    staleTime: 5 * 60_000,
+  })
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    if (!q) return products.slice(0, 50)
+    return products.filter((p) =>
+      p.name?.toLowerCase().includes(q) ||
+      p.offer_id?.toLowerCase().includes(q) ||
+      String(p.ozon_sku).includes(q)
+    ).slice(0, 50)
+  }, [products, search])
+
+  return (
+    <Card className="p-6 max-w-3xl mx-auto">
+      <div className="text-center mb-4">
+        <Sliders className="w-12 h-12 mx-auto text-purple-500 mb-3" />
+        <h2 className="text-lg font-semibold text-fg">Симулятор «Что если»</h2>
+        <p className="text-sm text-fg-muted mt-2 max-w-md mx-auto">
+          Выбери товар — симулятор посчитает эластичности из ТВОИХ данных
+          и даст играть с ценой / рекламой / конверсией.
+        </p>
+      </div>
+
+      <div className="mt-4">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          autoFocus
+          placeholder="Поиск товара по имени, offer_id или sku…"
+          className="w-full px-3 py-2 border border-border-subtle rounded-lg text-sm bg-bg focus:border-purple-500 focus:outline-none"
+        />
+      </div>
+
+      <div className="mt-3 max-h-[60vh] overflow-y-auto border border-border-subtle rounded-lg divide-y divide-border-subtle/40">
+        {filtered.length === 0 && (
+          <div className="p-6 text-center text-sm text-fg-muted">
+            {products.length === 0 ? 'Товаров пока нет.' : 'Ничего не найдено.'}
+          </div>
+        )}
+        {filtered.map((p) => (
+          <button
+            key={p.id}
+            onClick={() => setSelectedProduct(p.id, p.name)}
+            className="w-full px-3 py-2 text-left text-sm hover:bg-purple-50 transition-colors"
+          >
+            <div className="font-medium text-fg truncate">{p.name}</div>
+            <div className="text-[11px] text-fg-muted">{p.offer_id} · SKU {p.ozon_sku}</div>
+          </button>
+        ))}
+      </div>
+    </Card>
   )
 }
