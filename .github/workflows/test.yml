@@ -39,14 +39,4 @@ jobs:
           S3_ACCESS_KEY: "test"
           S3_SECRET_KEY: "test"
           S3_ENDPOINT: "https://s3.example.com"
-        run: |
-          set +e
-          OUT=$(pytest tests/ -v -s --tb=long 2>&1)
-          EC=$?
-          echo "$OUT"
-          if [ $EC -ne 0 ]; then
-            echo "$OUT" | grep -E "ERROR|^E |Error|Field required" | head -30 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
-          fi
-          exit $EC
+        run: pytest tests/ -v
