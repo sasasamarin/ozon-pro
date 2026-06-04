@@ -15,6 +15,7 @@
 | Метрик в реестре описаний | **42** |
 | Страниц с MetricLabel | **21** |
 | CI статус (последние 5 запусков) | 5/5 ✅ green |
+| Security audit | ✅ закрыт (2026-06-05) |
 
 ---
 
@@ -149,4 +150,35 @@
 
 ---
 
-*Обновлено: 2026-06-05.*
+## 🔒 Security audit (2026-06-05)
+
+### ✅ Прошли проверку
+
+| Категория | Детали |
+|---|---|
+| SQL injection | Все `text()` запросы с bind-параметрами. f-string interpolation только для WHERE-фрагментов с `:param`, не user-input. |
+| Hardcoded secrets | Нет committed ключей. `.env.example`/`docs/DEPLOY.md` имеют только `sk-ant-...` placeholders. `.env` в `.gitignore`. |
+| Auth на endpoints | Все новые endpoints (17 в alerts/loans/procurement/whatif) требуют `get_current_user`. AI bridge — `SERVICE_TOKEN` + `get_service_user`. |
+| Multi-tenancy | 20+ фильтров по `current_user.company_id` в новых endpoints. |
+| subprocess / eval | Нет `os.system`, `shell=True`, `eval()`. |
+| File upload (XLSX) | `unit_economy.py:282` — extension check, size limit 20MB, exception handling. |
+| Bcrypt 72-char | `security.py:27` — `plain_password[:72]` обходит CVE-2024. |
+| CORS | Whitelist через `CORS_ORIGINS`, не `*`. |
+| Security headers | HSTS, X-Frame, X-Content-Type, Referrer-Policy, Permissions-Policy — все стоят (`nginx/sites/flowoi.conf`). |
+| TLS | HTTP/2 + Let's Encrypt + HSTS preload. |
+| CI | 5/5 зелёных, тесты на каждый push. |
+
+### 🔧 Найдено и закрыто (audit-driven)
+
+- **SERVICE_TOKEN non-constant-time сравнение** (`deps_service.py:34`)
+  → Заменено на `hmac.compare_digest()` в commit `7b06a12`.
+
+### ℹ️ Минорные замечания (не баги)
+
+- `Server: nginx/1.27.5` header — version leak. Можно скрыть через `server_tokens off`, низкий impact.
+- Rate limiting на endpoints нет. Не критично без публичной регистрации.
+- AI bridge fallback "first active user" если `SERVICE_DEFAULT_COMPANY_ID` пуст — задокументировано в коде. На проде задан.
+
+---
+
+*Обновлено: 2026-06-05 — после security audit и фикса.*
