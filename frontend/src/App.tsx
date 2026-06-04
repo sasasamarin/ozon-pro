@@ -5,6 +5,7 @@ import { Seasonality } from '@/pages/Seasonality'
 import { StorageWarning } from '@/pages/StorageWarning'
 import { Competitor } from '@/pages/Competitor'
 import { Margin } from '@/pages/Margin'
+import { Taxes } from '@/pages/Taxes'
 import { Register } from '@/pages/Register'
 import { Dashboard } from '@/pages/Dashboard'
 import { DashboardBuilder } from '@/pages/DashboardBuilder'
@@ -126,6 +127,7 @@ export default function App() {
         <Route path="/analytics/competitor" element={<Competitor />} />
         <Route path="/products/competitors" element={<Competitor />} />
         <Route path="/finance/margin" element={<Margin />} />
+        <Route path="/finance/taxes" element={<Taxes />} />
         <Route path="/analytics/plan-vs-fact" element={<PlanVsFact />} />
         <Route path="/analytics/plan-purchase" element={<PlanPurchase />} />
         <Route path="/finance/account-balance" element={<AccountBalance />} />
@@ -183,6 +185,7 @@ export default function App() {
               item.path !== '/orders/fbo' &&
               item.path !== '/orders/fbs' &&
               item.path !== '/finance/margin' &&
+              item.path !== '/finance/taxes' &&
               item.path !== '/analytics/plan-vs-fact' &&
               item.path !== '/finance/account-balance' &&
               item.path !== '/credit/list' &&
