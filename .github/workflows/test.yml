@@ -39,4 +39,15 @@ jobs:
           S3_ACCESS_KEY: "test"
           S3_SECRET_KEY: "test"
           S3_ENDPOINT: "https://s3.example.com"
-        run: pytest tests/ -v
+        run: |
+          set +e
+          OUT=$(pytest tests/ -v 2>&1)
+          EC=$?
+          echo "$OUT"
+          if [ $EC -ne 0 ]; then
+            # Имя missing-поля идёт строкой "E   FIELD_NAME" перед "Field required"
+            echo "$OUT" | grep -E "^E +[A-Z_]+$" | sort -u | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
+          exit $EC
