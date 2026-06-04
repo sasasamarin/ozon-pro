@@ -35,6 +35,16 @@ from app.services.ai import tools_v2
 router = APIRouter()
 
 
+def _none_str(s: str | None) -> str | None:
+    """ozon-pro-ai client шлёт `cabinet=None` как строку 'None' (httpx не
+    отфильтровывает None из dict params). Превращаем строку 'None'/'' → None."""
+    if s is None:
+        return None
+    if s == "None" or s == "" or s.lower() == "null":
+        return None
+    return s
+
+
 # ============================================================
 # DATA-TOOLS
 # ============================================================
@@ -60,10 +70,10 @@ async def metrics(
         metrics = [m.strip() for m in metrics.split(",") if m.strip()]
     return await tools_v2.get_metrics(
         db, user.company_id,
-        cabinet_id=cabinet_id or cabinet,
-        product_id=product_id,
-        period_from=period_from or from_,
-        period_to=period_to or to,
+        cabinet_id=_none_str(cabinet_id) or _none_str(cabinet),
+        product_id=_none_str(product_id),
+        period_from=_none_str(period_from) or _none_str(from_),
+        period_to=_none_str(period_to) or _none_str(to),
         metrics=metrics,
     )
 
@@ -83,9 +93,9 @@ async def pnl_view(
 ) -> dict:
     return await tools_v2.get_pnl(
         db, user.company_id,
-        cabinet_id=cabinet_id or cabinet,
-        period_from=period_from or from_,
-        period_to=period_to or to,
+        cabinet_id=_none_str(cabinet_id) or _none_str(cabinet),
+        period_from=_none_str(period_from) or _none_str(from_),
+        period_to=_none_str(period_to) or _none_str(to),
         model=model,
     )
 
@@ -104,10 +114,10 @@ async def funnel_view(
 ) -> dict:
     return await tools_v2.get_funnel(
         db, user.company_id,
-        cabinet_id=cabinet_id or cabinet,
-        product_id=product_id,
-        period_from=period_from or from_,
-        period_to=period_to or to,
+        cabinet_id=_none_str(cabinet_id) or _none_str(cabinet),
+        product_id=_none_str(product_id),
+        period_from=_none_str(period_from) or _none_str(from_),
+        period_to=_none_str(period_to) or _none_str(to),
     )
 
 
@@ -121,8 +131,8 @@ async def stock_view(
 ) -> dict:
     return await tools_v2.get_stock(
         db, user.company_id,
-        cabinet_id=cabinet_id or cabinet,
-        product_id=product_id,
+        cabinet_id=_none_str(cabinet_id) or _none_str(cabinet),
+        product_id=_none_str(product_id),
     )
 
 
