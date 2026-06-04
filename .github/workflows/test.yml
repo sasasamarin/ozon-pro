@@ -45,9 +45,8 @@ jobs:
           EC=$?
           echo "$OUT"
           if [ $EC -ne 0 ]; then
-            # Превращаем последние 30 строк вывода в GitHub annotations
-            # (видны через API /check-runs/{id}/annotations без auth).
-            echo "$OUT" | tail -30 | while IFS= read -r line; do
+            # Грепаем строки с реальными ошибками для annotations (auth-free).
+            echo "$OUT" | grep -E "ValidationError|ERROR|error:|Field required|ImportError|ModuleNotFoundError|missing" | head -15 | while IFS= read -r line; do
               echo "::error::${line}"
             done
           fi
