@@ -35,6 +35,10 @@ jobs:
           ALLOWED_HOSTS: "*"
           CORS_ORIGINS: "*"
           ENVIRONMENT: "test"
+          S3_BUCKET: "test"
+          S3_ACCESS_KEY: "test"
+          S3_SECRET_KEY: "test"
+          S3_ENDPOINT: "https://s3.example.com"
         run: |
           set +e
           OUT=$(pytest tests/ -v -s --tb=long --no-header 2>&1)
