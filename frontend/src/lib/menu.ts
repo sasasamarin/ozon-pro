@@ -696,20 +696,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     items: [
       {
-        path: '/ai-chat',
+        path: '/ai/chat',
         label: 'AI-чат',
         icon: MessageSquare,
         badge: 'ai',
-        placeholder: {
-          description: 'Спрашивай у AI про свои магазины естественным языком.',
-          plannedFeatures: [
-            '"Почему упала выручка вчера?"',
-            '"Какой SKU самый прибыльный за квартал?"',
-            'Чат с историей и переключением между магазинами',
-            'Прикрепление графиков прямо в чат',
-            'Экспорт ответа в отчёт или Telegram',
-          ],
-        },
       },
       {
         path: '/telegram',
