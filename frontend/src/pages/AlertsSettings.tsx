@@ -31,6 +31,7 @@ const TYPE_LABEL: Record<string, string> = {
   ad_budget_exceeded: 'ДРР выше нормы (порог: %)',
   position_drop: 'Падение позиции (порог: на сколько ↑)',
   low_conversion: 'Низкая конверсия в корзину (порог: %)',
+  competitor_dump: 'Демпинг конкурентов (color_index=RED)',
 }
 
 const ALL_TYPES = Object.keys(TYPE_LABEL)

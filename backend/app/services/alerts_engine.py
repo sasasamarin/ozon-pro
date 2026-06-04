@@ -41,6 +41,7 @@ _DEFAULT_THRESHOLDS: dict[str, dict[str, Any]] = {
     AlertMarkerType.AD_BUDGET_EXCEEDED.value: {"drr_pct_max": 25},
     AlertMarkerType.POSITION_DROP.value: {"position_drop": 5},
     AlertMarkerType.LOW_CONVERSION.value: {"min_pct": 5},
+    AlertMarkerType.COMPETITOR_DUMP.value: {},
 }
 
 
@@ -326,6 +327,55 @@ async def run_alerts(db: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
                     triggers.append((
                         r.pid, f"{r.name[:60]} ({r.offer_id})",
                         f"Рейтинг {float(r.rating):.2f} ниже порога {min_rating}",
+                    ))
+            except Exception:
+                pass
+
+        # ----- COMPETITOR_DUMP (color_index=RED у наших SKU) -----
+        elif rtype == AlertMarkerType.COMPETITOR_DUMP.value:
+            try:
+                from app.models import OzonAccount
+                from app.core.security import decrypt_secret
+                from app.services.ozon_client import OzonSellerClient
+
+                accs = (await db.execute(
+                    select(OzonAccount).where(
+                        OzonAccount.company_id == company_id,
+                        OzonAccount.deleted_at.is_(None),
+                    )
+                )).scalars().all()
+
+                red_items = []
+                for acc in accs:
+                    if rule.ozon_account_id and acc.id != rule.ozon_account_id:
+                        continue
+                    cid = decrypt_secret(acc.client_id_encrypted)
+                    apk = decrypt_secret(acc.api_key_encrypted)
+                    async with OzonSellerClient(cid, apk) as client:
+                        try:
+                            r = await client._request(
+                                "POST", "/v5/product/info/prices",
+                                json={"filter": {"product_id": [], "visibility": "ALL"},
+                                      "limit": 100, "cursor": ""},
+                            )
+                        except Exception:
+                            continue
+                        for it in (r.get("items") or []):
+                            idx = (it.get("price_indexes") or {})
+                            if idx.get("color_index") == "RED":
+                                ext = (idx.get("external_index_data") or {})
+                                ext_min = float(ext.get("min_price") or 0)
+                                price = float((it.get("price") or {}).get("marketing_seller_price") or 0)
+                                red_items.append((
+                                    str(it.get("product_id")),
+                                    it.get("offer_id") or "",
+                                    price, ext_min,
+                                ))
+                for pid, offer, price, ext_min in red_items[:30]:
+                    delta_pct = ((price - ext_min) / ext_min * 100) if ext_min > 0 else 0
+                    triggers.append((
+                        pid, f"{offer}",
+                        f"Конкуренты демпингуют: внешн.мин {ext_min:.0f}₽ vs наша {price:.0f}₽ (+{delta_pct:.0f}%)",
                     ))
             except Exception:
                 pass
