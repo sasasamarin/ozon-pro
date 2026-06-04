@@ -19,8 +19,8 @@
  * заполняет input prefilled_question.
  */
 import { Sparkles } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { useAIContextStore, type ChartContext } from '@/stores/aiContext'
+import { useAIDrawerStore } from '@/stores/aiDrawer'
+import type { ChartContext } from '@/stores/aiContext'
 import { cn } from '@/lib/utils'
 
 interface AskAIButtonProps {
@@ -40,15 +40,12 @@ export function AskAIButton({
   label,
   className,
 }: AskAIButtonProps) {
-  const navigate = useNavigate()
-  const setPending = useAIContextStore((s) => s.setPending)
+  const openDrawer = useAIDrawerStore((s) => s.open)
 
   const handleClick = () => {
-    setPending({
-      ...context,
-      prefilled_question: question || context.prefilled_question,
-    })
-    navigate('/ai/chat')
+    // Drawer открывается на той же странице — юзер видит график + чат
+    // одновременно, не теряет контекст экрана.
+    openDrawer(context, question)
   }
 
   const styles = cn(
