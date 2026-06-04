@@ -43,6 +43,8 @@ _DEFAULT_THRESHOLDS: dict[str, dict[str, Any]] = {
     AlertMarkerType.LOW_CONVERSION.value: {"min_pct": 5},
     AlertMarkerType.COMPETITOR_DUMP.value: {},
     AlertMarkerType.COMMISSION_CHANGE.value: {"lookback_days": 30},
+    AlertMarkerType.SALES_SPIKE.value: {"spike_pct": 50},
+    AlertMarkerType.RETURN_RECEIVED.value: {"min_qty": 1},
 }
 
 
@@ -189,6 +191,62 @@ async def run_alerts(db: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
                 triggers.append((
                     r.account_id, f"{r.name}",
                     f"Выручка упала на {drop:.0f}% (было {float(r.rev_prev):.0f}₽ → стало {float(r.rev_cur):.0f}₽ за 7 дней)",
+                ))
+
+        # ----- SALES_SPIKE (выручка прошлой недели выше предыдущей на >N%) -----
+        elif rtype == AlertMarkerType.SALES_SPIKE.value:
+            spike_pct_th = float(threshold.get("spike_pct", 50))
+            rows = (await db.execute(text("""
+                WITH w AS (
+                    SELECT oa.id AS account_id, oa.name,
+                           SUM(t.amount) FILTER (
+                               WHERE t.amount > 0 AND t.time >= NOW() - INTERVAL '7 days'
+                           ) AS rev_cur,
+                           SUM(t.amount) FILTER (
+                               WHERE t.amount > 0
+                                 AND t.time >= NOW() - INTERVAL '14 days'
+                                 AND t.time < NOW() - INTERVAL '7 days'
+                           ) AS rev_prev
+                    FROM transactions t
+                    JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+                    WHERE oa.company_id = :cid
+                      AND t.time >= NOW() - INTERVAL '14 days'
+                    GROUP BY oa.id, oa.name
+                )
+                SELECT account_id::text, name, rev_cur, rev_prev
+                FROM w
+                WHERE rev_prev > 0
+                  AND ((rev_cur - rev_prev) / rev_prev * 100) >= :pct
+                LIMIT 20
+            """), {"cid": company_id, "pct": spike_pct_th})).all()
+            for r in rows:
+                spike = (float(r.rev_cur) - float(r.rev_prev)) / float(r.rev_prev) * 100
+                triggers.append((
+                    r.account_id, f"{r.name}",
+                    f"📈 Выручка выросла на {spike:.0f}% (с {float(r.rev_prev):.0f}₽ до {float(r.rev_cur):.0f}₽). Проверь остатки!",
+                ))
+
+        # ----- RETURN_RECEIVED (новые возвраты за 24 часа) -----
+        elif rtype == AlertMarkerType.RETURN_RECEIVED.value:
+            min_qty = int(threshold.get("min_qty", 1))
+            rows = (await db.execute(text("""
+                SELECT r.id::text AS rid, r.quantity, r.return_amount,
+                       r.return_reason, p.name, p.offer_id
+                FROM returns r
+                JOIN ozon_accounts oa ON oa.id = r.ozon_account_id
+                LEFT JOIN products p ON p.id = r.product_id
+                WHERE oa.company_id = :cid
+                  AND r.return_date >= NOW() - INTERVAL '24 hours'
+                  AND r.quantity >= :min_qty
+                ORDER BY r.return_date DESC
+                LIMIT 30
+            """), {"cid": company_id, "min_qty": min_qty})).all()
+            for r in rows:
+                amount = float(r.return_amount or 0)
+                reason_part = f" · {r.return_reason}" if r.return_reason else ""
+                triggers.append((
+                    r.rid, f"{(r.name or 'товар')[:40]} ({r.offer_id or '—'})",
+                    f"Возврат {int(r.quantity)} шт на {amount:.0f}₽{reason_part}",
                 ))
 
         # ----- CASHFLOW_GAP (DSCR < 1 в ближайшие 30 дней) -----

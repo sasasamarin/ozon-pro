@@ -1,18 +1,20 @@
 # Flowoi — аудит кодовой базы
 
-> P1 #11 из мастер-брифа. Обновлено 2026-06-04 — все P0-P1 ToDo закрыты, плейсхолдеры выпилены.
+> P1 #11 из мастер-брифа. Обновлено 2026-06-05 — все P0-P1 ToDo закрыты, плейсхолдеры выпилены, alerts engine завершён.
 
 ## Сводка
 
 | Слой | Цифра |
 |---|---|
-| backend python-файлов | ~170 |
-| api endpoints | 60+ файлов |
+| backend python-файлов | ~175 |
+| api endpoints | 65+ файлов |
 | frontend pages | 60+ (все плейсхолдеры закрыты) |
 | TODO/FIXME/HACK | < 10 |
-| Alembic миграции | 0001 → 0029 |
-| Реализованных alert-типов | 13 из 18 |
-| Метрик в реестре описаний | 24 |
+| Alembic миграции | 0001 → 0030 |
+| Реализованных alert-типов | **17 из 18** |
+| Метрик в реестре описаний | **42** |
+| Страниц с MetricLabel | **21** |
+| CI статус (последние 5 запусков) | 5/5 ✅ green |
 
 ---
 
@@ -121,18 +123,30 @@
 - **8 страниц-плейсхолдеров** → реальные функции: `/credits/schedule`, `/credits/cashflow-impact`,
   `/credits/refinance`, `/procurement/suppliers`, `/procurement/calendar`, `/procurement/quality`,
   `/alerts/*` (4 шт), `/telegram`, `/integrations`
-- **Alert engine** + cron + email digest + 13 типов проверок
+- **Alert engine** + cron + email digest + 17 типов проверок (из 18):
+  STOCKOUT · OVERSTOCK · MARGIN_BELOW_MIN · PRICE_BELOW_COST · CREDIT_PAYMENT_DUE ·
+  NEGATIVE_REVIEW · SALES_DROP · SALES_SPIKE · RETURN_RECEIVED · CASHFLOW_GAP ·
+  POSITION_DROP · LOW_CONVERSION · AD_BUDGET_EXCEEDED · TAX_DUE · RATING_DROP ·
+  COMMISSION_CHANGE · COMPETITOR_DUMP
+- **Snapshot комиссий** — миграция 0030, ежедневный snapshot для COMMISSION_CHANGE
 - **NotificationBell** в Topbar — live counter активных алертов с popover
-- **MetricLabel** — реестр 24 метрик с описанием/формулой/источником, применено на 8 страницах
+- **MetricLabel** — реестр 42 метрик с описанием/формулой/источником, применено на 21 странице
+- **AI streaming (SSE)** — typewriter-эффект через `/ai/chat/stream`
+- **Inline product picker в /whatif** — больше не отправляет в Topbar
 
-## 🟡 Что осталось (низкий приоритет / большая работа)
+## 🟡 Что осталось (вне рамок «доделать»)
 
-1. **TG-бот** — отдельный сервис на Render, нужен BOT_TOKEN. UI настроек готов в `/telegram`.
-2. **Alerts: 4 типа без проверок** — COMMISSION_CHANGE (нет историкализованных данных), COMPETITOR_DUMP, RETURN_RECEIVED, OVERSTOCK уже работают, остальные тривиальны.
-3. **AI streaming** — сейчас ответы появляются разом, можно перевести на Server-Sent Events.
-4. **MetricLabel** — ещё ~30 экранов без описаний, добавлять по мере правок.
+1. **TG-бот** — отдельный Render-сервис, нужен BOT_TOKEN. UI `/telegram` готов, канал `telegram` в правилах работает.
+2. **Real AI streaming** — требует апдейта Render-proxy (`ozon-pro-ai`, отдельный repo) на `stream=True`.
+3. **Mobile-приложение** — не делалось.
+4. **`LOW_CONVERSION` (premium-only)** — последний без проверки, требует данных Premium Pro API.
 5. **Notification модель** — есть, но не подключена. AlertHistory покрывает все юзкейсы.
+
+## ⚪ Architectural notes (не баги)
+
+- `markers` (event log с value_before/after) ≠ `alerts_history` (triggers правил). Разные сущности, обе нужны.
+- `notifications` модель есть, но in-app алерты идут через `alerts_history` + NotificationBell.
 
 ---
 
-*Обновлено: 2026-06-04.*
+*Обновлено: 2026-06-05.*

@@ -23,6 +23,7 @@ import { getErrorMessage } from '@/lib/errors'
 import { useCabinetStore } from '@/stores/cabinet'
 import { useCategoryFilter } from '@/stores/category_filter'
 import { useTagFilter } from '@/stores/tag_filter'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface ProductItem {
   id: string
@@ -442,16 +443,20 @@ export function Products() {
                   <th className="py-3 px-2 w-10"></th>
                   <th className="py-3 px-4">Товар</th>
                   <th className="py-3 px-4">Кабинет / Категория</th>
-                  <th className="py-3 px-4 text-right" title="Цена продавца (= marketing_seller_price). От неё считается выручка и комиссия.">Цена</th>
-                  <th className="py-3 px-4 text-right" title="Средняя «оплачено покупателем» за 30 дней — цена с СПП/Ozon-Картой. Драйвер спроса, не влияет на твою выручку.">Цена с СПП</th>
-                  <th className="py-3 px-4 text-right">Себест.</th>
-                  <th className="py-3 px-4 text-right" title="Брутто-маржа: (цена−себест)/цена. Без комиссии Ozon, логистики, налога.">
-                    Брутто %
+                  <th className="py-3 px-4 text-right">Цена</th>
+                  <th className="py-3 px-4 text-right">Цена с СПП</th>
+                  <th className="py-3 px-4 text-right">
+                    <MetricLabel metricKey="cost_price" override="Себест." />
                   </th>
-                  <th className="py-3 px-4 text-right" title="Чистая маржа: (selling_price − cost − реальная комиссия Ozon из API − ~3% реклама − ~6% УСН) / selling_price. Комиссия берётся из Product.sales_percent_fbo (реальная per-товар, 40-47%). Если комиссия не синкнута — fallback эвристика 25%.">
-                    ≈Чистая %
+                  <th className="py-3 px-4 text-right">
+                    <MetricLabel metricKey="gross_margin_pct" override="Брутто %" />
                   </th>
-                  <th className="py-3 px-4 text-right">Остаток</th>
+                  <th className="py-3 px-4 text-right">
+                    <MetricLabel metricKey="net_profit" override="≈Чистая %" />
+                  </th>
+                  <th className="py-3 px-4 text-right">
+                    <MetricLabel metricKey="stock_for_sale" override="Остаток" />
+                  </th>
                   <th className="py-3 px-2 w-8"></th>
                 </tr>
               </thead>

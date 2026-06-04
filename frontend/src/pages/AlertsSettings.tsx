@@ -23,7 +23,7 @@ const TYPE_LABEL: Record<string, string> = {
   credit_payment_due: 'Платёж по кредиту скоро (порог: дней)',
   negative_review: 'Негативный отзыв (порог: рейтинг ≤)',
   sales_drop: 'Падение продаж (порог: % падения)',
-  return_received: 'Возврат получен',
+  return_received: 'Новый возврат (порог: мин. кол-во шт)',
   cashflow_gap: 'Кассовый разрыв',
   fbs_not_shipped: 'FBS не отгружен (порог: часов)',
   tax_due: 'Срок налога (порог: дней до)',
@@ -33,6 +33,7 @@ const TYPE_LABEL: Record<string, string> = {
   low_conversion: 'Низкая конверсия в корзину (порог: %)',
   competitor_dump: 'Демпинг конкурентов (color_index=RED)',
   commission_change: 'Изменение комиссии (порог: дней ретроспективы)',
+  sales_spike: 'Скачок продаж (порог: % роста)',
 }
 
 const ALL_TYPES = Object.keys(TYPE_LABEL)
@@ -169,6 +170,14 @@ export function AlertsSettings() {
                   {r.marker_type === 'commission_change' && (
                     <ThField label="Ретроспектива (дней)" value={r.threshold_json.lookback_days ?? 30}
                              onSave={(v) => update.mutate({ id: r.id, threshold_json: { lookback_days: +v } })} />
+                  )}
+                  {r.marker_type === 'sales_spike' && (
+                    <ThField label="% роста" value={r.threshold_json.spike_pct ?? 50}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { spike_pct: +v } })} />
+                  )}
+                  {r.marker_type === 'return_received' && (
+                    <ThField label="Мин. шт в возврате" value={r.threshold_json.min_qty ?? 1}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { min_qty: +v } })} />
                   )}
                 </div>
 
