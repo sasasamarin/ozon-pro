@@ -36,8 +36,15 @@ jobs:
           CORS_ORIGINS: "*"
           ENVIRONMENT: "test"
         run: |
-          # -s/--capture=no — traceback в stdout (попадёт в Annotations);
-          # --tb=long — полная трассировка;
-          # || cat .pytest_cache/v/cache/lastfailed — на случай collection-error.
-          pytest tests/ -v -s --tb=long --no-header 2>&1
-          echo "EXIT_CODE=$?"
+          set +e
+          OUT=$(pytest tests/ -v -s --tb=long --no-header 2>&1)
+          EC=$?
+          echo "$OUT"
+          if [ $EC -ne 0 ]; then
+            # Превращаем последние 30 строк вывода в GitHub annotations
+            # (видны через API /check-runs/{id}/annotations без auth).
+            echo "$OUT" | tail -30 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
+          exit $EC
