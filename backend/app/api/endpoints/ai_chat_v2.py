@@ -11,7 +11,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -131,6 +135,93 @@ async def chat_message(
             for t in result["tool_calls"]
         ],
         error=result["error"],
+    )
+
+
+@router.post("/chat/stream")
+async def chat_message_stream(
+    body: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """SSE-стрим ответа AI.
+
+    Серверная модель сейчас не стримит (Render-proxy агрегирует),
+    поэтому стрим псевдо-typewriter: считаем полный ответ как
+    обычно, потом эмитим словами с микропаузой — UX-эффект «печати».
+
+    События SSE:
+      event: stage  → {stage: 'thinking' | 'tools' | 'writing'}
+      event: token  → {text: '...'}
+      event: meta   → {session_id, model, tool_calls, ...}
+      event: done   → {}
+    """
+    if not settings.AI_RENDER_URL and not get_provider().is_configured():
+        raise HTTPException(503, "AI не настроен.")
+    try:
+        session = await orchestrator.ensure_session(
+            db, current_user.id,
+            uuid.UUID(body.session_id) if body.session_id else None,
+            cabinet_scope=body.cabinet_scope,
+            first_message=body.text,
+        )
+    except ValueError:
+        raise HTTPException(404, "Сессия не найдена")
+
+    async def gen():
+        def _sse(event: str, payload: dict) -> bytes:
+            data = json.dumps(payload, ensure_ascii=False)
+            return f"event: {event}\ndata: {data}\n\n".encode("utf-8")
+
+        yield _sse("stage", {"stage": "thinking"})
+        try:
+            result = await orchestrator.chat(
+                db, session=session, company_id=current_user.company_id,
+                user_text=body.text, attachments=body.attachments,
+            )
+        except Exception as e:
+            yield _sse("error", {"message": str(e)[:200]})
+            yield _sse("done", {})
+            return
+
+        # Сначала отправим metadata (tool_calls), чтобы UI показал использованные tools
+        yield _sse("meta", {
+            "session_id": str(session.id),
+            "title": session.title,
+            "model": result["model"],
+            "input_tokens": result["input_tokens"],
+            "output_tokens": result["output_tokens"],
+            "iterations": result["iterations"],
+            "tool_calls": [
+                {"tool": t["tool"], "args": t["args"],
+                 "result_preview": t["result_preview"]}
+                for t in result["tool_calls"]
+            ],
+            "error": result["error"],
+        })
+
+        yield _sse("stage", {"stage": "writing"})
+
+        # Псевдо-typewriter: чанки по словам с микропаузой
+        text = result["answer"] or ""
+        words = text.split(" ")
+        buf = ""
+        for i, w in enumerate(words):
+            buf += (w + (" " if i < len(words) - 1 else ""))
+            if len(buf) >= 6 or i == len(words) - 1:
+                yield _sse("token", {"text": buf})
+                buf = ""
+                await asyncio.sleep(0.012)  # 12ms между чанками
+
+        yield _sse("done", {})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # отключить буферизацию nginx
+        },
     )
 
 

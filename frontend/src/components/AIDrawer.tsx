@@ -8,27 +8,13 @@
  * Все вызовы AI идут на main backend /ai/chat (через Render proxy).
  */
 import { useEffect, useRef, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
 import {
   Bot, Send, X, Loader2, Sparkles, User as UserIcon, Wrench,
   AlertCircle, Maximize2,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '@/lib/api'
 import { useAIDrawerStore } from '@/stores/aiDrawer'
 import { cn } from '@/lib/utils'
-
-interface ChatResp {
-  session_id: string
-  title: string | null
-  answer: string
-  model: string
-  input_tokens: number
-  output_tokens: number
-  iterations: number
-  tool_calls: { tool: string; args: Record<string, unknown>; result_preview: string }[]
-  error: boolean
-}
 
 interface LocalMsg {
   role: 'user' | 'assistant'
@@ -36,12 +22,16 @@ interface LocalMsg {
   tools?: { tool: string }[]
 }
 
+type Stage = 'thinking' | 'tools' | 'writing' | null
+
 export function AIDrawer() {
   const { isOpen, context, prefilledQuestion, close } = useAIDrawerStore()
   const navigate = useNavigate()
   const [messages, setMessages] = useState<LocalMsg[]>([])
   const [input, setInput] = useState('')
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [stage, setStage] = useState<Stage>(null)
+  const [streaming, setStreaming] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
 
   // На открытии — заполнить input + сбросить состояние, если контекст изменился
@@ -56,49 +46,118 @@ export function AIDrawer() {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages.length])
 
-  const send = useMutation<ChatResp, Error, string>({
-    mutationFn: async (text: string) => {
-      setMessages((m) => [...m, { role: 'user', text }])
-      // Все выбранные кабинеты из UI идут в cabinet_scope, не только [0].
-      // Это даёт AI точное соответствие тому что видит юзер на экране.
-      const cabIds = context?.cabinet_ids?.length
-        ? context.cabinet_ids
-        : (context?.cabinet_id ? [context.cabinet_id] : [])
-      const body = {
-        session_id: sessionId,
-        text,
-        cabinet_scope: cabIds.length
-          ? { cabinet_ids: cabIds, active: context?.cabinet_id || cabIds[0] }
-          : null,
-        attachments: context ? [{
-          type: 'chart' as const,
-          metrics: context.metrics,
-          period: context.period || { from: '', to: '' },
-          product_id: context.product_id,
-        }] : null,
+  async function sendStream(text: string) {
+    setMessages((m) => [...m, { role: 'user', text }, { role: 'assistant', text: '' }])
+    setStreaming(true)
+    setStage('thinking')
+
+    const cabIds = context?.cabinet_ids?.length
+      ? context.cabinet_ids
+      : (context?.cabinet_id ? [context.cabinet_id] : [])
+    const body = {
+      session_id: sessionId,
+      text,
+      cabinet_scope: cabIds.length
+        ? { cabinet_ids: cabIds, active: context?.cabinet_id || cabIds[0] }
+        : null,
+      attachments: context ? [{
+        type: 'chart' as const,
+        metrics: context.metrics,
+        period: context.period || { from: '', to: '' },
+        product_id: context.product_id,
+      }] : null,
+    }
+
+    try {
+      const token = localStorage.getItem('flowoi_token') || localStorage.getItem('token')
+      const res = await fetch('/api/v1/ai/chat/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        // Парсим SSE — события разделены \n\n
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+
+        for (const evt of events) {
+          const lines = evt.split('\n')
+          let event = ''
+          let data = ''
+          for (const ln of lines) {
+            if (ln.startsWith('event: ')) event = ln.slice(7).trim()
+            else if (ln.startsWith('data: ')) data = ln.slice(6).trim()
+          }
+          if (!event) continue
+          let payload: any = {}
+          try { payload = JSON.parse(data) } catch {}
+
+          if (event === 'stage') {
+            setStage(payload.stage)
+          } else if (event === 'token') {
+            setMessages((m) => {
+              const next = [...m]
+              const last = next[next.length - 1]
+              if (last?.role === 'assistant') {
+                next[next.length - 1] = { ...last, text: last.text + (payload.text || '') }
+              }
+              return next
+            })
+          } else if (event === 'meta') {
+            if (payload.session_id) setSessionId(payload.session_id)
+            setMessages((m) => {
+              const next = [...m]
+              const last = next[next.length - 1]
+              if (last?.role === 'assistant') {
+                next[next.length - 1] = { ...last, tools: payload.tool_calls }
+              }
+              return next
+            })
+          } else if (event === 'error') {
+            setMessages((m) => {
+              const next = [...m]
+              const last = next[next.length - 1]
+              if (last?.role === 'assistant') {
+                next[next.length - 1] = { ...last, text: `Ошибка: ${payload.message || 'AI недоступен'}` }
+              }
+              return next
+            })
+          } else if (event === 'done') {
+            setStage(null)
+          }
+        }
       }
-      const r = await api.post('/ai/chat', body)
-      return r.data
-    },
-    onSuccess: (data) => {
-      setSessionId(data.session_id)
-      setMessages((m) => [...m, {
-        role: 'assistant',
-        text: data.answer,
-        tools: data.tool_calls,
-      }])
-    },
-    onError: (e) => {
-      setMessages((m) => [...m, {
-        role: 'assistant',
-        text: `Ошибка: ${e?.message || 'AI недоступен'}`,
-      }])
-    },
-  })
+    } catch (e: any) {
+      setMessages((m) => {
+        const next = [...m]
+        const last = next[next.length - 1]
+        if (last?.role === 'assistant' && !last.text) {
+          next[next.length - 1] = { ...last, text: `Ошибка: ${e?.message || 'AI недоступен'}` }
+        }
+        return next
+      })
+    } finally {
+      setStreaming(false)
+      setStage(null)
+    }
+  }
 
   const handleSend = (text: string) => {
-    if (!text.trim() || send.isPending) return
-    send.mutate(text)
+    if (!text.trim() || streaming) return
+    sendStream(text)
     setInput('')
   }
 
@@ -179,7 +238,7 @@ export function AIDrawer() {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {messages.length === 0 && !send.isPending && (
+          {messages.length === 0 && !streaming && (
             <div className="text-center text-xs text-fg-muted py-8">
               <Sparkles className="w-6 h-6 mx-auto mb-2 text-violet-200" />
               AI видит метрики этого экрана. Задай вопрос или нажми «отправить»
@@ -189,10 +248,16 @@ export function AIDrawer() {
           {messages.map((m, i) => (
             <MessageRow key={i} msg={m} />
           ))}
-          {send.isPending && (
+          {streaming && stage === 'thinking' && (
             <div className="flex gap-2 items-center text-xs text-fg-muted italic">
               <Loader2 className="w-3 h-3 animate-spin" />
               AI считает гипотезы…
+            </div>
+          )}
+          {streaming && stage === 'writing' && (
+            <div className="flex gap-2 items-center text-xs text-violet-600 italic">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Печатает ответ…
             </div>
           )}
           <div ref={endRef} />
@@ -213,11 +278,11 @@ export function AIDrawer() {
               rows={2}
               placeholder="Спроси о том что видишь на экране…"
               className="flex-1 resize-none px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg"
-              disabled={send.isPending}
+              disabled={streaming}
             />
             <button
               onClick={() => handleSend(input)}
-              disabled={!input.trim() || send.isPending}
+              disabled={!input.trim() || streaming}
               className="px-3 py-1.5 bg-violet-600 text-white rounded text-sm hover:bg-violet-700 disabled:opacity-50 self-end"
             >
               <Send className="w-3.5 h-3.5" />
