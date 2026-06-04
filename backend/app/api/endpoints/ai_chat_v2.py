@@ -79,11 +79,17 @@ class StatusResponse(BaseModel):
 
 @router.get("/v2/status", response_model=StatusResponse)
 async def ai_v2_status() -> StatusResponse:
-    p = get_provider()
+    # AI работает либо через прямой OpenAI (in-process), либо через Render-proxy.
+    # VPS в РФ не может в OpenAI → используется Render.
+    configured = bool(settings.AI_RENDER_URL) or get_provider().is_configured()
+    if settings.AI_RENDER_URL:
+        provider_name = "render-proxy"
+    else:
+        provider_name = get_provider().name
     return StatusResponse(
-        configured=p.is_configured(),
+        configured=configured,
         model=settings.OPENAI_MODEL,
-        provider=p.name,
+        provider=provider_name,
     )
 
 
@@ -93,10 +99,10 @@ async def chat_message(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ChatResponse:
-    if not get_provider().is_configured():
+    if not settings.AI_RENDER_URL and not get_provider().is_configured():
         raise HTTPException(503, (
-            "OPENAI_API_KEY не задан в env бэкенда. "
-            "Добавь в Render Environment и перезапусти сервис."
+            "AI не настроен. Добавь AI_RENDER_URL (URL Render-сервиса) "
+            "ИЛИ OPENAI_API_KEY в env бэкенда."
         ))
     try:
         session = await orchestrator.ensure_session(

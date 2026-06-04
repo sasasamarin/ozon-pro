@@ -167,6 +167,83 @@ async def ensure_session(
     return s
 
 
+async def _chat_via_render(
+    db: AsyncSession, *,
+    session: AIChatSession,
+    user_text: str,
+    attachments: list[dict] | None = None,
+) -> dict:
+    """
+    Proxy на внешний AI-сервис (Render). VPS в РФ не может звонить OpenAI
+    напрямую (403 unsupported_country_region_territory). Render → OpenAI →
+    tools через api.flowoi.ru bridge → данные.
+
+    Сессии: мы храним свою историю в БД (ai_chat_messages), Render держит
+    свою in-memory. session_id используется только в нашей БД; Render
+    получает каждый запрос как новую сессию (без истории).
+    """
+    import httpx
+
+    cabinet_ids = (session.cabinet_scope or {}).get("cabinet_ids") or []
+    body = {
+        "message": user_text,
+        "cabinet_scope": cabinet_ids,
+        "attachments": [
+            {
+                "kind": "chart_context",
+                "product_id": a.get("product_id"),
+                "metrics": a.get("metrics") or [],
+                "period_from": (a.get("period") or {}).get("from"),
+                "period_to": (a.get("period") or {}).get("to"),
+            }
+            for a in (attachments or [])
+        ],
+    }
+    url = settings.AI_RENDER_URL.rstrip("/") + "/ai/chat"
+    async with httpx.AsyncClient(timeout=120) as client:
+        try:
+            r = await client.post(url, json=body)
+            r.raise_for_status()
+            data = r.json()
+        except httpx.HTTPError as e:
+            err = f"AI Render недоступен: {e}"
+            await _save_message(
+                db, session.id, ChatRole.ASSISTANT.value, content=err,
+            )
+            await db.commit()
+            return {
+                "answer": err, "tool_calls": [], "model": "render-proxy",
+                "input_tokens": 0, "output_tokens": 0, "iterations": 0, "error": True,
+            }
+
+    answer = data.get("answer") or "(пустой ответ)"
+    tools_used = data.get("tools_used") or []
+    note = data.get("note")
+    if note:
+        answer = answer + f"\n\n_{note}_"
+
+    await _save_message(
+        db, session.id, ChatRole.ASSISTANT.value, content=answer,
+        model="render-proxy",
+    )
+    if not session.title and user_text:
+        session.title = user_text.strip()[:60]
+    session.updated_at = datetime.utcnow()  # type: ignore[assignment]
+    await db.commit()
+
+    return {
+        "answer": answer,
+        "tool_calls": [
+            {"tool": t.get("name"), "args": t.get("arguments") or {},
+             "result_preview": t.get("source") or ""}
+            for t in tools_used
+        ],
+        "model": "render-proxy",
+        "input_tokens": 0, "output_tokens": 0,
+        "iterations": 1, "error": False,
+    }
+
+
 async def chat(
     db: AsyncSession, *,
     session: AIChatSession,
@@ -174,16 +251,23 @@ async def chat(
     user_text: str,
     attachments: list[dict] | None = None,
 ) -> dict:
-    """Главный метод: prompt → tool-loop → ответ."""
-    provider = get_provider()
+    """Главный метод: либо in-process tool-loop, либо proxy на Render."""
 
-    # 1) user-msg в БД
+    # 1) user-msg в БД (одинаково для обоих режимов)
     await _save_message(
         db, session.id, ChatRole.USER.value,
         content=user_text, attachments=attachments,
     )
 
-    # 2) собираем messages
+    # 2) Если задан AI_RENDER_URL — проксируем туда. VPS в РФ → OpenAI
+    # отвечает 403, in-process orchestrator падает. Render не в РФ.
+    if settings.AI_RENDER_URL:
+        return await _chat_via_render(
+            db, session=session, user_text=user_text, attachments=attachments,
+        )
+
+    # In-process путь — если есть прямой OpenAI ключ + сетевой доступ.
+    provider = get_provider()
     history = await _load_history(db, session.id, limit=40)
     # history уже содержит только что добавленный user-msg
 

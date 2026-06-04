@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = ""  # пусто = https://api.openai.com/v1. Можно прокси.
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_MAX_TOOL_ITERATIONS: int = 6
+    # URL внешнего AI-сервиса (Render). Если задан — main backend
+    # проксирует /ai/chat туда (VPS в РФ не может звонить OpenAI напрямую).
+    AI_RENDER_URL: str = ""
 
     # SERVICE_TOKEN: сервисный токен для AI-сервиса (Render → основной API).
     # Если задан — запросы с `Authorization: Bearer <SERVICE_TOKEN>` авторизуются
