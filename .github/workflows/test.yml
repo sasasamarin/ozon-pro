@@ -45,8 +45,9 @@ jobs:
           EC=$?
           echo "$OUT"
           if [ $EC -ne 0 ]; then
-            # Грепаем строки с реальными ошибками для annotations (auth-free).
-            echo "$OUT" | grep -E "ValidationError|ERROR|error:|Field required|ImportError|ModuleNotFoundError|missing" | head -15 | while IFS= read -r line; do
+            # Берём строки СО ВСЕМ контекстом ошибки: header validation errors +
+            # имена полей (имя поля идёт ДО строки "Field required").
+            echo "$OUT" | head -100 | grep -E "^[A-Z_]+$|validation errors|Field required|errors.pydantic|^ERROR" | head -20 | while IFS= read -r line; do
               echo "::error::${line}"
             done
           fi
