@@ -95,6 +95,38 @@ def _row(a: AlertHistory) -> AlertRow:
     )
 
 
+class UnreadSummary(BaseModel):
+    count: int
+    critical_count: int
+    warning_count: int
+    recent: list[AlertRow]
+
+
+@router.get("/unread-summary", response_model=UnreadSummary)
+async def unread_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UnreadSummary:
+    """Для bell-иконки: счётчик + последние 5."""
+    rows = (await db.execute(
+        select(AlertHistory)
+        .where(
+            AlertHistory.user_id == current_user.id,
+            AlertHistory.resolved_at.is_(None),
+        )
+        .order_by(AlertHistory.triggered_at.desc())
+    )).scalars().all()
+
+    crit = sum(1 for a in rows if a.severity == AlertSeverity.CRITICAL.value)
+    warn = sum(1 for a in rows if a.severity == AlertSeverity.WARNING.value)
+    return UnreadSummary(
+        count=len(rows),
+        critical_count=crit,
+        warning_count=warn,
+        recent=[_row(a) for a in rows[:5]],
+    )
+
+
 @router.get("/active", response_model=list[AlertRow])
 async def list_active(
     severity: str | None = Query(None),

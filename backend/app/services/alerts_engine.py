@@ -281,6 +281,10 @@ DEFAULT_RULES = [
      "threshold_json": {"min_pct": 10}, "channels_json": ["in_app"]},
     {"marker_type": AlertMarkerType.CREDIT_PAYMENT_DUE.value,
      "threshold_json": {"days_before": 7}, "channels_json": ["in_app"]},
+    {"marker_type": AlertMarkerType.SALES_DROP.value,
+     "threshold_json": {"drop_pct": 30}, "channels_json": ["in_app"]},
+    {"marker_type": AlertMarkerType.CASHFLOW_GAP.value,
+     "threshold_json": {}, "channels_json": ["in_app"]},
 ]
 
 

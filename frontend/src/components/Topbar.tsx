@@ -22,6 +22,7 @@ import { DataFreshnessBadge } from './DataFreshnessBadge'
 import { ProductPickerGlobal } from './ProductPickerGlobal'
 import { CategoryPickerGlobal } from './CategoryPickerGlobal'
 import { TagPickerGlobal } from './TagPickerGlobal'
+import { NotificationBell } from './NotificationBell'
 
 interface TopbarProps {
   onOpenSidebar: () => void
@@ -245,6 +246,9 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
           <DataFreshnessBadge />
           <ReconcileBadge />
         </div>
+
+        {/* Notification bell */}
+        <NotificationBell />
 
         {/* User menu */}
         <div ref={userRef} className="relative">
