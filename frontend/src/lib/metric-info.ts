@@ -210,6 +210,55 @@ export const METRICS: Record<string, MetricInfo> = {
     source: 'derived',
     cautions: ['Норма 5-15% — выше может означать неэффективную кампанию.'],
   },
+
+  // === Конкуренты / цены ===
+  external_min_price: {
+    label: 'Мин. цена конкурентов',
+    description: 'Минимальная цена этого товара у других продавцов на Ozon (Premium API).',
+    source: 'api',
+    cautions: ['Доступно только на Premium-подписке Ozon. Без неё поле пустое.',
+               'Обновляется Ozon ~раз в сутки.'],
+    link: '/products/competitors',
+  },
+  color_index: {
+    label: 'Цветовой индекс Ozon',
+    description: 'Категория конкурентоспособности цены: SUPER → BLUE → YELLOW → RED.',
+    source: 'api',
+    cautions: ['RED = цена сильно выше рынка, нужно снижать или объяснять премиальностью.',
+               'BLUE/SUPER = можно поднять цену без потери продаж.'],
+    link: '/products/competitors',
+  },
+
+  // === Баланс / cashflow ===
+  end_balance: {
+    label: 'Конечный баланс',
+    description: 'Накопленный cashflow за период с начала окна.',
+    source: 'derived',
+    cautions: ['Это не баланс на счёте Ozon — это сальдо потока за период.'],
+  },
+  account_balance: {
+    label: 'Баланс счёта Ozon',
+    description: 'Сумма к выплате продавцу — доступно для вывода.',
+    formula: 'finance/balance из Ozon API',
+    source: 'api',
+    cautions: ['Деньги становятся доступны после холдов Ozon (обычно 14 дней с момента доставки).'],
+    link: '/finance/account-balance',
+  },
+
+  // === Кредиты ===
+  loan_principal: {
+    label: 'Тело кредита',
+    description: 'Сумма к погашению (без процентов).',
+    source: 'manual',
+    link: '/loans',
+  },
+  loan_payment: {
+    label: 'Платёж по кредиту',
+    description: 'Аннуитет или дифференцированный платёж за период.',
+    formula: 'P×i×(1+i)^n / ((1+i)^n - 1) для аннуитета',
+    source: 'derived',
+    link: '/credits/schedule',
+  },
 }
 
 /** Безопасный доступ — undefined если ключа нет. */

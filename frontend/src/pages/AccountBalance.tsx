@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface BalancePoint {
   date: string
@@ -64,19 +65,27 @@ export function AccountBalance() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Card className="p-4">
-          <p className="text-[11px] uppercase text-fg-muted">Начальный баланс</p>
+          <p className="text-[11px] uppercase text-fg-muted">
+            <MetricLabel metricKey="account_balance" override="Начальный баланс" />
+          </p>
           <p className="text-xl font-semibold mt-1 tabular-nums">{formatCurrency(data?.starting_balance ?? 0)}</p>
         </Card>
         <Card className="p-4">
-          <p className="text-[11px] uppercase text-fg-muted">Приход</p>
+          <p className="text-[11px] uppercase text-fg-muted">
+            <MetricLabel metricKey="revenue" override="Приход" />
+          </p>
           <p className="text-xl font-semibold text-emerald-700 mt-1 tabular-nums">{formatCurrency(data?.total_inflow ?? 0)}</p>
         </Card>
         <Card className="p-4">
-          <p className="text-[11px] uppercase text-fg-muted">Расход</p>
+          <p className="text-[11px] uppercase text-fg-muted">
+            <MetricLabel metricKey="ozon_expenses" override="Расход" />
+          </p>
           <p className="text-xl font-semibold text-rose-700 mt-1 tabular-nums">−{formatCurrency(data?.total_outflow ?? 0)}</p>
         </Card>
         <Card className="p-4 border-2 border-indigo-200 bg-indigo-50/40">
-          <p className="text-[11px] uppercase text-fg-muted">Текущий баланс</p>
+          <p className="text-[11px] uppercase text-fg-muted">
+            <MetricLabel metricKey="account_balance" override="Текущий баланс" />
+          </p>
           <p className={cn(
             'text-xl font-semibold mt-1 tabular-nums',
             (data?.current_balance ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700',
