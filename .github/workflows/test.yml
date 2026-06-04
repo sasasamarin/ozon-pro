@@ -13,11 +13,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
       - name: Install deps
         working-directory: backend
         run: |
-          pip install -e ".[dev]"
+          python -m pip install --upgrade pip
+          pip install --no-cache-dir -e ".[dev]"
       - name: Run pytest
         working-directory: backend
         # Dummy env — pydantic-settings валидирует PostgresDsn/RedisDsn при
@@ -35,4 +35,9 @@ jobs:
           ALLOWED_HOSTS: "*"
           CORS_ORIGINS: "*"
           ENVIRONMENT: "test"
-        run: pytest tests/ -v
+        run: |
+          # -s/--capture=no — traceback в stdout (попадёт в Annotations);
+          # --tb=long — полная трассировка;
+          # || cat .pytest_cache/v/cache/lastfailed — на случай collection-error.
+          pytest tests/ -v -s --tb=long --no-header 2>&1
+          echo "EXIT_CODE=$?"
