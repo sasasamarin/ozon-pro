@@ -76,10 +76,21 @@ class SupplierRow(BaseModel):
     name: str
     contact: str | None
     lead_time_days: int | None
+    payment_terms: str | None = None
+    orders_count: int = 0
+    total_spent_rub: float = 0
+    last_order_date: str | None = None
 
 
 class SupplierCreate(BaseModel):
     name: str
+    contact: str | None = None
+    lead_time_days: int | None = None
+    payment_terms: str | None = None
+
+
+class SupplierUpdate(BaseModel):
+    name: str | None = None
     contact: str | None = None
     lead_time_days: int | None = None
     payment_terms: str | None = None
@@ -124,10 +135,30 @@ async def list_suppliers(
         select(Supplier).where(Supplier.user_id == current_user.id)
         .order_by(Supplier.name)
     )).scalars().all()
+
+    # Агрегаты по заказам (orders_count, total_spent_rub, last_order_date)
+    stats = {}
+    if rows:
+        from sqlalchemy import text as _sql
+        agg = (await db.execute(_sql("""
+            SELECT supplier_id::text,
+                   COUNT(*) AS cnt,
+                   COALESCE(SUM(unit_price * qty + delivery_cost), 0)::float AS total,
+                   MAX(order_date) AS last_dt
+            FROM supplier_orders
+            WHERE user_id = :uid AND supplier_id IS NOT NULL
+            GROUP BY supplier_id
+        """), {"uid": str(current_user.id)})).all()
+        stats = {r.supplier_id: r for r in agg}
+
     return [
         SupplierRow(
             id=str(s.id), name=s.name, contact=s.contact,
             lead_time_days=s.lead_time_days,
+            payment_terms=s.payment_terms,
+            orders_count=stats[str(s.id)].cnt if str(s.id) in stats else 0,
+            total_spent_rub=round(stats[str(s.id)].total, 2) if str(s.id) in stats else 0,
+            last_order_date=stats[str(s.id)].last_dt.isoformat() if str(s.id) in stats and stats[str(s.id)].last_dt else None,
         )
         for s in rows
     ]
@@ -151,7 +182,62 @@ async def create_supplier(
     await db.refresh(s)
     return SupplierRow(
         id=str(s.id), name=s.name, contact=s.contact, lead_time_days=s.lead_time_days,
+        payment_terms=s.payment_terms,
     )
+
+
+@router.patch("/suppliers/{sid}", response_model=SupplierRow)
+async def update_supplier(
+    sid: str,
+    payload: SupplierUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SupplierRow:
+    try:
+        uid = uuid.UUID(sid)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    s = (await db.execute(
+        select(Supplier).where(Supplier.id == uid, Supplier.user_id == current_user.id)
+    )).scalar_one_or_none()
+    if not s:
+        raise HTTPException(404, "Поставщик не найден")
+    for field in ("name", "contact", "lead_time_days", "payment_terms"):
+        v = getattr(payload, field)
+        if v is not None:
+            setattr(s, field, v)
+    await db.commit()
+    await db.refresh(s)
+    return SupplierRow(
+        id=str(s.id), name=s.name, contact=s.contact,
+        lead_time_days=s.lead_time_days, payment_terms=s.payment_terms,
+    )
+
+
+@router.delete("/suppliers/{sid}")
+async def delete_supplier(
+    sid: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        uid = uuid.UUID(sid)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    s = (await db.execute(
+        select(Supplier).where(Supplier.id == uid, Supplier.user_id == current_user.id)
+    )).scalar_one_or_none()
+    if not s:
+        raise HTTPException(404, "Поставщик не найден")
+    # Проверка использования
+    used = (await db.execute(
+        select(SupplierOrder).where(SupplierOrder.supplier_id == uid).limit(1)
+    )).scalar_one_or_none()
+    if used:
+        raise HTTPException(409, "У поставщика есть заказы — удалить нельзя. Откройте /procurement и удалите заказы или отвяжите.")
+    await db.delete(s)
+    await db.commit()
+    return {"ok": True}
 
 
 # === Supplier Orders ===

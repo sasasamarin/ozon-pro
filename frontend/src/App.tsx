@@ -43,6 +43,8 @@ import { PlanPurchase } from '@/pages/PlanPurchase'
 import { AccountBalance } from '@/pages/AccountBalance'
 import { Credit } from '@/pages/Credit'
 import { Loans } from '@/pages/Loans'
+import { LoansSchedule } from '@/pages/LoansSchedule'
+import { Suppliers } from '@/pages/Suppliers'
 import { Supplies } from '@/pages/Supplies'
 import { SupplyDetailPage } from '@/pages/SupplyDetail'
 import { ProductStats } from '@/pages/ProductStats'
@@ -136,6 +138,8 @@ export default function App() {
         <Route path="/credit/list" element={<Credit />} />
         <Route path="/loans" element={<Loans />} />
         <Route path="/credits" element={<Loans />} />
+        <Route path="/credits/schedule" element={<LoansSchedule />} />
+        <Route path="/procurement/suppliers" element={<Suppliers />} />
         <Route path="/procurement/supplies" element={<Supplies />} />
         <Route path="/procurement/supplies/:id" element={<SupplyDetailPage />} />
         <Route path="/products/stats" element={<ProductStats />} />
@@ -192,6 +196,8 @@ export default function App() {
               item.path !== '/credit/list' &&
               item.path !== '/credits' &&
               item.path !== '/loans' &&
+              item.path !== '/credits/schedule' &&
+              item.path !== '/procurement/suppliers' &&
               item.path !== '/procurement/supplies' &&
               item.path !== '/email/templates' &&
               item.path !== '/email/log',
