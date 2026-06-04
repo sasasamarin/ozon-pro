@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/Input'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface ReturnRow {
   id: string
@@ -110,7 +111,9 @@ export function Returns() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card className="p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-fg">Причины возвратов (90 дней)</h3>
+              <h3 className="text-sm font-semibold text-fg">
+                <MetricLabel metricKey="return_rate_pct" override="Причины возвратов (90 дней)" />
+              </h3>
               <span className="text-xs text-fg-muted">{stats.returns_count} событий</span>
             </div>
             {stats.top_reasons_returns.length === 0 ? (

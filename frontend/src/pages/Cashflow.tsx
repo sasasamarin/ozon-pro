@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface CashflowPoint {
   period_start: string
@@ -227,13 +228,14 @@ export function Cashflow() {
 }
 
 function KpiTile({
-  label, value, color, negative, accent,
+  label, value, color, negative, accent, metricKey,
 }: {
   label: string
   value: number
   color: 'emerald' | 'rose' | 'indigo' | 'violet'
   negative?: boolean
   accent?: boolean
+  metricKey?: string
 }) {
   const colorMap = {
     emerald: 'text-emerald-700',
@@ -244,7 +246,9 @@ function KpiTile({
   const displayValue = negative ? -value : value
   return (
     <Card className={cn('p-4', accent && 'border-2 border-indigo-200 bg-indigo-50/40')}>
-      <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">{label}</p>
+      <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+        {metricKey ? <MetricLabel metricKey={metricKey} override={label} /> : label}
+      </p>
       <p className={cn('text-[22px] leading-tight font-semibold mt-1 tabular-nums', colorMap[color])}>
         {formatCurrency(displayValue)}
       </p>

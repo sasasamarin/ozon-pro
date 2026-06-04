@@ -10,6 +10,7 @@ import { AskAIButton } from '@/components/AskAIButton'
 import { api } from '@/lib/api'
 import { useCabinetStore } from '@/stores/cabinet'
 import { formatCurrency, cn } from '@/lib/utils'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface Resp {
   period_from: string; period_to: string
@@ -73,10 +74,10 @@ export function Taxes() {
           </Card>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Stat label="Выручка" value={data.revenue} tone="fg" />
-            <Stat label="Прибыль до налога" value={data.gross_profit} tone={data.gross_profit > 0 ? 'emerald' : 'rose'} />
+            <Stat metricKey="revenue" label="Выручка" value={data.revenue} tone="fg" />
+            <Stat metricKey="gross_profit" label="Прибыль до налога" value={data.gross_profit} tone={data.gross_profit > 0 ? 'emerald' : 'rose'} />
             <Stat label="Налог" value={data.tax_amount} tone="amber" />
-            <Stat label="Чистая после налога" value={data.net_profit_after_tax} tone={data.net_profit_after_tax > 0 ? 'emerald' : 'rose'} />
+            <Stat metricKey="net_profit" label="Чистая после налога" value={data.net_profit_after_tax} tone={data.net_profit_after_tax > 0 ? 'emerald' : 'rose'} />
           </div>
 
           {/* Помесячно */}
@@ -108,10 +109,12 @@ export function Taxes() {
   )
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone: 'fg' | 'emerald' | 'rose' | 'amber' }) {
+function Stat({ label, value, tone, metricKey }: { label: string; value: number; tone: 'fg' | 'emerald' | 'rose' | 'amber'; metricKey?: string }) {
   return (
     <Card className="p-3">
-      <div className="text-xs text-fg-muted">{label}</div>
+      <div className="text-xs text-fg-muted">
+        {metricKey ? <MetricLabel metricKey={metricKey} override={label} /> : label}
+      </div>
       <div className={cn('text-xl font-semibold mt-0.5 tabular-nums',
         tone === 'emerald' && 'text-emerald-700',
         tone === 'rose' && 'text-rose-700',
