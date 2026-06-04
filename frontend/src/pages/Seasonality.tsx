@@ -16,6 +16,7 @@ import {
 } from 'recharts'
 import { Calendar, TrendingUp, AlertCircle, Sparkles, Info, ShoppingCart } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { AskAIButton } from '@/components/AskAIButton'
 import { api } from '@/lib/api'
 import { useCabinetStore } from '@/stores/cabinet'
 import { formatNumber, cn } from '@/lib/utils'
@@ -257,6 +258,20 @@ export function Seasonality() {
             <b> категория кабинета</b> (fallback для новых SKU).
           </p>
         </div>
+        <AskAIButton
+          context={{
+            type: 'chart',
+            source_page: 'seasonality',
+            source_label: 'Сезонный профиль',
+            metrics: ['seasonal_index_by_month', 'yoy', 'peak_month'],
+            product_id: productId || undefined,
+            cabinet_id: cabinetId || undefined,
+          }}
+          question={productId
+            ? "Когда планировать закупки на этот товар по сезонности?"
+            : "На какие SKU поставить акцент к сезонному пику?"}
+          variant="solid"
+        />
       </div>
 
       {/* === Фильтры === */}

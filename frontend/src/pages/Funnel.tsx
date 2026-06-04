@@ -15,6 +15,7 @@ import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
 import { useCabinetStore } from '@/stores/cabinet'
+import { AskAIButton } from '@/components/AskAIButton'
 
 interface FunnelKPI {
   impressions: number
@@ -294,11 +295,27 @@ export function Funnel() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div>
-        <h1 className="text-3xl font-semibold text-fg tracking-tight">Воронка</h1>
-        <p className="text-sm text-fg-muted mt-1.5">
-          {data?.product_name ? <>SKU: <strong>{data.product_name}</strong></> : 'По всему кабинету'} · {data?.period_from} … {data?.period_to}
-        </p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-semibold text-fg tracking-tight">Воронка</h1>
+          <p className="text-sm text-fg-muted mt-1.5">
+            {data?.product_name ? <>SKU: <strong>{data.product_name}</strong></> : 'По всему кабинету'} · {data?.period_from} … {data?.period_to}
+          </p>
+        </div>
+        <AskAIButton
+          context={{
+            type: 'chart',
+            source_page: 'funnel',
+            source_label: 'Воронка',
+            metrics: ['impressions', 'card_visits', 'to_cart', 'orders', 'delivered', 'revenue', 'drr_advertising_pct', 'drr_overall_pct'],
+            period: data ? { from: data.period_from, to: data.period_to } : undefined,
+            product_id: productId || undefined,
+          }}
+          question={productId
+            ? "Где узкое место воронки этого SKU? Что чинить в первую очередь?"
+            : "Где главная утечка в воронке? Какие SKU тянут вниз?"}
+          variant="solid"
+        />
       </div>
 
       {/* TOOLBAR */}

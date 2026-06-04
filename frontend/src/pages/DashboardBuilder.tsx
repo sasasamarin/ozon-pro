@@ -22,6 +22,7 @@ import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
 import { useCabinetStore } from '@/stores/cabinet'
+import { AskAIButton } from '@/components/AskAIButton'
 
 type Interval = 'day' | 'week' | 'month'
 type Axis = 'left' | 'right'
@@ -153,6 +154,19 @@ export function DashboardBuilder() {
           </div>
           <DateRangeBar days={days}
             onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
+          <AskAIButton
+            context={{
+              type: 'screen',
+              source_page: 'dashboard',
+              source_label: 'Дашборд',
+              metrics: cards.flatMap(c => c.metrics.map(m => m.key)).slice(0, 20),
+              period: dateFrom && dateTo
+                ? { from: dateFrom, to: dateTo }
+                : undefined,
+            }}
+            question="Что главное на дашборде за период? Где аномалии?"
+            variant="solid"
+          />
           <button onClick={addCard}
                   className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent text-white rounded-md text-sm font-medium hover:bg-accent-hover">
             <Plus className="size-4" /> Карточка

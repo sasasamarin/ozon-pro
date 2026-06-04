@@ -11,6 +11,7 @@ import { DateRangeBar } from '@/components/DateRangeBar'
 import { addDateParams } from '@/lib/dateParams'
 import { useCabinetStore } from '@/stores/cabinet'
 import { XlsxCoverageMatrix } from '@/components/XlsxCoverageMatrix'
+import { AskAIButton } from '@/components/AskAIButton'
 
 interface PnLRow {
   label: string
@@ -83,8 +84,19 @@ export function FinancePnL() {
             Декомпозиция выручка → расходы → маржинальная прибыль · {data?.period_from} … {data?.period_to}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
           <DateRangeBar days={days} onChange={(r) => { setDays(r.days); setDateFrom(r.dateFrom); setDateTo(r.dateTo) }} />
+          <AskAIButton
+            context={{
+              type: 'screen',
+              source_page: 'pnl',
+              source_label: 'P&L отчёт',
+              metrics: ['seller_revenue', 'expenses_total', 'gross_profit', 'commissions', 'logistics', 'storage', 'acquiring', 'advertising'],
+              period: data ? { from: data.period_from, to: data.period_to } : undefined,
+            }}
+            question="Где основные потери в P&L и как маржу поднять?"
+            variant="solid"
+          />
         </div>
       </div>
 

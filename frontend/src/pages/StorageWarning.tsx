@@ -12,6 +12,7 @@ import {
   AlertTriangle, Package, TrendingDown, Loader2, Info, Lightbulb,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
+import { AskAIButton } from '@/components/AskAIButton'
 import { api } from '@/lib/api'
 import { useCabinetStore } from '@/stores/cabinet'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
@@ -72,16 +73,29 @@ export function StorageWarning() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold text-fg flex items-center gap-2">
-          <AlertTriangle className="w-6 h-6 text-amber-500" />
-          Не попасть на хранение
-        </h1>
-        <p className="text-sm text-fg-muted mt-1">
-          Каждый SKU оценён: <b className="text-rose-700">🔴 действовать</b>{' '}
-          (мёртвый сток или хранение «съедает» маржу), <b className="text-amber-700">🟡 следить</b>{' '}
-          (запас &gt; 60 дней или хранение &gt; 5% выручки), <b className="text-emerald-700">🟢 норма</b>.
-        </p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold text-fg flex items-center gap-2">
+            <AlertTriangle className="w-6 h-6 text-amber-500" />
+            Не попасть на хранение
+          </h1>
+          <p className="text-sm text-fg-muted mt-1">
+            Каждый SKU оценён: <b className="text-rose-700">🔴 действовать</b>{' '}
+            (мёртвый сток или хранение «съедает» маржу), <b className="text-amber-700">🟡 следить</b>{' '}
+            (запас &gt; 60 дней или хранение &gt; 5% выручки), <b className="text-emerald-700">🟢 норма</b>.
+          </p>
+        </div>
+        <AskAIButton
+          context={{
+            type: 'table',
+            source_page: 'storage-warning',
+            source_label: 'Хранение по SKU',
+            metrics: ['storage_30d_rub', 'days_of_inventory', 'storage_share_pct', 'daily_velocity'],
+            cabinet_id: cabinetId || undefined,
+          }}
+          question="Какие SKU кандидаты на распродажу/вывод и почему?"
+          variant="solid"
+        />
       </div>
 
       {/* Summary cards */}

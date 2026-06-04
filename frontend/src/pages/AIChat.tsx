@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { api } from '@/lib/api'
 import { useCabinetStore } from '@/stores/cabinet'
+import { useAIContextStore } from '@/stores/aiContext'
 import { cn } from '@/lib/utils'
 
 interface Session {
@@ -80,6 +81,23 @@ export function AIChat() {
   const [lastResp, setLastResp] = useState<ChatResp | null>(null)
   const [attachments, setAttachments] = useState<ChartAttachment[]>([])
   const endRef = useRef<HTMLDivElement>(null)
+
+  // Подхват «Спросить у AI» из другого раздела: store.pending → attachments + prefilled
+  const consumePending = useAIContextStore((s) => s.consume)
+  useEffect(() => {
+    const ctx = consumePending()
+    if (!ctx) return
+    setAttachments([{
+      type: 'chart',
+      metrics: ctx.metrics,
+      period: ctx.period || { from: '', to: '' },
+      product_id: ctx.product_id,
+    }])
+    if (ctx.prefilled_question) {
+      setInput(ctx.prefilled_question)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Список кабинетов компании
   const { data: cabinets = [] } = useQuery<Cabinet[]>({
