@@ -262,10 +262,12 @@ export function Seasonality() {
           context={{
             type: 'chart',
             source_page: 'seasonality',
-            source_label: 'Сезонный профиль',
+            source_label: productId ? `Сезонность — ${products?.find(p => p.id === productId)?.name?.slice(0, 30) || 'SKU'}` : 'Сезонность по кабинету',
             metrics: ['seasonal_index_by_month', 'yoy', 'peak_month'],
             product_id: productId || undefined,
+            product_name: products?.find(p => p.id === productId)?.name,
             cabinet_id: cabinetId || undefined,
+            cabinet_ids: selectedCabinetIds,
           }}
           question={productId
             ? "Когда планировать закупки на этот товар по сезонности?"

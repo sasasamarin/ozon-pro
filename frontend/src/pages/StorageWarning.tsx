@@ -89,9 +89,10 @@ export function StorageWarning() {
           context={{
             type: 'table',
             source_page: 'storage-warning',
-            source_label: 'Хранение по SKU',
+            source_label: 'Хранение по SKU (последние 30 дней)',
             metrics: ['storage_30d_rub', 'days_of_inventory', 'storage_share_pct', 'daily_velocity'],
             cabinet_id: cabinetId || undefined,
+            cabinet_ids: selectedCabinetIds,
           }}
           question="Какие SKU кандидаты на распродажу/вывод и почему?"
           variant="solid"

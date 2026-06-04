@@ -158,11 +158,12 @@ export function DashboardBuilder() {
             context={{
               type: 'screen',
               source_page: 'dashboard',
-              source_label: 'Дашборд',
+              source_label: 'Дашборд (карточки метрик)',
               metrics: cards.flatMap(c => c.metrics.map(m => m.key)).slice(0, 20),
               period: dateFrom && dateTo
                 ? { from: dateFrom, to: dateTo }
                 : undefined,
+              cabinet_ids: selectedCabinetIds,
             }}
             question="Что главное на дашборде за период? Где аномалии?"
             variant="solid"

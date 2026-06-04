@@ -18,9 +18,12 @@ export interface ChartContext {
   metrics: string[]
   // Период данных
   period?: { from: string; to: string }
-  // Доп. филтры
-  product_id?: string
-  cabinet_id?: string
+  // Доп. фильтры — РЕАЛЬНЫЕ значения из UI, не undefined "все".
+  product_id?: string         // конкретный SKU (если выбран на странице)
+  product_name?: string       // человекочитаемое имя SKU для chip
+  cabinet_id?: string         // первый/активный кабинет
+  cabinet_ids?: string[]      // все выбранные кабинеты в фильтре
+  cabinet_names?: string[]    // имена кабинетов для chip
   // Человекочитаемое описание для AI («Воронка Жирафа за май»)
   source_page: string
   source_label?: string

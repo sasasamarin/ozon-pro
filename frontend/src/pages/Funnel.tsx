@@ -306,10 +306,12 @@ export function Funnel() {
           context={{
             type: 'chart',
             source_page: 'funnel',
-            source_label: 'Воронка',
+            source_label: productId ? `Воронка — ${data?.product_name || 'SKU'}` : 'Воронка по кабинету',
             metrics: ['impressions', 'card_visits', 'to_cart', 'orders', 'delivered', 'revenue', 'drr_advertising_pct', 'drr_overall_pct'],
             period: data ? { from: data.period_from, to: data.period_to } : undefined,
             product_id: productId || undefined,
+            product_name: data?.product_name || undefined,
+            cabinet_ids: selectedCabinetIds,
           }}
           question={productId
             ? "Где узкое место воронки этого SKU? Что чинить в первую очередь?"

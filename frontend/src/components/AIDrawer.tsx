@@ -59,11 +59,16 @@ export function AIDrawer() {
   const send = useMutation<ChatResp, Error, string>({
     mutationFn: async (text: string) => {
       setMessages((m) => [...m, { role: 'user', text }])
+      // Все выбранные кабинеты из UI идут в cabinet_scope, не только [0].
+      // Это даёт AI точное соответствие тому что видит юзер на экране.
+      const cabIds = context?.cabinet_ids?.length
+        ? context.cabinet_ids
+        : (context?.cabinet_id ? [context.cabinet_id] : [])
       const body = {
         session_id: sessionId,
         text,
-        cabinet_scope: context?.cabinet_id
-          ? { cabinet_ids: [context.cabinet_id], active: context.cabinet_id }
+        cabinet_scope: cabIds.length
+          ? { cabinet_ids: cabIds, active: context?.cabinet_id || cabIds[0] }
           : null,
         attachments: context ? [{
           type: 'chart' as const,
@@ -145,14 +150,30 @@ export function AIDrawer() {
           </div>
         </div>
 
-        {/* Context chip */}
+        {/* Context chip — что AI видит из текущего экрана */}
         {context && (
-          <div className="px-4 py-2 bg-violet-50/40 border-b border-border-subtle text-xs text-fg-muted">
-            📎 {context.metrics.slice(0, 3).join(', ')}
-            {context.metrics.length > 3 && ` +${context.metrics.length - 3}`}
-            {context.period && context.period.from && (
-              <span> · {context.period.from}…{context.period.to}</span>
-            )}
+          <div className="px-4 py-2 bg-violet-50/40 border-b border-border-subtle text-xs text-fg-muted space-y-0.5">
+            <div className="text-fg font-medium">
+              {context.source_label || context.source_page}
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+              {context.product_name && (
+                <span>🎯 SKU: <b className="text-fg">{context.product_name}</b></span>
+              )}
+              {context.cabinet_names && context.cabinet_names.length > 0 && (
+                <span>🏪 {context.cabinet_names.join(', ')}</span>
+              )}
+              {!context.cabinet_names?.length && !context.product_name && (
+                <span className="text-fg-subtle">все кабинеты компании</span>
+              )}
+              {context.period?.from && (
+                <span>📅 {context.period.from}…{context.period.to}</span>
+              )}
+            </div>
+            <div className="text-[10px] text-fg-subtle">
+              📊 метрики: {context.metrics.slice(0, 4).join(', ')}
+              {context.metrics.length > 4 && ` +${context.metrics.length - 4}`}
+            </div>
           </div>
         )}
 

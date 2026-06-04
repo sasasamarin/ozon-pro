@@ -90,9 +90,10 @@ export function FinancePnL() {
             context={{
               type: 'screen',
               source_page: 'pnl',
-              source_label: 'P&L отчёт',
+              source_label: 'P&L отчёт (оперативный контур)',
               metrics: ['seller_revenue', 'expenses_total', 'gross_profit', 'commissions', 'logistics', 'storage', 'acquiring', 'advertising'],
               period: data ? { from: data.period_from, to: data.period_to } : undefined,
+              cabinet_ids: selectedCabinetIds,
             }}
             question="Где основные потери в P&L и как маржу поднять?"
             variant="solid"
