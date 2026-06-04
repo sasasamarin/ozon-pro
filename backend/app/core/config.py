@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_MAX_TOOL_ITERATIONS: int = 6
 
+    # SERVICE_TOKEN: сервисный токен для AI-сервиса (Render → основной API).
+    # Если задан — запросы с `Authorization: Bearer <SERVICE_TOKEN>` авторизуются
+    # без user-JWT. user_id и company_id берутся из query params/headers.
+    # ВАЖНО: пустое значение = AI-bridge endpoints закрыты для всех.
+    SERVICE_TOKEN: str = ""
+    # company_id для service-token запросов (обычно один тенант — основной клиент)
+    SERVICE_DEFAULT_COMPANY_ID: str = ""
+
     # --- SENTRY ---
     SENTRY_DSN: str = ""
     SENTRY_ENVIRONMENT: str = "development"

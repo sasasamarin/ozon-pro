@@ -27,6 +27,7 @@ from app.api.endpoints import (
     seasonality,
     ai_chat,
     ai_chat_v2,
+    ai_bridge,
     storage_warning,
     dashboard_builder,
     supplies,
@@ -90,6 +91,10 @@ api_router.include_router(
 )
 api_router.include_router(
     storage_warning.router, prefix="/storage-warning", tags=["analytics"]
+)
+# AI Bridge — endpoints для внешнего ozon-pro-ai (Render). Защищены SERVICE_TOKEN.
+api_router.include_router(
+    ai_bridge.router, prefix="", tags=["ai-bridge"]
 )
 api_router.include_router(
     day_explanation.router, prefix="/analytics/day-explanation", tags=["analytics"]
