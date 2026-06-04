@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { useQuery, keepPreviousData } from '@tanstack/react-query'
 import { ShoppingBag, Search, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
@@ -74,9 +75,13 @@ const PAGE_SIZE = 50
 
 export function Orders() {
   const { selectedCabinetIds } = useCabinetStore()
+  // Поддержка алиасов /orders/fbo и /orders/fbs — pre-filter по типу.
+  const location = useLocation()
+  const pathType = location.pathname.endsWith('/fbo') ? 'fbo'
+    : location.pathname.endsWith('/fbs') ? 'fbs' : ''
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState<string>('')
-  const [orderType, setOrderType] = useState<string>('')
+  const [orderType, setOrderType] = useState<string>(pathType)
   const [search, setSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')

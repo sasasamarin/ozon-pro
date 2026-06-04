@@ -30,6 +30,7 @@ from app.api.endpoints import (
     ai_bridge,
     storage_warning,
     competitor,
+    margin,
     dashboard_builder,
     supplies,
     reconciliation,
@@ -95,6 +96,9 @@ api_router.include_router(
 )
 api_router.include_router(
     competitor.router, prefix="/competitor", tags=["analytics"]
+)
+api_router.include_router(
+    margin.router, prefix="/margin", tags=["finance"]
 )
 # AI Bridge — endpoints для внешнего ozon-pro-ai (Render). Защищены SERVICE_TOKEN.
 api_router.include_router(

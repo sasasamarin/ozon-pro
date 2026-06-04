@@ -4,6 +4,7 @@ import { AcceptInvite } from '@/pages/AcceptInvite'
 import { Seasonality } from '@/pages/Seasonality'
 import { StorageWarning } from '@/pages/StorageWarning'
 import { Competitor } from '@/pages/Competitor'
+import { Margin } from '@/pages/Margin'
 import { Register } from '@/pages/Register'
 import { Dashboard } from '@/pages/Dashboard'
 import { DashboardBuilder } from '@/pages/DashboardBuilder'
@@ -80,6 +81,8 @@ export default function App() {
         <Route path="/cabinets/:id" element={<CabinetEdit />} />
         <Route path="/products" element={<Products />} />
         <Route path="/orders" element={<Orders />} />
+        <Route path="/orders/fbo" element={<Orders />} />
+        <Route path="/orders/fbs" element={<Orders />} />
         <Route path="/finance/transactions" element={<FinanceTransactions />} />
         <Route path="/analytics/stockouts" element={<Stockouts />} />
         <Route path="/procurement/forecast" element={<ProcurementForecast />} />
@@ -121,6 +124,8 @@ export default function App() {
         <Route path="/analytics/seasonality" element={<Seasonality />} />
         <Route path="/analytics/storage-warning" element={<StorageWarning />} />
         <Route path="/analytics/competitor" element={<Competitor />} />
+        <Route path="/products/competitors" element={<Competitor />} />
+        <Route path="/finance/margin" element={<Margin />} />
         <Route path="/analytics/plan-vs-fact" element={<PlanVsFact />} />
         <Route path="/analytics/plan-purchase" element={<PlanPurchase />} />
         <Route path="/finance/account-balance" element={<AccountBalance />} />
@@ -174,6 +179,10 @@ export default function App() {
               item.path !== '/analytics/seasonality' &&
               item.path !== '/analytics/storage-warning' &&
               item.path !== '/analytics/competitor' &&
+              item.path !== '/products/competitors' &&
+              item.path !== '/orders/fbo' &&
+              item.path !== '/orders/fbs' &&
+              item.path !== '/finance/margin' &&
               item.path !== '/analytics/plan-vs-fact' &&
               item.path !== '/finance/account-balance' &&
               item.path !== '/credit/list' &&
