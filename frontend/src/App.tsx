@@ -44,7 +44,9 @@ import { AccountBalance } from '@/pages/AccountBalance'
 import { Credit } from '@/pages/Credit'
 import { Loans } from '@/pages/Loans'
 import { LoansSchedule } from '@/pages/LoansSchedule'
+import { LoansCashflowImpact } from '@/pages/LoansCashflowImpact'
 import { Suppliers } from '@/pages/Suppliers'
+import { ProcurementCalendar } from '@/pages/ProcurementCalendar'
 import { Supplies } from '@/pages/Supplies'
 import { SupplyDetailPage } from '@/pages/SupplyDetail'
 import { ProductStats } from '@/pages/ProductStats'
@@ -139,7 +141,9 @@ export default function App() {
         <Route path="/loans" element={<Loans />} />
         <Route path="/credits" element={<Loans />} />
         <Route path="/credits/schedule" element={<LoansSchedule />} />
+        <Route path="/credits/cashflow-impact" element={<LoansCashflowImpact />} />
         <Route path="/procurement/suppliers" element={<Suppliers />} />
+        <Route path="/procurement/calendar" element={<ProcurementCalendar />} />
         <Route path="/procurement/supplies" element={<Supplies />} />
         <Route path="/procurement/supplies/:id" element={<SupplyDetailPage />} />
         <Route path="/products/stats" element={<ProductStats />} />
@@ -197,6 +201,8 @@ export default function App() {
               item.path !== '/credits' &&
               item.path !== '/loans' &&
               item.path !== '/credits/schedule' &&
+              item.path !== '/credits/cashflow-impact' &&
+              item.path !== '/procurement/calendar' &&
               item.path !== '/procurement/suppliers' &&
               item.path !== '/procurement/supplies' &&
               item.path !== '/email/templates' &&
