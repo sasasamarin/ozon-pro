@@ -4,6 +4,7 @@ import { CreditCard, Loader2, Plus, Trash2, Check, Calendar } from 'lucide-react
 import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
+import { MetricLabel as MetricLabelImport } from '@/components/MetricLabel'
 
 interface LoanRow {
   id: string
@@ -94,13 +95,17 @@ export function Loans() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <Card className="p-5">
-          <p className="text-[11px] uppercase text-fg-muted">Остаток тела по активным</p>
+          <p className="text-[11px] uppercase text-fg-muted">
+            <MetricLabelImport metricKey="loan_remaining_principal" override="Остаток тела по активным" />
+          </p>
           <p className="text-2xl font-semibold text-fg mt-1 tabular-nums">
             {formatCurrency(data?.total_active_principal ?? 0)}
           </p>
         </Card>
         <Card className="p-5">
-          <p className="text-[11px] uppercase text-fg-muted">Проценты YTD</p>
+          <p className="text-[11px] uppercase text-fg-muted">
+            <MetricLabelImport metricKey="interest_ytd" override="Проценты YTD" />
+          </p>
           <p className="text-2xl font-semibold text-fg mt-1 tabular-nums">
             {formatCurrency(data?.total_interest_ytd ?? 0)}
           </p>

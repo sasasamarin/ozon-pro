@@ -18,6 +18,7 @@ import { StockBreakdownChip } from '@/components/StockBreakdownChip'
 import { ProductEconomicsCard } from '@/components/ProductEconomicsCard'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface WarehouseRow {
   warehouse_name: string | null
@@ -109,7 +110,9 @@ export function ProductDetail() {
           <p className="text-sm text-fg-muted font-mono mt-1">{warehouses?.offer_id}</p>
           <div className="flex items-center gap-4 mt-3 text-sm flex-wrap">
             <div className="flex items-center gap-1.5">
-              <span className="text-fg-muted">Остаток:</span>
+              <span className="text-fg-muted">
+                <MetricLabel metricKey="stock_for_sale" override="Остаток" />:
+              </span>
               <StockBreakdownChip productId={id!} totalAvailable={warehouses?.total_free_to_sell ?? 0} />
             </div>
             <div>

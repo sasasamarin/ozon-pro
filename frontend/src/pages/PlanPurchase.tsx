@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface PlanInput {
   goal_type: 'units' | 'profit' | 'revenue'
@@ -247,11 +248,15 @@ export function PlanPurchase() {
                       <strong className="tabular-nums">{formatNumber(s.units_needed)}</strong>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-fg-muted">Выручка:</span>
+                      <span className="text-fg-muted">
+                        <MetricLabel metricKey="revenue" override="Выручка" />:
+                      </span>
                       <strong className="tabular-nums">{formatCurrency(s.revenue)}</strong>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-fg-muted">Прибыль:</span>
+                      <span className="text-fg-muted">
+                        <MetricLabel metricKey="gross_profit" override="Прибыль" />:
+                      </span>
                       <strong className="tabular-nums text-emerald-700">{formatCurrency(s.gross_profit)}</strong>
                     </div>
                     <div className="flex justify-between pt-2 border-t border-border-subtle">

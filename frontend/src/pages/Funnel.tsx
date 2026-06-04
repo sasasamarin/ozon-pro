@@ -16,6 +16,7 @@ import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { DateRangeBar } from '@/components/DateRangeBar'
 import { useCabinetStore } from '@/stores/cabinet'
 import { AskAIButton } from '@/components/AskAIButton'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface FunnelKPI {
   impressions: number
@@ -442,22 +443,24 @@ export function Funnel() {
         <>
           {/* === KPI (Ozon-эталон + раздельный ДРР) === */}
           <div className={cn('grid grid-cols-2 lg:grid-cols-6 gap-3 transition-opacity', isFetching && 'opacity-50')}>
-            <ConvCard label="Сквозная" curr={kpi!.overall_conv_pct} prev={prev?.overall_conv_pct} />
+            <ConvCard label="Сквозная" curr={kpi!.overall_conv_pct} prev={prev?.overall_conv_pct}
+              metricKey="funnel_conversion" />
             <ConvCard label="Поиск → карточка"
               curr={kpi!.search_to_card_pct ?? kpi!.ctr_pct}
               prev={prev?.search_to_card_pct ?? prev?.ctr_pct}
-              tooltip="Конверсия из поиска/каталога в карточку. Эталон Ozon: ~22%." />
+              metricKey="ctr" />
             <ConvCard label="Карточка → корзина"
               curr={kpi!.card_to_cart_pct ?? kpi!.click_to_cart_pct}
               prev={prev?.card_to_cart_pct ?? prev?.click_to_cart_pct}
               tooltip="Конверсия посещений карточки в добавления в корзину. Эталон Ozon: ~9%." />
             <ConvCard label="Корзина → заказ" curr={kpi!.order_conv_pct} prev={prev?.order_conv_pct}
-              tooltip="Эталон Ozon: ~35%." />
+              metricKey="cart_conversion" />
             <ConvCard label="Выкуп" curr={kpi!.delivery_conv_pct} prev={prev?.delivery_conv_pct}
-              tooltip="Заказ → доставлено. Эталон Ozon: ~90%." />
+              metricKey="delivery_conv" />
             <ConvCard label="ДРР рекламный"
               curr={ad?.drr_advertising_pct ?? null} prev={null}
-              tooltip={`Spend(PA) / выручка из рекламы (ad_statistics). Это та же формула что у Ozon в кабинете. ad_revenue: ${ad?.ad_revenue?.toLocaleString() || 0}₽`} />
+              metricKey="drr"
+              tooltip={`Spend(PA) / выручка из рекламы (ad_statistics). ad_revenue: ${ad?.ad_revenue?.toLocaleString() || 0}₽`} />
           </div>
 
           {/* === Два ДРР отдельно — юзер: «Ozon показывает 1.1% рекл., наш был 2.94% общий» === */}
@@ -943,13 +946,15 @@ function BWTable({
   )
 }
 
-function ConvCard({ label, curr, prev, tooltip }: {
-  label: string; curr: number | null; prev?: number | null; tooltip?: string
+function ConvCard({ label, curr, prev, tooltip, metricKey }: {
+  label: string; curr: number | null; prev?: number | null; tooltip?: string; metricKey?: string
 }) {
   const delta = curr != null && prev != null ? curr - prev : null
   return (
     <Card className="p-3" title={tooltip}>
-      <p className="text-[10px] font-medium text-fg-muted uppercase tracking-wider truncate">{label}</p>
+      <p className="text-[10px] font-medium text-fg-muted uppercase tracking-wider truncate">
+        {metricKey ? <MetricLabel metricKey={metricKey} override={label} /> : label}
+      </p>
       <p className="text-[18px] leading-tight font-semibold text-fg mt-1 tabular-nums">
         {curr != null ? `${curr}%` : '—'}
       </p>

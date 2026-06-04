@@ -259,6 +259,112 @@ export const METRICS: Record<string, MetricInfo> = {
     source: 'derived',
     link: '/credits/schedule',
   },
+
+  // === Воронка ===
+  impressions: {
+    label: 'Показы',
+    description: 'Сколько раз товар увидели в поиске или каталоге.',
+    source: 'api',
+    cautions: ['Премиум-метрика Ozon. Без подписки доступны только агрегаты.'],
+  },
+  card_visits: {
+    label: 'Визиты на карточку',
+    description: 'Сколько раз люди открыли карточку товара.',
+    source: 'api',
+    cautions: ['CTR = card_visits / impressions × 100.'],
+  },
+  to_cart: {
+    label: 'Добавления в корзину',
+    description: 'Сколько единиц товара добавили в корзину за период.',
+    source: 'api',
+  },
+  ctr: {
+    label: 'CTR',
+    description: 'Click-through rate — % людей, кликнувших на карточку с показа.',
+    formula: 'card_visits / impressions × 100',
+    source: 'derived',
+    cautions: ['Эталон Ozon: ~22%.'],
+  },
+  cart_conversion: {
+    label: 'Корзина → заказ',
+    description: 'Конверсия корзин в оформленные заказы.',
+    formula: 'orders / to_cart × 100',
+    source: 'derived',
+    cautions: ['Эталон Ozon: ~35%.'],
+  },
+  delivery_conv: {
+    label: '% выкупа',
+    description: 'Какая доля заказов реально доехала до покупателя.',
+    formula: 'delivered / orders × 100',
+    source: 'derived',
+    cautions: ['Эталон Ozon: ~90%. Низкий выкуп = низкая маржа из-за обратной логистики.'],
+  },
+
+  // === Возвраты ===
+  returns_count: {
+    label: 'Возвраты (шт)',
+    description: 'Сколько единиц вернулось покупателями за период.',
+    source: 'api',
+    link: '/orders/returns',
+  },
+  cancellations_count: {
+    label: 'Отмены',
+    description: 'Сколько заказов отменили — покупателем или маркетплейсом.',
+    source: 'api',
+    cautions: ['В отличие от возвратов, отмена не доходит до доставки. Считаются отдельно.'],
+    link: '/orders/cancellations',
+  },
+
+  // === Заказы ===
+  orders_total: {
+    label: 'Заказов (всего)',
+    description: 'Полное число посылок за период, включая ещё не доставленные.',
+    source: 'api',
+    cautions: ['delivered_orders — подмножество, только доехавшие.'],
+  },
+
+  // === Сезонность ===
+  seasonal_factor: {
+    label: 'Сезонный коэффициент',
+    description: 'Во сколько раз продажи в этот период выше/ниже среднегодовых.',
+    source: 'derived',
+    cautions: ['Если коэффициент < 0.8 — низкий сезон, > 1.2 — высокий.',
+               'Считается на исторических данных, нужно минимум 12 месяцев.'],
+    link: '/analytics/seasonality',
+  },
+
+  // === Кредитный pipeline ===
+  loan_remaining_principal: {
+    label: 'Остаток принципала',
+    description: 'Сколько ещё осталось вернуть по телу кредита (без процентов).',
+    source: 'derived',
+    link: '/credits/schedule',
+  },
+  interest_ytd: {
+    label: 'Проценты YTD',
+    description: 'Уплаченные проценты с начала года.',
+    source: 'derived',
+    link: '/credits',
+  },
+
+  // === Складские ===
+  storage_cost: {
+    label: 'Хранение',
+    description: 'Сколько Ozon берёт за хранение товара на FBO-складе.',
+    source: 'api',
+    cautions: ['Растёт с возрастом товара на складе и его объёмом.',
+               'Альтернатива — забрать со склада или продать в распродаже.'],
+    link: '/analytics/storage-warning',
+  },
+
+  // === Plan vs Fact ===
+  plan_completion: {
+    label: '% выполнения плана',
+    description: 'Какая доля плана уже сделана.',
+    formula: 'fact / plan × 100',
+    source: 'derived',
+    link: '/analytics/plan-vs-fact',
+  },
 }
 
 /** Безопасный доступ — undefined если ключа нет. */

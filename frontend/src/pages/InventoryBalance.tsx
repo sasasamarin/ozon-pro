@@ -11,6 +11,7 @@ import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface BalanceRow {
   product_id: string
@@ -82,11 +83,15 @@ export function InventoryBalance() {
       {data && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="p-4" title="Сумма единиц на складах (free_to_sell − reserved)">
-            <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">Единиц на складах</p>
+            <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+              <MetricLabel metricKey="stock_for_sale" override="Единиц на складах" />
+            </p>
             <p className="text-2xl font-semibold text-fg mt-1 tabular-nums">{formatNumber(data.totals.units)}</p>
           </Card>
           <Card className="p-4" title="Вложено в закупке (cost_price × qty)">
-            <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">Капитал в закупке</p>
+            <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+              <MetricLabel metricKey="cost_price" override="Капитал в закупке" />
+            </p>
             <p className="text-2xl font-semibold text-rose-700 mt-1 tabular-nums">{formatCurrency(data.totals.capital_at_cost)}</p>
           </Card>
           <Card className="p-4" title="Если всё продать по текущей selling_price">
@@ -94,7 +99,9 @@ export function InventoryBalance() {
             <p className="text-2xl font-semibold text-emerald-700 mt-1 tabular-nums">{formatCurrency(data.totals.capital_at_selling)}</p>
           </Card>
           <Card className="p-4 border-emerald-200" title="Потенциальная маржа = выручка − закупка">
-            <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">Потенциал маржи</p>
+            <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+              <MetricLabel metricKey="gross_profit" override="Потенциал маржи" />
+            </p>
             <p className="text-2xl font-bold text-emerald-700 mt-1 tabular-nums">{formatCurrency(data.totals.potential_margin)}</p>
           </Card>
         </div>
