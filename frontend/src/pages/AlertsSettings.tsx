@@ -32,6 +32,7 @@ const TYPE_LABEL: Record<string, string> = {
   position_drop: 'Падение позиции (порог: на сколько ↑)',
   low_conversion: 'Низкая конверсия в корзину (порог: %)',
   competitor_dump: 'Демпинг конкурентов (color_index=RED)',
+  commission_change: 'Изменение комиссии (порог: дней ретроспективы)',
 }
 
 const ALL_TYPES = Object.keys(TYPE_LABEL)
@@ -164,6 +165,10 @@ export function AlertsSettings() {
                   {r.marker_type === 'low_conversion' && (
                     <ThField label="Мин. конверсия %" value={r.threshold_json.min_pct ?? 5}
                              onSave={(v) => update.mutate({ id: r.id, threshold_json: { min_pct: +v } })} />
+                  )}
+                  {r.marker_type === 'commission_change' && (
+                    <ThField label="Ретроспектива (дней)" value={r.threshold_json.lookback_days ?? 30}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { lookback_days: +v } })} />
                   )}
                 </div>
 

@@ -42,6 +42,7 @@ _DEFAULT_THRESHOLDS: dict[str, dict[str, Any]] = {
     AlertMarkerType.POSITION_DROP.value: {"position_drop": 5},
     AlertMarkerType.LOW_CONVERSION.value: {"min_pct": 5},
     AlertMarkerType.COMPETITOR_DUMP.value: {},
+    AlertMarkerType.COMMISSION_CHANGE.value: {"lookback_days": 30},
 }
 
 
@@ -327,6 +328,54 @@ async def run_alerts(db: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
                     triggers.append((
                         r.pid, f"{r.name[:60]} ({r.offer_id})",
                         f"Рейтинг {float(r.rating):.2f} ниже порога {min_rating}",
+                    ))
+            except Exception:
+                pass
+
+        # ----- COMMISSION_CHANGE (комиссия изменилась за период) -----
+        elif rtype == AlertMarkerType.COMMISSION_CHANGE.value:
+            lookback_days = int(threshold.get("lookback_days", 30))
+            try:
+                rows = (await db.execute(text("""
+                    WITH curr AS (
+                        SELECT DISTINCT ON (h.product_id)
+                               h.product_id, h.sales_percent_fbo AS cur_fbo,
+                               h.sales_percent_fbs AS cur_fbs,
+                               h.snapshot_date AS cur_dt
+                        FROM product_commission_history h
+                        JOIN products p ON p.id = h.product_id
+                        JOIN ozon_accounts oa ON oa.id = p.ozon_account_id
+                        WHERE oa.company_id = :cid
+                        ORDER BY h.product_id, h.snapshot_date DESC
+                    ),
+                    prev AS (
+                        SELECT DISTINCT ON (h.product_id)
+                               h.product_id, h.sales_percent_fbo AS prev_fbo,
+                               h.sales_percent_fbs AS prev_fbs
+                        FROM product_commission_history h
+                        WHERE h.snapshot_date < CURRENT_DATE - INTERVAL ':lookback days'
+                          OR h.snapshot_date <= CURRENT_DATE - 1
+                        ORDER BY h.product_id, h.snapshot_date DESC
+                    )
+                    SELECT c.product_id::text AS pid, p.name, p.offer_id,
+                           c.cur_fbo, c.cur_fbs, pr.prev_fbo, pr.prev_fbs,
+                           c.cur_dt
+                    FROM curr c
+                    LEFT JOIN prev pr ON pr.product_id = c.product_id
+                    JOIN products p ON p.id = c.product_id
+                    WHERE pr.product_id IS NOT NULL
+                      AND (ABS(COALESCE(c.cur_fbo, 0) - COALESCE(pr.prev_fbo, 0)) > 0.5
+                           OR ABS(COALESCE(c.cur_fbs, 0) - COALESCE(pr.prev_fbs, 0)) > 0.5)
+                    LIMIT 30
+                """.replace(":lookback", str(lookback_days))), {"cid": company_id})).all()
+                for r in rows:
+                    cur_fbo = float(r.cur_fbo or 0)
+                    prev_fbo = float(r.prev_fbo or 0)
+                    delta = cur_fbo - prev_fbo
+                    sign = "+" if delta > 0 else ""
+                    triggers.append((
+                        r.pid, f"{r.name[:60]} ({r.offer_id})",
+                        f"FBO комиссия {prev_fbo:.1f}% → {cur_fbo:.1f}% ({sign}{delta:.1f}пп)",
                     ))
             except Exception:
                 pass

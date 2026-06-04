@@ -10,6 +10,7 @@ import {
 import { Card } from '@/components/ui/Card'
 import { formatNumber, cn } from '@/lib/utils'
 import { useRecommendations, ProductRecommendation } from '@/lib/recommendations'
+import { MetricLabel } from '@/components/MetricLabel'
 
 type SignalFilter = 'all' | 'stockout' | 'reorder_now' | 'ok'
 
@@ -241,9 +242,13 @@ export function Stockouts() {
               <thead className="bg-bg-subtle/50 border-b border-border-subtle">
                 <tr className="text-left text-xs text-fg-muted uppercase tracking-wider">
                   <th className="py-2.5 px-4 font-medium">товар</th>
-                  <th className="py-2.5 px-4 font-medium text-right">остаток</th>
+                  <th className="py-2.5 px-4 font-medium text-right">
+                    <MetricLabel metricKey="stock_for_sale" override="остаток" />
+                  </th>
                   <th className="py-2.5 px-4 font-medium text-right">скорость/день</th>
-                  <th className="py-2.5 px-4 font-medium text-right">дни до конца</th>
+                  <th className="py-2.5 px-4 font-medium text-right">
+                    <MetricLabel metricKey="days_left" override="дни до конца" />
+                  </th>
                   <th className="py-2.5 px-4 font-medium text-right">точка заказа</th>
                   <th className="py-2.5 px-4 font-medium">статус</th>
                   <th className="py-2.5 px-4 font-medium text-right">заказать</th>

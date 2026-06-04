@@ -15,6 +15,7 @@ import { Card } from '@/components/ui/Card'
 import { AskAIButton } from '@/components/AskAIButton'
 import { api } from '@/lib/api'
 import { formatCurrency, cn } from '@/lib/utils'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface Item {
   month: string
@@ -91,7 +92,9 @@ export function LoansCashflowImpact() {
       {s && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="p-3">
-            <div className="text-xs text-fg-muted">Платежи (всего)</div>
+            <div className="text-xs text-fg-muted">
+              <MetricLabel metricKey="loan_payment" override="Платежи (всего)" />
+            </div>
             <div className="text-xl font-semibold tabular-nums">{formatCurrency(s.total_loan_payments_rub)}</div>
           </Card>
           <Card className="p-3">
@@ -102,7 +105,9 @@ export function LoansCashflowImpact() {
             </div>
           </Card>
           <Card className="p-3">
-            <div className="text-xs text-fg-muted">Средний DSCR</div>
+            <div className="text-xs text-fg-muted">
+              <MetricLabel metricKey="dscr" override="Средний DSCR" />
+            </div>
             <div className={cn('text-xl font-semibold tabular-nums',
               s.avg_dscr === null ? 'text-fg-muted' :
               s.avg_dscr >= 1.5 ? 'text-emerald-700' :

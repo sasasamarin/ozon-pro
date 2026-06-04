@@ -13,6 +13,7 @@ import { AskAIButton } from '@/components/AskAIButton'
 import { api } from '@/lib/api'
 import { useCabinetStore } from '@/stores/cabinet'
 import { formatCurrency, cn } from '@/lib/utils'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface PaymentRow {
   payment_id: string
@@ -88,7 +89,9 @@ export function LoansSchedule() {
       {s && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="p-3">
-            <div className="text-xs text-fg-muted">К оплате (всего)</div>
+            <div className="text-xs text-fg-muted">
+              <MetricLabel metricKey="loan_payment" override="К оплате (всего)" />
+            </div>
             <div className="text-xl font-semibold tabular-nums text-fg">{formatCurrency(s.total_due_rub)}</div>
           </Card>
           <Card className="p-3">
@@ -101,7 +104,9 @@ export function LoansSchedule() {
               s.overdue_count > 0 ? 'text-rose-700' : 'text-emerald-700')}>{s.overdue_count}</div>
           </Card>
           <Card className="p-3">
-            <div className="text-xs text-fg-muted">Ближайший платёж</div>
+            <div className="text-xs text-fg-muted">
+              <MetricLabel metricKey="loan_payment" override="Ближайший платёж" />
+            </div>
             {s.next_payment_date ? (
               <>
                 <div className="text-lg font-semibold tabular-nums">{formatCurrency(s.next_payment_amount_rub || 0)}</div>

@@ -42,6 +42,7 @@ celery_app = Celery(
         "app.workers.tasks.sync_premium",
         "app.workers.tasks.run_alerts",
         "app.workers.tasks.alerts_digest",
+        "app.workers.tasks.snapshot_commissions",
     ],
 )
 
@@ -181,6 +182,11 @@ celery_app.conf.beat_schedule = {
     "send-alert-digests-daily": {
         "task": "app.workers.tasks.alerts_digest.send_daily_digests",
         "schedule": crontab(hour=9, minute=0),
+    },
+    # Snapshot комиссий — ежедневно после sync-products (sync в :00, мы в :05)
+    "snapshot-commissions-daily": {
+        "task": "app.workers.tasks.snapshot_commissions.snapshot_all",
+        "schedule": crontab(hour=4, minute=5),  # после daily sync
     },
 
     # === ОБСЛУЖИВАНИЕ ===

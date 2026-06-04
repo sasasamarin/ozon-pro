@@ -37,7 +37,7 @@ from app.models.ozon_account import (  # noqa: F401
     SyncLog,
     SyncStatus,
 )
-from app.models.product import PriceHistory, Product, Stock  # noqa: F401
+from app.models.product import PriceHistory, Product, ProductCommissionHistory, Stock  # noqa: F401
 
 # Phase 2
 from app.models.ai import (  # noqa: F401

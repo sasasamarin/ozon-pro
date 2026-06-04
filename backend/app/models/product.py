@@ -6,12 +6,13 @@
 - Stock: остатки на складах (TimescaleDB hypertable)
 """
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -191,3 +193,24 @@ class Stock(Base):
 
     # Кластер (регион)
     cluster: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class ProductCommissionHistory(Base):
+    """Snapshot комиссий per-SKU per-day. Для COMMISSION_CHANGE алерта."""
+
+    __tablename__ = "product_commission_history"
+    __table_args__ = (
+        Index("ix_pch_date", "snapshot_date"),
+    )
+
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("products.id", ondelete="CASCADE"),
+        primary_key=True, nullable=False,
+    )
+    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False)
+    sales_percent_fbo: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    sales_percent_fbs: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )

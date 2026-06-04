@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/Card'
 import { AskAIButton } from '@/components/AskAIButton'
 import { api } from '@/lib/api'
 import { formatNumber, cn } from '@/lib/utils'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface SupplierQ {
   supplier_id: string | null; supplier_name: string
@@ -86,7 +87,9 @@ export function ProcurementQuality() {
             <div className="text-xl font-semibold tabular-nums">{formatNumber(s.total_returned)}</div>
           </Card>
           <Card className="p-3">
-            <div className="text-xs text-fg-muted">% возврата (общий)</div>
+            <div className="text-xs text-fg-muted">
+              <MetricLabel metricKey="return_rate_pct" override="% возврата (общий)" />
+            </div>
             <div className={cn('text-xl font-semibold tabular-nums',
               s.overall_return_rate_pct >= 10 ? 'text-rose-700' :
               s.overall_return_rate_pct >= 5 ? 'text-amber-700' : 'text-emerald-700')}>
