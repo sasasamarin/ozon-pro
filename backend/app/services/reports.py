@@ -298,16 +298,25 @@ async def download_and_parse(
             "report_status": info.status,
         }
 
-    # ВАЖНО: /v1/report/list отдаёт уже-устаревший signed URL ('signature is
-    # too old'). Берём СВЕЖИЙ через /v1/report/info (валиден 3 часа).
+    # ВАЖНО (эмпирически 2026-06-04): Ozon signed URL генерируется ОДИН РАЗ
+    # при создании отчёта (X-Amz-Date), действителен 3 часа (X-Amz-Expires=10800).
+    # /v1/report/info возвращает ТОТ ЖЕ URL что и /v1/report/list, не обновляет.
+    # → Скачать через API можно ТОЛЬКО первые 3 часа после создания отчёта в Ozon.
+    # Для старых отчётов решение — попросить юзера заказать новый в UI Ozon.
     fresh_url = await get_fresh_report_url(db, account_id, report_code)
     if not fresh_url:
-        return {"error": "Не удалось получить свежий URL через /v1/report/info"}
+        return {"error": "Не удалось получить URL через /v1/report/info"}
 
     content = await download_xlsx(fresh_url)
     if not content:
-        return {"error": "Не удалось скачать XLSX"}
-
+        return {
+            "error": (
+                "Не удалось скачать XLSX. Скорее всего signed URL Ozon истёк "
+                "(валиден только 3 часа после создания отчёта). Заказать новый "
+                "отчёт нужно в UI Ozon → Финансы → Заказать отчёт."
+            ),
+            "url_expired_likely": True,
+        }
     parsed = parse_xlsx_generic(content)
     return {
         "report_code": report_code,
