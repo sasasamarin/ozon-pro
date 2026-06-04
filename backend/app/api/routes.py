@@ -21,10 +21,13 @@ from app.api.endpoints import (
     expenses,
     funnel,
     funnel_v2,
+    alerts,
     loans,
     loans_schedule,
     loans_cashflow_impact,
+    loans_refinance,
     procurement_calendar,
+    procurement_quality,
     reverse_funnel,
     product_stats,
     seasonality,
@@ -189,7 +192,10 @@ api_router.include_router(credit.router, prefix="/credit", tags=["credit"])
 api_router.include_router(loans.router, prefix="/loans", tags=["loans"])
 api_router.include_router(loans_schedule.router, prefix="/loans", tags=["loans"])
 api_router.include_router(loans_cashflow_impact.router, prefix="/loans", tags=["loans"])
+api_router.include_router(loans_refinance.router, prefix="/loans", tags=["loans"])
 api_router.include_router(procurement_calendar.router, prefix="/procurement/calendar", tags=["procurement"])
+api_router.include_router(procurement_quality.router, prefix="/procurement/quality", tags=["procurement"])
+api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 api_router.include_router(supplies.router, prefix="/supplies", tags=["supplies"])
 api_router.include_router(product_stats.router, prefix="/products/stats", tags=["analytics"])
 api_router.include_router(dashboard_builder.router, prefix="/dashboard/builder", tags=["dashboard"])

@@ -45,8 +45,16 @@ import { Credit } from '@/pages/Credit'
 import { Loans } from '@/pages/Loans'
 import { LoansSchedule } from '@/pages/LoansSchedule'
 import { LoansCashflowImpact } from '@/pages/LoansCashflowImpact'
+import { LoansRefinance } from '@/pages/LoansRefinance'
 import { Suppliers } from '@/pages/Suppliers'
 import { ProcurementCalendar } from '@/pages/ProcurementCalendar'
+import { ProcurementQuality } from '@/pages/ProcurementQuality'
+import { AlertsActive } from '@/pages/AlertsActive'
+import { AlertsSettings } from '@/pages/AlertsSettings'
+import { AlertsHistory } from '@/pages/AlertsHistory'
+import { AlertsChannels } from '@/pages/AlertsChannels'
+import { Telegram } from '@/pages/Telegram'
+import { Integrations } from '@/pages/Integrations'
 import { Supplies } from '@/pages/Supplies'
 import { SupplyDetailPage } from '@/pages/SupplyDetail'
 import { ProductStats } from '@/pages/ProductStats'
@@ -142,8 +150,16 @@ export default function App() {
         <Route path="/credits" element={<Loans />} />
         <Route path="/credits/schedule" element={<LoansSchedule />} />
         <Route path="/credits/cashflow-impact" element={<LoansCashflowImpact />} />
+        <Route path="/credits/refinance" element={<LoansRefinance />} />
         <Route path="/procurement/suppliers" element={<Suppliers />} />
         <Route path="/procurement/calendar" element={<ProcurementCalendar />} />
+        <Route path="/procurement/quality" element={<ProcurementQuality />} />
+        <Route path="/alerts" element={<AlertsActive />} />
+        <Route path="/alerts/settings" element={<AlertsSettings />} />
+        <Route path="/alerts/history" element={<AlertsHistory />} />
+        <Route path="/alerts/channels" element={<AlertsChannels />} />
+        <Route path="/telegram" element={<Telegram />} />
+        <Route path="/integrations" element={<Integrations />} />
         <Route path="/procurement/supplies" element={<Supplies />} />
         <Route path="/procurement/supplies/:id" element={<SupplyDetailPage />} />
         <Route path="/products/stats" element={<ProductStats />} />
@@ -202,9 +218,17 @@ export default function App() {
               item.path !== '/loans' &&
               item.path !== '/credits/schedule' &&
               item.path !== '/credits/cashflow-impact' &&
+              item.path !== '/credits/refinance' &&
               item.path !== '/procurement/calendar' &&
+              item.path !== '/procurement/quality' &&
               item.path !== '/procurement/suppliers' &&
               item.path !== '/procurement/supplies' &&
+              item.path !== '/alerts' &&
+              item.path !== '/alerts/settings' &&
+              item.path !== '/alerts/history' &&
+              item.path !== '/alerts/channels' &&
+              item.path !== '/telegram' &&
+              item.path !== '/integrations' &&
               item.path !== '/email/templates' &&
               item.path !== '/email/log',
           )
