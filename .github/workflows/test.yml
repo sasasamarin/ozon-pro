@@ -31,7 +31,7 @@ jobs:
           CELERY_BROKER_URL: "redis://localhost:6379/0"
           CELERY_RESULT_BACKEND: "redis://localhost:6379/0"
           ENCRYPTION_KEY: "Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Q="
-          JWT_SECRET_KEY: "ci-test-secret"
+          SECRET_KEY: "ci-test-secret-min-32-chars-long-aaaaaaaa"
           ALLOWED_HOSTS: "*"
           CORS_ORIGINS: "*"
           ENVIRONMENT: "development"
