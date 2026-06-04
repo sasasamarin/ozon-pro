@@ -188,6 +188,11 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: AlertTriangle,
       },
       {
+        path: '/analytics/competitor',
+        label: 'Конкуренты',
+        icon: Target,
+      },
+      {
         path: '/analytics/seasonality',
         label: 'Сезонность',
         icon: Calendar,

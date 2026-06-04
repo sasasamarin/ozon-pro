@@ -29,6 +29,7 @@ from app.api.endpoints import (
     ai_chat_v2,
     ai_bridge,
     storage_warning,
+    competitor,
     dashboard_builder,
     supplies,
     reconciliation,
@@ -91,6 +92,9 @@ api_router.include_router(
 )
 api_router.include_router(
     storage_warning.router, prefix="/storage-warning", tags=["analytics"]
+)
+api_router.include_router(
+    competitor.router, prefix="/competitor", tags=["analytics"]
 )
 # AI Bridge — endpoints для внешнего ozon-pro-ai (Render). Защищены SERVICE_TOKEN.
 api_router.include_router(
