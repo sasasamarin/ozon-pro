@@ -4,6 +4,7 @@ import { AcceptInvite } from '@/pages/AcceptInvite'
 import { Seasonality } from '@/pages/Seasonality'
 import { StorageWarning } from '@/pages/StorageWarning'
 import { Competitor } from '@/pages/Competitor'
+import { CompetitorPrices } from '@/pages/CompetitorPrices'
 import { Margin } from '@/pages/Margin'
 import { Taxes } from '@/pages/Taxes'
 import { Register } from '@/pages/Register'
@@ -125,7 +126,7 @@ export default function App() {
         <Route path="/analytics/seasonality" element={<Seasonality />} />
         <Route path="/analytics/storage-warning" element={<StorageWarning />} />
         <Route path="/analytics/competitor" element={<Competitor />} />
-        <Route path="/products/competitors" element={<Competitor />} />
+        <Route path="/products/competitors" element={<CompetitorPrices />} />
         <Route path="/finance/margin" element={<Margin />} />
         <Route path="/finance/taxes" element={<Taxes />} />
         <Route path="/analytics/plan-vs-fact" element={<PlanVsFact />} />

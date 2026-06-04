@@ -30,6 +30,7 @@ from app.api.endpoints import (
     ai_bridge,
     storage_warning,
     competitor,
+    competitor_prices,
     margin,
     taxes,
     dashboard_builder,
@@ -97,6 +98,9 @@ api_router.include_router(
 )
 api_router.include_router(
     competitor.router, prefix="/competitor", tags=["analytics"]
+)
+api_router.include_router(
+    competitor_prices.router, prefix="/competitor-prices", tags=["analytics"]
 )
 api_router.include_router(
     margin.router, prefix="/margin", tags=["finance"]
