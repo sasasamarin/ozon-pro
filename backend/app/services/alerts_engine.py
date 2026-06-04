@@ -28,13 +28,17 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_THRESHOLDS: dict[str, dict[str, Any]] = {
     AlertMarkerType.STOCKOUT.value: {"days_left": 7},
-    AlertMarkerType.OVERSTOCK.value: {"days_left": 180},
+    AlertMarkerType.OVERSTOCK.value: {"days_coverage": 180},
     AlertMarkerType.MARGIN_BELOW_MIN.value: {"min_pct": 10},
     AlertMarkerType.PRICE_BELOW_COST.value: {},
     AlertMarkerType.CREDIT_PAYMENT_DUE.value: {"days_before": 7},
     AlertMarkerType.NEGATIVE_REVIEW.value: {"rating_max": 3},
     AlertMarkerType.SALES_DROP.value: {"drop_pct": 30},
     AlertMarkerType.RETURN_RECEIVED.value: {"min_qty": 1},
+    AlertMarkerType.FBS_NOT_SHIPPED.value: {"hours_threshold": 24},
+    AlertMarkerType.TAX_DUE.value: {"days_before": 14},
+    AlertMarkerType.RATING_DROP.value: {"min_rating": 4.5},
+    AlertMarkerType.AD_BUDGET_EXCEEDED.value: {"drr_pct_max": 25},
 }
 
 
@@ -216,6 +220,138 @@ async def run_alerts(db: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
                         f"Прогноз 30 дней",
                         f"Платежей по кредитам {due:.0f}₽, прогноз cashflow {hist:.0f}₽ — дыра {gap:.0f}₽",
                     ))
+
+        # ----- OVERSTOCK (избыток — товара на > N дней покрытия) -----
+        elif rtype == AlertMarkerType.OVERSTOCK.value:
+            days_th = float(threshold.get("days_coverage", 180))
+            rows = (await db.execute(text("""
+                WITH sales AS (
+                    SELECT oi.product_id,
+                           COUNT(*)::float / NULLIF(EXTRACT(EPOCH FROM (NOW() - NOW() + INTERVAL '30 days')) / 86400, 0)
+                             AS daily_sales
+                    FROM order_items oi
+                    JOIN orders o ON o.id = oi.order_id
+                    JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+                    WHERE oa.company_id = :cid
+                      AND o.created_at >= NOW() - INTERVAL '30 days'
+                      AND o.status = 'delivered'
+                    GROUP BY oi.product_id
+                ),
+                stocks AS (
+                    SELECT ws.product_id, SUM(ws.stock_for_sale) AS stock
+                    FROM warehouse_stocks ws
+                    WHERE ws.snapshot_date = (SELECT MAX(snapshot_date) FROM warehouse_stocks)
+                    GROUP BY ws.product_id
+                )
+                SELECT p.id::text AS pid, p.name, p.offer_id,
+                       COALESCE(s.stock, 0) AS stock,
+                       s.stock / NULLIF(sl.daily_sales, 0) AS days_cov
+                FROM products p
+                JOIN ozon_accounts oa ON oa.id = p.ozon_account_id
+                LEFT JOIN stocks s ON s.product_id = p.id
+                LEFT JOIN sales sl ON sl.product_id = p.id
+                WHERE oa.company_id = :cid
+                  AND COALESCE(s.stock, 0) > 0
+                  AND sl.daily_sales > 0
+                  AND (s.stock / NULLIF(sl.daily_sales, 0)) > :th
+                ORDER BY days_cov DESC
+                LIMIT 30
+            """), {"cid": company_id, "th": days_th})).all()
+            for r in rows:
+                cov = float(r.days_cov or 0)
+                triggers.append((
+                    r.pid, f"{r.name[:60]} ({r.offer_id})",
+                    f"Остаток {int(r.stock)} шт на {cov:.0f} дней — порог {days_th:.0f} дней",
+                ))
+
+        # ----- FBS_NOT_SHIPPED (заказы FBS не отгружены > N часов) -----
+        elif rtype == AlertMarkerType.FBS_NOT_SHIPPED.value:
+            hours_th = int(threshold.get("hours_threshold", 24))
+            rows = (await db.execute(text("""
+                SELECT o.id::text AS oid, o.posting_number, o.created_at,
+                       EXTRACT(EPOCH FROM (NOW() - o.created_at)) / 3600 AS hours_open
+                FROM orders o
+                JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+                WHERE oa.company_id = :cid
+                  AND o.order_type = 'fbs'
+                  AND o.status IN ('awaiting_packaging', 'awaiting_deliver', 'acceptance_in_progress')
+                  AND o.created_at < NOW() - (:hours || ' hours')::interval
+                LIMIT 50
+            """), {"cid": company_id, "hours": hours_th})).all()
+            for r in rows:
+                triggers.append((
+                    r.oid, f"posting {r.posting_number}",
+                    f"FBS не отгружен {float(r.hours_open):.0f}ч (порог {hours_th}ч)",
+                ))
+
+        # ----- TAX_DUE (квартальные сроки УСН) -----
+        elif rtype == AlertMarkerType.TAX_DUE.value:
+            days_before = int(threshold.get("days_before", 14))
+            # Сроки квартальных авансов: 28 апр, 28 июл, 28 окт; годовой 28 марта
+            tax_dates = [
+                (3, 28, "годовой налог"),
+                (4, 28, "аванс за Q1"),
+                (7, 28, "аванс за Q2"),
+                (10, 28, "аванс за Q3"),
+            ]
+            from datetime import date as _d
+            today = _d.today()
+            for month, day, label in tax_dates:
+                tax_date = _d(today.year, month, day)
+                diff = (tax_date - today).days
+                if 0 <= diff <= days_before:
+                    triggers.append((
+                        f"tax_{month}_{day}", label,
+                        f"Срок уплаты ({tax_date.isoformat()}) — через {diff} дней",
+                    ))
+
+        # ----- RATING_DROP (средний рейтинг товара < порога) -----
+        elif rtype == AlertMarkerType.RATING_DROP.value:
+            min_rating = float(threshold.get("min_rating", 4.5))
+            try:
+                rows = (await db.execute(text("""
+                    SELECT p.id::text AS pid, p.name, p.offer_id,
+                           p.rating
+                    FROM products p
+                    JOIN ozon_accounts oa ON oa.id = p.ozon_account_id
+                    WHERE oa.company_id = :cid
+                      AND p.rating IS NOT NULL
+                      AND p.rating < :th
+                    ORDER BY p.rating ASC
+                    LIMIT 30
+                """), {"cid": company_id, "th": min_rating})).all()
+                for r in rows:
+                    triggers.append((
+                        r.pid, f"{r.name[:60]} ({r.offer_id})",
+                        f"Рейтинг {float(r.rating):.2f} ниже порога {min_rating}",
+                    ))
+            except Exception:
+                pass
+
+        # ----- AD_BUDGET_EXCEEDED (ДРР > порога за последние 30 дней) -----
+        elif rtype == AlertMarkerType.AD_BUDGET_EXCEEDED.value:
+            drr_max = float(threshold.get("drr_pct_max", 25))
+            try:
+                row = (await db.execute(text("""
+                    SELECT
+                        COALESCE(SUM(ABS(t.advertising)), 0)::float AS ad,
+                        COALESCE(SUM(t.accruals_for_sale) FILTER (
+                            WHERE t.operation_type='OperationAgentDeliveredToCustomer'
+                        ), 0)::float AS rev
+                    FROM transactions t
+                    JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+                    WHERE oa.company_id = :cid
+                      AND t.time >= NOW() - INTERVAL '30 days'
+                """), {"cid": company_id})).first()
+                if row and float(row.rev or 0) > 0:
+                    drr = float(row.ad or 0) / float(row.rev) * 100
+                    if drr > drr_max:
+                        triggers.append((
+                            "drr_30d", "Реклама",
+                            f"ДРР {drr:.1f}% за 30 дней превышает порог {drr_max}%",
+                        ))
+            except Exception:
+                pass
 
         # ----- NEGATIVE_REVIEW (если есть таблица reviews) -----
         elif rtype == AlertMarkerType.NEGATIVE_REVIEW.value:

@@ -118,6 +118,37 @@ def render_template(template: str, context: dict[str, Any]) -> tuple[str, str]:
         html = f"<p>{salutation}</p><p>На складе закончился товар <b>{product}</b>.</p>"
         return subject, html
 
+    if template == "alerts_digest":
+        items = context.get("items", []) or []
+        period = context.get("period", "сегодня")
+        rows_html = ""
+        for it in items[:50]:
+            sev = it.get("severity", "warning")
+            tone = "#dc2626" if sev == "critical" else "#d97706" if sev == "warning" else "#2563eb"
+            label = it.get("type_label") or it.get("marker_type", "")
+            msg = it.get("message", "")
+            rows_html += (
+                f"<tr><td style='padding:6px 10px;border-bottom:1px solid #eee;'>"
+                f"<span style='color:{tone};font-weight:600;font-size:11px;text-transform:uppercase'>"
+                f"{label}</span><br><span style='font-size:13px;color:#111'>{msg}</span>"
+                f"</td></tr>"
+            )
+        more = f"<p style='color:#666;font-size:12px'>+ ещё {len(items) - 50}</p>" if len(items) > 50 else ""
+        subject = f"Flowoi: {len(items)} {'алерт' if len(items) == 1 else 'алертов'} ({period})"
+        html = (
+            f"<p>{salutation}</p>"
+            f"<p>За <b>{period}</b> сработали следующие алерты:</p>"
+            f"<table style='border-collapse:collapse;width:100%;max-width:600px'>{rows_html}</table>"
+            f"{more}"
+            f"<p style='margin-top:16px'><a href='https://flowoi.ru/alerts' "
+            f"style='background:#2563eb;color:#fff;padding:8px 14px;text-decoration:none;border-radius:4px'>"
+            f"Открыть Flowoi →</a></p>"
+            f"<p style='color:#999;font-size:11px;margin-top:24px'>"
+            f"Это автоматическое письмо. Настройки — в /alerts/settings, "
+            f"отписаться от email-канала можно там же.</p>"
+        )
+        return subject, html
+
     if template == "report":
         period = context.get("period", "период")
         revenue = context.get("revenue", "—")

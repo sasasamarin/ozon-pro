@@ -41,6 +41,7 @@ celery_app = Celery(
         "app.workers.tasks.sync_placement_reports",
         "app.workers.tasks.sync_premium",
         "app.workers.tasks.run_alerts",
+        "app.workers.tasks.alerts_digest",
     ],
 )
 
@@ -175,6 +176,11 @@ celery_app.conf.beat_schedule = {
     "run-alerts-hourly": {
         "task": "app.workers.tasks.run_alerts.run_all_users_alerts",
         "schedule": crontab(minute=50),  # каждый час в :50 (после всех sync-задач)
+    },
+    # Email-дайджест активных алертов: раз в день в 09:00 UTC (12:00 МСК)
+    "send-alert-digests-daily": {
+        "task": "app.workers.tasks.alerts_digest.send_daily_digests",
+        "schedule": crontab(hour=9, minute=0),
     },
 
     # === ОБСЛУЖИВАНИЕ ===

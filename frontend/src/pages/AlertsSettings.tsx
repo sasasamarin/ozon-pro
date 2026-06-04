@@ -17,7 +17,7 @@ interface Rule {
 
 const TYPE_LABEL: Record<string, string> = {
   stockout: 'Кончается товар (порог: дней до 0)',
-  overstock: 'Затоварен (порог: дней оборачиваемости)',
+  overstock: 'Затоварен (порог: дней покрытия)',
   margin_below_min: 'Маржа ниже мин. % (порог: %)',
   price_below_cost: 'Цена ниже с/с (без параметров)',
   credit_payment_due: 'Платёж по кредиту скоро (порог: дней)',
@@ -25,6 +25,10 @@ const TYPE_LABEL: Record<string, string> = {
   sales_drop: 'Падение продаж (порог: % падения)',
   return_received: 'Возврат получен',
   cashflow_gap: 'Кассовый разрыв',
+  fbs_not_shipped: 'FBS не отгружен (порог: часов)',
+  tax_due: 'Срок налога (порог: дней до)',
+  rating_drop: 'Рейтинг ниже (порог: рейтинг)',
+  ad_budget_exceeded: 'ДРР выше нормы (порог: %)',
 }
 
 const ALL_TYPES = Object.keys(TYPE_LABEL)
@@ -133,6 +137,22 @@ export function AlertsSettings() {
                   {r.marker_type === 'sales_drop' && (
                     <ThField label="% падения" value={r.threshold_json.drop_pct ?? 30}
                              onSave={(v) => update.mutate({ id: r.id, threshold_json: { drop_pct: +v } })} />
+                  )}
+                  {r.marker_type === 'fbs_not_shipped' && (
+                    <ThField label="Часов до алерта" value={r.threshold_json.hours_threshold ?? 24}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { hours_threshold: +v } })} />
+                  )}
+                  {r.marker_type === 'tax_due' && (
+                    <ThField label="Дней до срока" value={r.threshold_json.days_before ?? 14}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { days_before: +v } })} />
+                  )}
+                  {r.marker_type === 'rating_drop' && (
+                    <ThField label="Мин. рейтинг" value={r.threshold_json.min_rating ?? 4.5}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { min_rating: +v } })} />
+                  )}
+                  {r.marker_type === 'ad_budget_exceeded' && (
+                    <ThField label="Макс. ДРР %" value={r.threshold_json.drr_pct_max ?? 25}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { drr_pct_max: +v } })} />
                   )}
                 </div>
 
