@@ -61,3 +61,15 @@ dev = [
 testpaths = ["tests"]
 python_files = "test_*.py"
 asyncio_mode = "auto"
+
+# Явно указываем что в editable install (pip install -e ".[dev]") собираем
+# только пакет `app`. Без этого setuptools падает с
+# «Multiple top-level packages discovered in a flat-layout: ['app','alembic','db_init']».
+# alembic — миграции (модуль не для импорта), db_init — sql-скрипты.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["alembic*", "db_init*", "tests*"]
