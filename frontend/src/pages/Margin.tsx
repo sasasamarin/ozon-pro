@@ -14,6 +14,7 @@ import { AskAIButton } from '@/components/AskAIButton'
 import { api } from '@/lib/api'
 import { useCabinetStore } from '@/stores/cabinet'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface MarginRow {
   product_id: string
@@ -101,15 +102,21 @@ export function Margin() {
       {s && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="p-3">
-            <div className="text-xs text-fg-muted">Выручка ({days}д)</div>
+            <div className="text-xs text-fg-muted">
+              <MetricLabel metricKey="revenue" override={`Выручка (${days}д)`} />
+            </div>
             <div className="text-lg font-semibold tabular-nums">{formatCurrency(s.total_revenue_rub)}</div>
           </Card>
           <Card className="p-3">
-            <div className="text-xs text-fg-muted">Валовая маржа</div>
+            <div className="text-xs text-fg-muted">
+              <MetricLabel metricKey="gross_profit" override="Валовая маржа" />
+            </div>
             <div className="text-lg font-semibold tabular-nums">{formatCurrency(s.total_gross_margin_rub)}</div>
           </Card>
           <Card className="p-3">
-            <div className="text-xs text-fg-muted">Маржа %</div>
+            <div className="text-xs text-fg-muted">
+              <MetricLabel metricKey="gross_margin_pct" override="Маржа %" />
+            </div>
             <div className="text-lg font-semibold tabular-nums">
               {s.gross_margin_pct !== null ? `${s.gross_margin_pct.toFixed(1)}%` : '—'}
             </div>

@@ -12,6 +12,7 @@ import { addDateParams } from '@/lib/dateParams'
 import { useCabinetStore } from '@/stores/cabinet'
 import { XlsxCoverageMatrix } from '@/components/XlsxCoverageMatrix'
 import { AskAIButton } from '@/components/AskAIButton'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface PnLRow {
   label: string
@@ -139,10 +140,11 @@ export function FinancePnL() {
 
       {/* Header KPI */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <KpiTile label="Выручка" value={data?.revenue ?? 0} prev={data?.prev_revenue ?? null} />
-        <KpiTile label="Себестоимость" value={-(data?.cogs ?? 0)} prev={null} negative />
-        <KpiTile label="Расходы Ozon" value={-(data?.total_ozon_expenses ?? 0)} prev={null} negative />
+        <KpiTile metricKey="revenue" label="Выручка" value={data?.revenue ?? 0} prev={data?.prev_revenue ?? null} />
+        <KpiTile metricKey="cost_price" label="Себестоимость" value={-(data?.cogs ?? 0)} prev={null} negative />
+        <KpiTile metricKey="ozon_expenses" label="Расходы Ozon" value={-(data?.total_ozon_expenses ?? 0)} prev={null} negative />
         <KpiTile
+          metricKey="gross_profit"
           label="Маржинальная (до налога)"
           value={data?.marginal_profit ?? 0}
           prev={data?.prev_marginal_profit ?? null}
@@ -153,6 +155,7 @@ export function FinancePnL() {
           }
         />
         <KpiTile
+          metricKey="net_profit"
           label={`Чистая (после налога${data ? ` ${data.tax_regime_label} ${data.tax_rate_pct}%` : ''})`}
           value={data?.net_profit ?? 0}
           prev={data?.prev_net_profit ?? null}
@@ -240,7 +243,7 @@ export function FinancePnL() {
 }
 
 function KpiTile({
-  label, value, prev, negative, accent, subtitle,
+  label, value, prev, negative, accent, subtitle, metricKey,
 }: {
   label: string
   value: number
@@ -248,11 +251,14 @@ function KpiTile({
   negative?: boolean
   accent?: boolean
   subtitle?: string
+  metricKey?: string
 }) {
   const delta = prev != null && prev !== 0 ? ((value - prev) / Math.abs(prev)) * 100 : null
   return (
     <Card className={cn('p-4', accent && 'border-2 border-indigo-200 bg-indigo-50/40')}>
-      <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">{label}</p>
+      <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+        {metricKey ? <MetricLabel metricKey={metricKey} override={label} /> : label}
+      </p>
       <p
         className={cn(
           'text-[22px] leading-tight font-semibold mt-1 tabular-nums',

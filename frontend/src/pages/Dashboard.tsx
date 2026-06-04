@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/Input'
 import { CostWarningBanner } from '@/components/ui/CostWarningBanner'
 import { SelectedProductBanner } from '@/components/SelectedProductBanner'
 import { Sparkline } from '@/components/ui/Sparkline'
+import { MetricLabel } from '@/components/MetricLabel'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
@@ -299,6 +300,7 @@ export function Dashboard() {
             {/* ОСНОВНЫЕ KPI: фактические продажи + прибыль */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
               <KpiCard
+                metricKey="revenue"
                 label="Продажи (доставлено)"
                 value={formatCurrency(kpi?.revenue ?? 0)}
                 change={kpi?.revenue_change_pct}
@@ -309,6 +311,7 @@ export function Dashboard() {
                 clickTo={`/finance/transactions?date_from=${data?.period_from || ''}&date_to=${data?.period_to || ''}`}
               />
               <KpiCard
+                metricKey="gross_profit"
                 label="Прибыль (до налога)"
                 value={formatCurrency(kpi?.gross_profit ?? 0)}
                 change={kpi?.gross_profit_change_pct}
@@ -319,6 +322,7 @@ export function Dashboard() {
                 clickTo="/finance/pnl"
               />
               <KpiCard
+                metricKey="net_profit"
                 label={`Чистая (${kpi?.tax_regime_label ?? 'УСН'} ${kpi?.tax_rate_pct ?? 6}%)`}
                 value={formatCurrency(kpi?.net_profit ?? 0)}
                 change={kpi?.net_profit_change_pct}
@@ -329,6 +333,7 @@ export function Dashboard() {
                 clickTo="/finance/pnl"
               />
               <KpiCard
+                metricKey="orders_count"
                 label="Заказы (доставлено)"
                 value={formatNumber(kpi?.orders_count ?? 0)}
                 change={kpi?.orders_change_pct}
@@ -338,6 +343,7 @@ export function Dashboard() {
                 clickTo={`/orders?date_from=${data?.period_from || ''}&date_to=${data?.period_to || ''}`}
               />
               <KpiCard
+                metricKey="aov"
                 label="Средний чек"
                 value={formatCurrency(kpi?.aov ?? 0)}
                 change={kpi?.aov_change_pct}
@@ -346,6 +352,7 @@ export function Dashboard() {
                 iconBg="from-violet-50 to-white text-violet-600"
               />
               <KpiCard
+                metricKey="ozon_expenses"
                 label="Расходы Ozon"
                 value={formatCurrency(kpi?.ozon_expenses ?? 0)}
                 change={null}
@@ -508,9 +515,10 @@ interface KpiCardProps {
   iconBg: string
   subtitle?: string
   clickTo?: string
+  metricKey?: string           // ключ из metric-info реестра — для tooltip
 }
 
-function KpiCard({ label, value, change, spark, icon: Icon, iconBg, subtitle, clickTo }: KpiCardProps) {
+function KpiCard({ label, value, change, spark, icon: Icon, iconBg, subtitle, clickTo, metricKey }: KpiCardProps) {
   const navigate = useNavigate()
   const body = (
     <>
@@ -528,7 +536,9 @@ function KpiCard({ label, value, change, spark, icon: Icon, iconBg, subtitle, cl
           </span>
         )}
       </div>
-      <p className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">{label}</p>
+      <p className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">
+        {metricKey ? <MetricLabel metricKey={metricKey} override={label} iconClassName="opacity-50" /> : label}
+      </p>
       <p className="text-[22px] leading-tight font-semibold text-fg mt-0.5 tabular-nums">{value}</p>
       {subtitle && <p className="text-[10px] text-fg-muted mt-0.5">{subtitle}</p>}
       {spark.length > 0 && (
