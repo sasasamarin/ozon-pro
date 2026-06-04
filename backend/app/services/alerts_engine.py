@@ -39,6 +39,8 @@ _DEFAULT_THRESHOLDS: dict[str, dict[str, Any]] = {
     AlertMarkerType.TAX_DUE.value: {"days_before": 14},
     AlertMarkerType.RATING_DROP.value: {"min_rating": 4.5},
     AlertMarkerType.AD_BUDGET_EXCEEDED.value: {"drr_pct_max": 25},
+    AlertMarkerType.POSITION_DROP.value: {"position_drop": 5},
+    AlertMarkerType.LOW_CONVERSION.value: {"min_pct": 5},
 }
 
 
@@ -324,6 +326,69 @@ async def run_alerts(db: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
                     triggers.append((
                         r.pid, f"{r.name[:60]} ({r.offer_id})",
                         f"Рейтинг {float(r.rating):.2f} ниже порога {min_rating}",
+                    ))
+            except Exception:
+                pass
+
+        # ----- POSITION_DROP (средняя позиция за 7д упала vs предыдущие 7д) -----
+        elif rtype == AlertMarkerType.POSITION_DROP.value:
+            drop_th = int(threshold.get("position_drop", 5))
+            try:
+                rows = (await db.execute(text("""
+                    WITH p AS (
+                        SELECT pq.product_id, p.name, p.offer_id,
+                               AVG(CASE WHEN pq.date >= CURRENT_DATE - INTERVAL '7 days'
+                                        THEN pq.position END) AS pos_cur,
+                               AVG(CASE WHEN pq.date >= CURRENT_DATE - INTERVAL '14 days'
+                                        AND pq.date < CURRENT_DATE - INTERVAL '7 days'
+                                        THEN pq.position END) AS pos_prev
+                        FROM product_queries_daily pq
+                        JOIN ozon_accounts oa ON oa.id = pq.cabinet_id
+                        JOIN products p ON p.id = pq.product_id
+                        WHERE oa.company_id = :cid
+                          AND pq.date >= CURRENT_DATE - INTERVAL '14 days'
+                          AND pq.position IS NOT NULL
+                        GROUP BY pq.product_id, p.name, p.offer_id
+                    )
+                    SELECT product_id::text AS pid, name, offer_id, pos_cur, pos_prev
+                    FROM p
+                    WHERE pos_cur IS NOT NULL AND pos_prev IS NOT NULL
+                      AND (pos_cur - pos_prev) >= :th
+                    ORDER BY (pos_cur - pos_prev) DESC
+                    LIMIT 20
+                """), {"cid": company_id, "th": drop_th})).all()
+                for r in rows:
+                    delta = float(r.pos_cur) - float(r.pos_prev)
+                    triggers.append((
+                        r.pid, f"{r.name[:60]} ({r.offer_id})",
+                        f"Позиция упала с {float(r.pos_prev):.1f} до {float(r.pos_cur):.1f} (+{delta:.1f})",
+                    ))
+            except Exception:
+                pass
+
+        # ----- LOW_CONVERSION (карточка → корзина ниже порога) -----
+        elif rtype == AlertMarkerType.LOW_CONVERSION.value:
+            min_conv = float(threshold.get("min_pct", 5))
+            try:
+                rows = (await db.execute(text("""
+                    SELECT pq.product_id::text AS pid, p.name, p.offer_id,
+                           AVG(pq.view_conversion) * 100 AS conv_pct
+                    FROM product_queries_daily pq
+                    JOIN ozon_accounts oa ON oa.id = pq.cabinet_id
+                    JOIN products p ON p.id = pq.product_id
+                    WHERE oa.company_id = :cid
+                      AND pq.date >= CURRENT_DATE - INTERVAL '7 days'
+                      AND pq.view_conversion IS NOT NULL
+                      AND pq.unique_view_users > 50
+                    GROUP BY pq.product_id, p.name, p.offer_id
+                    HAVING AVG(pq.view_conversion) * 100 < :th
+                    ORDER BY conv_pct
+                    LIMIT 20
+                """), {"cid": company_id, "th": min_conv})).all()
+                for r in rows:
+                    triggers.append((
+                        r.pid, f"{r.name[:60]} ({r.offer_id})",
+                        f"Конверсия в корзину {float(r.conv_pct):.2f}% ниже {min_conv}%",
                     ))
             except Exception:
                 pass

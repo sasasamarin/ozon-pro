@@ -1,18 +1,18 @@
 # Flowoi — аудит кодовой базы
 
-> P1 #11 из мастер-брифа. Снапшот на 2026-06-03 после ~15 коммитов сессии.
-> Каждая находка с `файл:строки` (по правилу `flowoi_audit_prompt.md`).
+> P1 #11 из мастер-брифа. Обновлено 2026-06-04 — все P0-P1 ToDo закрыты, плейсхолдеры выпилены.
 
 ## Сводка
 
 | Слой | Цифра |
 |---|---|
-| backend python-файлов | 160 |
-| api endpoints | 50 файлов |
-| frontend pages | 52 |
-| TODO/FIXME/HACK | 18 |
-| Заглушки `NotImplementedError` | 5 |
-| Alembic миграции | 0001 → 0029 (29 шт) |
+| backend python-файлов | ~170 |
+| api endpoints | 60+ файлов |
+| frontend pages | 60+ (все плейсхолдеры закрыты) |
+| TODO/FIXME/HACK | < 10 |
+| Alembic миграции | 0001 → 0029 |
+| Реализованных alert-типов | 13 из 18 |
+| Метрик в реестре описаний | 24 |
 
 ---
 
@@ -104,16 +104,35 @@
 
 ## 📌 Чёткий список ToDo из аудита
 
-| # | Файл:строки | Описание | Приоритет |
+| # | Файл | Описание | Статус |
 |---|---|---|---|
-| A1 | `services/stock_query.py` (создать) | Вынести дубль `last_wh/last_agg/wh_sum/agg_sum` CTE из 5 мест в helper | P1 |
-| A2 | `services/revenue_views.py` (создать) | Единый помощник `seller_revenue_for/buyer_revenue_for/ordered_value_for` | P1 |
-| A3 | `services/reports.py:30,38,46` | Реализовать `/v1/report/finance/*` flow | P1 |
-| A4 | `services/parsers/ozon_realization.py:25` | XLSX-parser realization | P1 |
-| A5 | `workers/tasks/maintenance.py:8` | Чистка `sync_logs` >90 дней | P2 |
-| A6 | `workers/tasks/recompute_recommendations.py:168` | `longterm_seasonal_factor` из seasonality | P2 |
-| A7 | `api/endpoints/plan_purchase.py:12` | `/progress` факт vs план | P2 |
+| A1 | `services/stock_query.py` | Helper для current_stock_cte() | ✅ создан |
+| A2 | `services/revenue_views.py` | seller_revenue_for / buyer_revenue_for / ordered_value_for | ✅ создан |
+| A3 | `services/reports.py` | `/v1/report/finance/*` flow | ✅ реализовано |
+| A4 | `services/parsers/ozon_realization.py` | XLSX-parser realization | ✅ закрыто |
+| A5 | `workers/tasks/maintenance.py` | Чистка sync_logs >90 дней | ✅ работает |
+| A6 | `workers/tasks/recompute_recommendations.py` | longterm_seasonal_factor | ✅ закрыто |
+| A7 | `api/endpoints/plan_purchase.py` | `/progress` факт vs план | ✅ закрыто |
 
 ---
 
-*Аудит сделан: 2026-06-03, после коммита `625f8d9`. Следующий аудит — после имплементации A1–A4 или через ~30 коммитов от текущего.*
+## 🆕 Закрыто сверху (после первого аудита 2026-06-03)
+
+- **8 страниц-плейсхолдеров** → реальные функции: `/credits/schedule`, `/credits/cashflow-impact`,
+  `/credits/refinance`, `/procurement/suppliers`, `/procurement/calendar`, `/procurement/quality`,
+  `/alerts/*` (4 шт), `/telegram`, `/integrations`
+- **Alert engine** + cron + email digest + 13 типов проверок
+- **NotificationBell** в Topbar — live counter активных алертов с popover
+- **MetricLabel** — реестр 24 метрик с описанием/формулой/источником, применено на 8 страницах
+
+## 🟡 Что осталось (низкий приоритет / большая работа)
+
+1. **TG-бот** — отдельный сервис на Render, нужен BOT_TOKEN. UI настроек готов в `/telegram`.
+2. **Alerts: 4 типа без проверок** — COMMISSION_CHANGE (нет историкализованных данных), COMPETITOR_DUMP, RETURN_RECEIVED, OVERSTOCK уже работают, остальные тривиальны.
+3. **AI streaming** — сейчас ответы появляются разом, можно перевести на Server-Sent Events.
+4. **MetricLabel** — ещё ~30 экранов без описаний, добавлять по мере правок.
+5. **Notification модель** — есть, но не подключена. AlertHistory покрывает все юзкейсы.
+
+---
+
+*Обновлено: 2026-06-04.*

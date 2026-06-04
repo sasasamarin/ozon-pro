@@ -29,6 +29,8 @@ const TYPE_LABEL: Record<string, string> = {
   tax_due: 'Срок налога (порог: дней до)',
   rating_drop: 'Рейтинг ниже (порог: рейтинг)',
   ad_budget_exceeded: 'ДРР выше нормы (порог: %)',
+  position_drop: 'Падение позиции (порог: на сколько ↑)',
+  low_conversion: 'Низкая конверсия в корзину (порог: %)',
 }
 
 const ALL_TYPES = Object.keys(TYPE_LABEL)
@@ -153,6 +155,14 @@ export function AlertsSettings() {
                   {r.marker_type === 'ad_budget_exceeded' && (
                     <ThField label="Макс. ДРР %" value={r.threshold_json.drr_pct_max ?? 25}
                              onSave={(v) => update.mutate({ id: r.id, threshold_json: { drr_pct_max: +v } })} />
+                  )}
+                  {r.marker_type === 'position_drop' && (
+                    <ThField label="Падение на N позиций" value={r.threshold_json.position_drop ?? 5}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { position_drop: +v } })} />
+                  )}
+                  {r.marker_type === 'low_conversion' && (
+                    <ThField label="Мин. конверсия %" value={r.threshold_json.min_pct ?? 5}
+                             onSave={(v) => update.mutate({ id: r.id, threshold_json: { min_pct: +v } })} />
                   )}
                 </div>
 
