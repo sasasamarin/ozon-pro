@@ -40,20 +40,30 @@ router = APIRouter()
 # ============================================================
 
 
+# NB: ozon-pro-ai client шлёт `cabinet=` / `from=` / `to=` (старый стиль).
+# Принимаем оба: новый (cabinet_id/period_from/period_to) И старый (alias).
+
 @router.get("/analytics/metrics")
 async def metrics(
     cabinet_id: str | None = Query(None),
+    cabinet: str | None = Query(None),               # alias для ozon-pro-ai
     product_id: str | None = Query(None),
     period_from: str | None = Query(None),
     period_to: str | None = Query(None),
-    metrics: list[str] | None = Query(None),
+    from_: str | None = Query(None, alias="from"),   # alias
+    to: str | None = Query(None),                    # alias
+    metrics: str | list[str] | None = Query(None),
     user: User = Depends(get_service_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    if isinstance(metrics, str):
+        metrics = [m.strip() for m in metrics.split(",") if m.strip()]
     return await tools_v2.get_metrics(
         db, user.company_id,
-        cabinet_id=cabinet_id, product_id=product_id,
-        period_from=period_from, period_to=period_to,
+        cabinet_id=cabinet_id or cabinet,
+        product_id=product_id,
+        period_from=period_from or from_,
+        period_to=period_to or to,
         metrics=metrics,
     )
 
@@ -61,15 +71,21 @@ async def metrics(
 @router.get("/finance/pnl")
 async def pnl_view(
     cabinet_id: str | None = Query(None),
+    cabinet: str | None = Query(None),
+    product_id: str | None = Query(None),  # игнорируем — pnl не per-SKU
     period_from: str | None = Query(None),
     period_to: str | None = Query(None),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
     model: str = Query("operational", description="operational | official"),
     user: User = Depends(get_service_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await tools_v2.get_pnl(
         db, user.company_id,
-        cabinet_id=cabinet_id, period_from=period_from, period_to=period_to,
+        cabinet_id=cabinet_id or cabinet,
+        period_from=period_from or from_,
+        period_to=period_to or to,
         model=model,
     )
 
@@ -77,29 +93,36 @@ async def pnl_view(
 @router.get("/analytics/funnel")
 async def funnel_view(
     cabinet_id: str | None = Query(None),
+    cabinet: str | None = Query(None),
     product_id: str | None = Query(None),
     period_from: str | None = Query(None),
     period_to: str | None = Query(None),
+    from_: str | None = Query(None, alias="from"),
+    to: str | None = Query(None),
     user: User = Depends(get_service_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await tools_v2.get_funnel(
         db, user.company_id,
-        cabinet_id=cabinet_id, product_id=product_id,
-        period_from=period_from, period_to=period_to,
+        cabinet_id=cabinet_id or cabinet,
+        product_id=product_id,
+        period_from=period_from or from_,
+        period_to=period_to or to,
     )
 
 
 @router.get("/analytics/stock")
 async def stock_view(
     cabinet_id: str | None = Query(None),
+    cabinet: str | None = Query(None),
     product_id: str | None = Query(None),
     user: User = Depends(get_service_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     return await tools_v2.get_stock(
         db, user.company_id,
-        cabinet_id=cabinet_id, product_id=product_id,
+        cabinet_id=cabinet_id or cabinet,
+        product_id=product_id,
     )
 
 
