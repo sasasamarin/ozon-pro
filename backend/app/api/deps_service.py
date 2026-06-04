@@ -13,6 +13,7 @@ machine-to-machine.
 """
 from __future__ import annotations
 
+import hmac
 import uuid
 
 from fastapi import Depends, Header, HTTPException
@@ -31,7 +32,8 @@ async def verify_service_token(
     if not settings.SERVICE_TOKEN:
         raise HTTPException(503, "SERVICE_TOKEN не задан на сервере")
     expected = f"Bearer {settings.SERVICE_TOKEN}"
-    if authorization != expected:
+    # hmac.compare_digest — constant-time, защищает от timing-attack
+    if not hmac.compare_digest(authorization, expected):
         raise HTTPException(401, "Invalid service token")
     return True
 
