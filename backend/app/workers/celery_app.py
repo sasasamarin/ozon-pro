@@ -40,6 +40,7 @@ celery_app = Celery(
         "app.workers.tasks.sync_category_tree",
         "app.workers.tasks.sync_placement_reports",
         "app.workers.tasks.sync_premium",
+        "app.workers.tasks.run_alerts",
     ],
 )
 
@@ -166,6 +167,14 @@ celery_app.conf.beat_schedule = {
     "recompute-recommendations-nightly": {
         "task": "app.workers.tasks.recompute_recommendations.recompute_all",
         "schedule": crontab(hour=3, minute=30),  # после sync-transactions-daily (3:00)
+    },
+
+    # === ALERTS ===
+    # Прогоняем правила алертов ежечасно. Engine с дедупом на сутки —
+    # один тип алерта на entity не дублируется чаще раза в день.
+    "run-alerts-hourly": {
+        "task": "app.workers.tasks.run_alerts.run_all_users_alerts",
+        "schedule": crontab(minute=50),  # каждый час в :50 (после всех sync-задач)
     },
 
     # === ОБСЛУЖИВАНИЕ ===

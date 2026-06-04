@@ -150,6 +150,73 @@ async def run_alerts(db: AsyncSession, user_id: uuid.UUID) -> dict[str, int]:
                     f"Платёж {float(r.amount):.0f} ₽ через {(r.pay_date - today).days} дней",
                 ))
 
+        # ----- SALES_DROP (выручка за послед. 7 дней vs предыдущие 7) -----
+        elif rtype == AlertMarkerType.SALES_DROP.value:
+            drop_pct_th = float(threshold.get("drop_pct", 30))
+            rows = (await db.execute(text("""
+                WITH w AS (
+                    SELECT oa.id AS account_id, oa.name,
+                           SUM(t.amount) FILTER (
+                               WHERE t.amount > 0 AND t.time >= NOW() - INTERVAL '7 days'
+                           ) AS rev_cur,
+                           SUM(t.amount) FILTER (
+                               WHERE t.amount > 0
+                                 AND t.time >= NOW() - INTERVAL '14 days'
+                                 AND t.time < NOW() - INTERVAL '7 days'
+                           ) AS rev_prev
+                    FROM transactions t
+                    JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+                    WHERE oa.company_id = :cid
+                      AND t.time >= NOW() - INTERVAL '14 days'
+                    GROUP BY oa.id, oa.name
+                )
+                SELECT account_id::text, name, rev_cur, rev_prev
+                FROM w
+                WHERE rev_prev > 0
+                  AND ((rev_prev - rev_cur) / rev_prev * 100) >= :pct
+                LIMIT 20
+            """), {"cid": company_id, "pct": drop_pct_th})).all()
+            for r in rows:
+                drop = (float(r.rev_prev) - float(r.rev_cur)) / float(r.rev_prev) * 100
+                triggers.append((
+                    r.account_id, f"{r.name}",
+                    f"Выручка упала на {drop:.0f}% (было {float(r.rev_prev):.0f}₽ → стало {float(r.rev_cur):.0f}₽ за 7 дней)",
+                ))
+
+        # ----- CASHFLOW_GAP (DSCR < 1 в ближайшие 30 дней) -----
+        elif rtype == AlertMarkerType.CASHFLOW_GAP.value:
+            rows = (await db.execute(text("""
+                WITH future_pay AS (
+                    SELECT COALESCE(SUM(principal_part + interest_part + fee_part), 0) AS due
+                    FROM loan_payments
+                    WHERE company_id = :cid
+                      AND is_paid = false
+                      AND pay_date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '30 days'
+                ),
+                hist_cf AS (
+                    SELECT
+                        COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0)
+                        - COALESCE(SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END), 0)
+                        AS net
+                    FROM transactions t
+                    JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+                    WHERE oa.company_id = :cid
+                      AND t.time >= NOW() - INTERVAL '30 days'
+                )
+                SELECT (SELECT due FROM future_pay) AS due,
+                       (SELECT net FROM hist_cf) AS hist_net
+            """), {"cid": company_id})).first()
+            if rows and rows.due and float(rows.due) > 0:
+                due = float(rows.due)
+                hist = float(rows.hist_net or 0)
+                if hist < due:
+                    gap = due - hist
+                    triggers.append((
+                        "cashflow_30d",
+                        f"Прогноз 30 дней",
+                        f"Платежей по кредитам {due:.0f}₽, прогноз cashflow {hist:.0f}₽ — дыра {gap:.0f}₽",
+                    ))
+
         # ----- NEGATIVE_REVIEW (если есть таблица reviews) -----
         elif rtype == AlertMarkerType.NEGATIVE_REVIEW.value:
             rmax = int(threshold.get("rating_max", 3))
