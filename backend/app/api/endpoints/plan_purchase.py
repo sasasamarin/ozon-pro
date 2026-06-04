@@ -9,7 +9,8 @@
      B) Цена +N%: цель ближе, риск падения конверсии.
      C) Реклама +N% бюджета: больше показов и velocity.
   4) План закупки: разбивка на партии (lead_time + safety_stock) и кластеры.
-  5) Факт vs план — отдельный endpoint /progress (TODO).
+  5) Факт vs план — endpoint /progress: фактические продажи за период
+     vs цель, прогноз достижения, корректировка темпа.
 """
 from __future__ import annotations
 
@@ -289,5 +290,128 @@ async def calculate_purchase_plan(
             "Сценарии B и C — эвристики: -20% conversion на +10% цены и +25% velocity на +50% рекламы. "
             "Реальные эластичности зависят от категории и истории. После 3+ месяцев данные позволят "
             "подставить ваши конкретные коэффициенты."
+        ),
+    )
+
+
+# === /progress — факт vs план (AUDIT.md A7) ===============================
+
+
+class ProgressResp(BaseModel):
+    goal_type: str
+    goal_value: float
+    period_from: str
+    period_to: str
+    days_passed: int
+    days_remaining: int
+    progress_pct: float            # факт / цель × 100
+    expected_pct: float            # пропорция дней прошло
+    pace_status: str               # 'ahead' | 'on_track' | 'behind' | 'far_behind'
+    actual_so_far: float           # шт / ₽ — то что юзер задал в goal
+    forecast_at_end: float | None  # экстраполяция на конец периода
+    daily_required: float          # сколько нужно с сегодня каждый день чтобы успеть
+    daily_actual: float            # текущий средний темп
+    note: str
+
+
+@router.get("/progress", response_model=ProgressResp)
+async def plan_progress(
+    goal_type: Literal["units", "profit", "revenue"],
+    goal_value: float,
+    period_from: str,
+    period_days: int = 90,
+    product_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ProgressResp:
+    """
+    Текущий прогресс достижения цели. Сравнивает factual продажи (units/revenue/profit)
+    с goal_value, оценивает pace и прогнозирует exit.
+
+    Не сохраняет план — это stateless проверка. Юзер передаёт цель и
+    период (период должен совпадать с тем что давал в /calculate).
+    """
+    try:
+        df = date.fromisoformat(period_from)
+    except ValueError:
+        raise HTTPException(400, f"Неправильный period_from: {period_from}")
+    dt = df + timedelta(days=period_days)
+    today = date.today()
+    days_passed = max(0, min((today - df).days, period_days))
+    days_remaining = max(0, period_days - days_passed)
+    expected_pct = (days_passed / period_days * 100) if period_days else 0
+
+    accs_q = select(OzonAccount.id).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
+    )
+    accs = (await db.execute(accs_q)).scalars().all()
+    if not accs:
+        raise HTTPException(404, "Нет активных кабинетов")
+
+    # Считаем факт за прошедшие дни периода
+    pid = uuid.UUID(product_id) if product_id else None
+    where = ["o.ozon_account_id = ANY(:accs)",
+             "o.order_created_at >= :df", "o.order_created_at < :today",
+             "o.status = 'delivered'"]
+    params = {"accs": [str(a) for a in accs], "df": df, "today": today}
+    if pid:
+        where.append("oi.product_id = :pid")
+        params["pid"] = str(pid)
+
+    from sqlalchemy import text
+    r = (await db.execute(text(f"""
+        SELECT
+          COALESCE(SUM(oi.quantity), 0)::int AS units,
+          COALESCE(SUM(oi.price * oi.quantity), 0)::float AS revenue
+        FROM order_items oi JOIN orders o ON o.id = oi.order_id
+        WHERE {' AND '.join(where)}
+    """), params)).first()
+    actual_units = int(r.units or 0)
+    actual_revenue = float(r.revenue or 0)
+
+    # Profit оценка — revenue × средняя маржа 25% (если нет cost_price).
+    # Можно улучшить дёрнув fixed margin per SKU, но для MVP оставим.
+    actual_profit = actual_revenue * 0.25
+
+    if goal_type == "units":
+        actual_so_far = float(actual_units)
+    elif goal_type == "revenue":
+        actual_so_far = actual_revenue
+    else:
+        actual_so_far = actual_profit
+
+    progress_pct = (actual_so_far / goal_value * 100) if goal_value else 0
+    daily_actual = actual_so_far / days_passed if days_passed else 0
+    daily_required = (goal_value - actual_so_far) / days_remaining if days_remaining else 0
+
+    # Прогноз: текущий темп на оставшиеся дни
+    forecast_at_end = actual_so_far + daily_actual * days_remaining if days_passed else None
+
+    # Pace status
+    delta_pct = progress_pct - expected_pct
+    if delta_pct >= 5:
+        pace_status = "ahead"
+    elif delta_pct >= -5:
+        pace_status = "on_track"
+    elif delta_pct >= -20:
+        pace_status = "behind"
+    else:
+        pace_status = "far_behind"
+
+    return ProgressResp(
+        goal_type=goal_type, goal_value=goal_value,
+        period_from=df.isoformat(), period_to=dt.isoformat(),
+        days_passed=days_passed, days_remaining=days_remaining,
+        progress_pct=round(progress_pct, 1),
+        expected_pct=round(expected_pct, 1),
+        pace_status=pace_status,
+        actual_so_far=round(actual_so_far, 2),
+        forecast_at_end=round(forecast_at_end, 2) if forecast_at_end else None,
+        daily_required=round(daily_required, 2),
+        daily_actual=round(daily_actual, 2),
+        note=(
+            f"Прогресс {progress_pct:.1f}% vs ожидание {expected_pct:.1f}% по календарю. "
+            f"Темп: {daily_actual:.1f}/день, нужно {daily_required:.1f}/день чтобы успеть."
         ),
     )

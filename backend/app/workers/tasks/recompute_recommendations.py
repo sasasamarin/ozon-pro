@@ -24,6 +24,7 @@ from app.models import Order, OrderItem, OzonAccount, Product, Stock
 from app.models.procurement import SalesVelocityCache, TrendSignal
 from app.services.forecasting import ForecastDefaults
 from app.services.forecasting.velocity import calc_velocity
+from app.services.seasonality import source_a as seasonality_a
 from app.workers.celery_app import celery_app
 from app.workers.tasks._helpers import run_celery_async
 
@@ -105,6 +106,26 @@ async def _recompute_all_async(SessionLocal: async_sessionmaker) -> dict:
         }
 
 
+async def _seasonal_factor_for(db, product_id) -> float:
+    """Сезонный индекс ТЕКУЩЕГО месяца для товара (из source_a).
+    Если истории <365 дней — возвращаем 1.0 (нейтрально).
+    Используется как множитель в recommended_daily.
+    """
+    hs = await seasonality_a.history_for_product(db, product_id)
+    if hs.days_history < 365:
+        return 1.0
+    prof = await seasonality_a.profile(
+        db, product_id=product_id, metric="buyouts", granularity="month",
+    )
+    from datetime import date
+    cur_month = date.today().month
+    for b in prof.get("buckets", []):
+        if b["bucket"] == cur_month and b.get("index"):
+            # Clamp 0.3..3.0 чтобы избегать выбросов
+            return max(0.3, min(3.0, float(b["index"])))
+    return 1.0
+
+
 async def _compute_velocity_row(db, *, account_id, user_id, product: Product) -> dict | None:
     """Считает velocity longterm (365д) + shortterm (14д) + trend_signal → dict
     для UPSERT в SalesVelocityCache. Возвращает None если нет данных вообще.
@@ -158,6 +179,12 @@ async def _compute_velocity_row(db, *, account_id, user_id, product: Product) ->
     else:
         recommended = v_long.adjusted_daily
 
+    # AUDIT.md A6 — подмешиваем сезонный фактор текущего месяца.
+    # Если у товара ≥365 дней истории и индекс пика > 1.5 — рекомендация
+    # уменьшается для месяцев-провалов и увеличивается для пиков.
+    _seasonal_factor_value = await _seasonal_factor_for(db, product.id)
+    recommended = recommended * _seasonal_factor_value
+
     return {
         "time": now,
         "product_id": product.id,
@@ -165,7 +192,7 @@ async def _compute_velocity_row(db, *, account_id, user_id, product: Product) ->
         "user_id": user_id,
         "longterm_window_days": longterm_window,
         "longterm_avg_daily": v_long.raw_avg_daily,
-        "longterm_seasonal_factor": 1.0,  # TODO: подмешать seasonality.combined_seasonal_factor
+        "longterm_seasonal_factor": _seasonal_factor_value,  # AUDIT.md A6 — из source_a
         "longterm_adjusted_daily": v_long.adjusted_daily,
         "longterm_confidence": v_long.confidence,
         "shortterm_window_days": shortterm_window,
