@@ -34,21 +34,9 @@ jobs:
           JWT_SECRET_KEY: "ci-test-secret"
           ALLOWED_HOSTS: "*"
           CORS_ORIGINS: "*"
-          ENVIRONMENT: "test"
+          ENVIRONMENT: "development"
           S3_BUCKET: "test"
           S3_ACCESS_KEY: "test"
           S3_SECRET_KEY: "test"
           S3_ENDPOINT: "https://s3.example.com"
-        run: |
-          set +e
-          OUT=$(pytest tests/ -v -s --tb=long --no-header 2>&1)
-          EC=$?
-          echo "$OUT"
-          if [ $EC -ne 0 ]; then
-            # Берём строки СО ВСЕМ контекстом ошибки: header validation errors +
-            # имена полей (имя поля идёт ДО строки "Field required").
-            echo "$OUT" | head -100 | grep -E "^[A-Z_]+$|validation errors|Field required|errors.pydantic|^ERROR" | head -20 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
-          fi
-          exit $EC
+        run: pytest tests/ -v
