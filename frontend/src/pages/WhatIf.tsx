@@ -13,6 +13,7 @@ import { Card } from '@/components/ui/Card'
 import { api } from '@/lib/api'
 import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useProductFilter } from '@/stores/product_filter'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface BetaPoint { beta: number | null; n: number; r2: number | null; confidence: string; note: string }
 interface BetasResp {
@@ -316,7 +317,9 @@ function ScenarioColumn({
           <RowMetric label="Все вычеты + налог" value={`−${formatCurrency(result.revenue - result.net_profit)}`} dim />
           <div className="pt-2 mt-1 border-t border-border-subtle">
             <div className="flex justify-between items-baseline">
-              <span className="text-fg-muted">Чистая прибыль ({taxLabel})</span>
+              <span className="text-fg-muted">
+                <MetricLabel metricKey="net_profit" override={`Чистая прибыль (${taxLabel})`} />
+              </span>
               <span className={cn('text-lg font-bold tabular-nums', profitColor)}>
                 {formatCurrency(result.net_profit)}
               </span>

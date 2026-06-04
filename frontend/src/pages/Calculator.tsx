@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { formatCurrency, cn } from '@/lib/utils'
 import { api } from '@/lib/api'
+import { MetricLabel } from '@/components/MetricLabel'
 
 interface CompanySettings {
   tax: { tax_regime: string; tax_rate_pct: number; vat_rate_pct: number | null }
@@ -158,6 +159,7 @@ export function Calculator() {
 
           <div className="grid grid-cols-3 gap-3 mt-5 pt-5 border-t border-border-subtle">
             <Metric
+              metricKey="gross_margin_pct"
               label="Маржа"
               value={`${(result?.margin_pct ?? 0).toFixed(1)}%`}
               color={(result?.margin_pct ?? 0) >= 20 ? 'emerald' : (result?.margin_pct ?? 0) >= 0 ? 'amber' : 'rose'}
@@ -234,7 +236,7 @@ function Row({
   )
 }
 
-function Metric({ label, value, color }: { label: string; value: string; color: 'emerald' | 'amber' | 'rose' | 'fg' }) {
+function Metric({ label, value, color, metricKey }: { label: string; value: string; color: 'emerald' | 'amber' | 'rose' | 'fg'; metricKey?: string }) {
   const cls = {
     emerald: 'text-emerald-700',
     amber: 'text-amber-700',
@@ -243,7 +245,9 @@ function Metric({ label, value, color }: { label: string; value: string; color: 
   }[color]
   return (
     <div className="text-center">
-      <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">{label}</p>
+      <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+        {metricKey ? <MetricLabel metricKey={metricKey} override={label} /> : label}
+      </p>
       <p className={cn('text-[20px] font-semibold mt-1 tabular-nums', cls)}>{value}</p>
     </div>
   )
