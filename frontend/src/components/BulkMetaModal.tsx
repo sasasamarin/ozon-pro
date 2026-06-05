@@ -42,9 +42,9 @@ export function BulkMetaModal({ productIds, onClose }: Props) {
   })
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto"
          onClick={onClose}>
-      <Card className="max-w-lg w-full p-5" onClick={(e) => e.stopPropagation()}>
+      <Card className="max-w-lg w-full p-5 max-h-[90vh] overflow-y-auto rounded-b-none sm:rounded-lg" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-semibold text-fg">Массовая правка</h2>

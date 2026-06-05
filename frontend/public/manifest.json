@@ -1,0 +1,27 @@
+{
+  "name": "Flowoi — Финансовый мозг для селлеров Ozon",
+  "short_name": "Flowoi",
+  "description": "SaaS-аналитика и финансовый учёт для продавцов Ozon",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#4F46E5",
+  "lang": "ru",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo-flowoi.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
