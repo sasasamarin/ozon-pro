@@ -171,6 +171,7 @@ class PlanRow(BaseModel):
     base_forecast: float | None
     distribution_mode: str
     source_pref: str
+    status: str
     note: str | None
     created_at: str
     items_count: int
@@ -184,6 +185,7 @@ class PlanUpdate(BaseModel):
     name: str | None = None
     target_value: float | None = None
     distribution_mode: str | None = None
+    status: str | None = None  # draft | active | archived
     note: str | None = None
 
 
@@ -237,6 +239,7 @@ def _plan_to_row(plan: SalesPlan, items_count: int = 0) -> PlanRow:
         base_forecast=float(plan.base_forecast) if plan.base_forecast else None,
         distribution_mode=plan.distribution_mode,
         source_pref=plan.source_pref,
+        status=plan.status or "active",
         note=plan.note,
         created_at=plan.created_at.isoformat(),
         items_count=items_count,
@@ -470,6 +473,8 @@ async def update_plan(
         plan.target_value = Decimal(str(payload.target_value))
     if payload.distribution_mode is not None:
         plan.distribution_mode = payload.distribution_mode
+    if payload.status is not None:
+        plan.status = payload.status
     if payload.note is not None:
         plan.note = payload.note
     plan.updated_at = datetime.now(tz=plan.updated_at.tzinfo if plan.updated_at.tzinfo else None)
@@ -964,6 +969,208 @@ async def import_items_xlsx(
 
     await db.commit()
     return {"updated": updated, "skipped": skipped, "errors": errors[:20]}
+
+
+@router.post("/{plan_id}/clone", response_model=PlanRow)
+async def clone_plan(
+    plan_id: str,
+    name: str | None = None,
+    period_start: date | None = None,
+    period_end: date | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Клонировать план как шаблон. Сохраняет items с теми же plan_value
+    (можно потом перераспределить под новый период).
+
+    Если задан новый период — items копируются, distribute-days
+    запускается заново на frontend через POST /{new_id}/distribute-days.
+    """
+    try:
+        src_id = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    src = await _get_plan_owned(db, src_id, current_user.company_id)
+
+    new = SalesPlan(
+        company_id=current_user.company_id, user_id=current_user.id,
+        name=name or f"{src.name} (копия)",
+        scope_type=src.scope_type, scope_ref=src.scope_ref,
+        metric_code=src.metric_code,
+        period_start=period_start or src.period_start,
+        period_end=period_end or src.period_end,
+        analysis_start=src.analysis_start, analysis_end=src.analysis_end,
+        target_value=src.target_value, base_forecast=src.base_forecast,
+        distribution_mode=src.distribution_mode,
+        source_pref=src.source_pref,
+        status="draft",  # клон стартует как draft, юзер активирует
+        note=f"Клонировано из {src.id}",
+    )
+    db.add(new)
+    await db.flush()
+
+    # Копируем items
+    src_items = (await db.execute(
+        select(SalesPlanItem).where(SalesPlanItem.plan_id == src_id)
+    )).scalars().all()
+    for it in src_items:
+        db.add(SalesPlanItem(
+            plan_id=new.id, product_id=it.product_id, sku=it.sku,
+            analysis_value=it.analysis_value, share_pct=it.share_pct,
+            plan_value=it.plan_value,
+        ))
+    await db.commit()
+    await db.refresh(new)
+    return _plan_to_row(new, len(src_items))
+
+
+@router.get("/{plan_id}/overview")
+async def fact_overview(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Расширенный обзор факта: 3 колонки (Цель / Сейчас / Прогноз)
+    × разрез по SKU с per-SKU performance.
+
+    Возвращает:
+      summary: {target, current, forecast_end_period, pct_current, pct_forecast}
+      sku_rows: [{sku, name, target, current, forecast, pct_current, pct_forecast, tone}]
+    """
+    from datetime import timedelta as _td
+    from sqlalchemy import text as _sql
+    try:
+        pid = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    plan = await _get_plan_owned(db, pid, current_user.company_id)
+
+    today = date.today()
+    days_total = (plan.period_end - plan.period_start).days + 1
+    days_elapsed = max(0, min(days_total, (today - plan.period_start).days + 1))
+
+    cabinet = (uuid.UUID(plan.scope_ref)
+               if plan.scope_type == "cabinet" and plan.scope_ref else None)
+    extra = "AND oa.id = :cab" if cabinet else ""
+    params = {"cid": str(current_user.company_id),
+              "df": plan.period_start, "dt": min(today, plan.period_end)}
+    if cabinet:
+        params["cab"] = str(cabinet)
+
+    # Получаем per-product factual из исторических данных
+    # Дополним per-SKU plan
+    items = (await db.execute(
+        select(SalesPlanItem).where(SalesPlanItem.plan_id == pid)
+    )).scalars().all()
+    items_by_pid = {str(it.product_id): it for it in items if it.product_id}
+
+    # SKU-факт за период плана
+    if plan.metric_code == "revenue":
+        sql = f"""
+            SELECT t.product_id::text AS pid,
+                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS v
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND t.operation_type='OperationAgentDeliveredToCustomer'
+              AND t.product_id IS NOT NULL
+              {extra}
+            GROUP BY t.product_id
+        """
+    elif plan.metric_code in ("orders", "units"):
+        agg = "COUNT(DISTINCT o.id)::float" if plan.metric_code == "orders" else "SUM(oi.quantity)::float"
+        sql = f"""
+            SELECT oi.product_id::text AS pid, {agg} AS v
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.status='delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
+              {extra}
+            GROUP BY oi.product_id
+        """
+    else:
+        sql = f"""
+            SELECT t.product_id::text AS pid,
+                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS v
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND t.product_id IS NOT NULL
+              {extra}
+            GROUP BY t.product_id
+        """
+    fact_rows = (await db.execute(_sql(sql), params)).all()
+    fact_by_pid = {r.pid: float(r.v or 0) for r in fact_rows}
+
+    # Имена SKU
+    from app.models import Product
+    all_pids = list(items_by_pid.keys())
+    name_map = {}
+    if all_pids:
+        rows_p = (await db.execute(
+            select(Product.id, Product.name, Product.offer_id).where(
+                Product.id.in_([uuid.UUID(p) for p in all_pids])
+            )
+        )).all()
+        name_map = {str(r.id): (r.name, r.offer_id) for r in rows_p}
+
+    sku_rows = []
+    total_target = 0.0
+    total_current = 0.0
+    total_forecast = 0.0
+    for pid_str, it in items_by_pid.items():
+        target = float(it.plan_value)
+        current = fact_by_pid.get(pid_str, 0)
+        forecast = (current / days_elapsed * days_total) if days_elapsed > 0 else 0
+        pct_cur = (current / target * 100) if target > 0 else None
+        pct_fc = (forecast / target * 100) if target > 0 else None
+
+        n, off = name_map.get(pid_str, ("", ""))
+        tone = "rose"
+        if pct_fc is not None:
+            if pct_fc >= 100: tone = "emerald"
+            elif pct_fc >= 80: tone = "amber"
+
+        sku_rows.append({
+            "product_id": pid_str,
+            "sku": off or it.sku or "",
+            "name": n or "(неизвестно)",
+            "target": round(target, 2),
+            "current": round(current, 2),
+            "forecast": round(forecast, 2),
+            "pct_current": round(pct_cur, 1) if pct_cur is not None else None,
+            "pct_forecast": round(pct_fc, 1) if pct_fc is not None else None,
+            "tone": tone,
+        })
+        total_target += target
+        total_current += current
+        total_forecast += forecast
+
+    sku_rows.sort(key=lambda r: r["target"], reverse=True)
+
+    summary_pct_cur = (total_current / total_target * 100) if total_target > 0 else None
+    summary_pct_fc = (total_forecast / total_target * 100) if total_target > 0 else None
+
+    return {
+        "plan_id": str(pid),
+        "plan_name": plan.name,
+        "metric_code": plan.metric_code,
+        "period_start": plan.period_start.isoformat(),
+        "period_end": plan.period_end.isoformat(),
+        "days_elapsed": days_elapsed,
+        "days_total": days_total,
+        "summary": {
+            "target": round(total_target, 2),
+            "current": round(total_current, 2),
+            "forecast": round(total_forecast, 2),
+            "pct_current": round(summary_pct_cur, 1) if summary_pct_cur is not None else None,
+            "pct_forecast": round(summary_pct_fc, 1) if summary_pct_fc is not None else None,
+        },
+        "sku_rows": sku_rows,
+    }
 
 
 @router.get("/{plan_id}/dashboard")

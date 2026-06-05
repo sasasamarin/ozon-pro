@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import {
   Menu,
   ChevronDown,
@@ -39,8 +39,13 @@ function pluralizeCabinets(n: number): string {
 
 export function Topbar({ onOpenSidebar }: TopbarProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { data: user } = useCurrentUser()
   const initials = user?.email?.[0]?.toUpperCase() || 'U'
+
+  // На страницах где есть внутренний выбор кабинета/товара — топбар-фильтры не нужны
+  const hideGlobalFilters = location.pathname.startsWith('/sales-plan')
+                          || location.pathname.startsWith('/analytics/plan-fact')
 
   const { selectedCabinetIds, toggleCabinetId, selectAll } = useCabinetStore()
   const [cabinetMenuOpen, setCabinetMenuOpen] = useState(false)
@@ -237,13 +242,14 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
         </div>
 
         {/* Глобальные фильтры — товар / категория / тег.
-            На мобиле прячем — занимают слишком много места.
-            Юзер может фильтровать на самих страницах. */}
-        <div className="hidden md:flex items-center gap-2">
-          <ProductPickerGlobal />
-          <CategoryPickerGlobal />
-          <TagPickerGlobal />
-        </div>
+            Прячем на мобиле и на страницах с внутренним выбором (sales-plan). */}
+        {!hideGlobalFilters && (
+          <div className="hidden md:flex items-center gap-2">
+            <ProductPickerGlobal />
+            <CategoryPickerGlobal />
+            <TagPickerGlobal />
+          </div>
+        )}
 
         {/* Бейджи статуса данных */}
         <div className="hidden lg:flex items-center gap-2">

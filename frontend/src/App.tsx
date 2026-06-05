@@ -38,7 +38,6 @@ import { Markers } from '@/pages/Markers'
 import { Team } from '@/pages/Team'
 import { AIChat } from '@/pages/AIChat'
 import { ReverseFunnel } from '@/pages/ReverseFunnel'
-import { PlanVsFact } from '@/pages/PlanVsFact'
 import { SalesPlan } from '@/pages/SalesPlan'
 import { PlanPurchase } from '@/pages/PlanPurchase'
 import { AccountBalance } from '@/pages/AccountBalance'
@@ -142,7 +141,8 @@ export default function App() {
         <Route path="/products/competitors" element={<CompetitorPrices />} />
         <Route path="/finance/margin" element={<Margin />} />
         <Route path="/finance/taxes" element={<Taxes />} />
-        <Route path="/analytics/plan-vs-fact" element={<PlanVsFact />} />
+        {/* Старый /plan-vs-fact → редирект на новый sales-plan */}
+        <Route path="/analytics/plan-vs-fact" element={<Navigate to="/sales-plan" replace />} />
         <Route path="/analytics/plan-fact" element={<SalesPlan />} />
         <Route path="/sales-plan" element={<SalesPlan />} />
         <Route path="/analytics/plan-purchase" element={<PlanPurchase />} />

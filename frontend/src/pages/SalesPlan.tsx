@@ -8,15 +8,17 @@
  *   3) SKU × недели + сохранение
  */
 import { useState, useMemo, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   LineChart, Line, BarChart, Bar, Cell, XAxis, YAxis, Tooltip, CartesianGrid,
   ResponsiveContainer, ReferenceLine, Legend,
 } from 'recharts'
 import {
-  Target, AlertTriangle, Save, Lock, Unlock, Trash2,
+  Target, AlertTriangle, Save, Lock, Unlock, Trash2, ListTree,
   FileSpreadsheet, Sliders, BarChart3, Award, ArrowRight, RotateCcw,
-  Loader2, Gauge, Zap, Trophy, Upload, Flame,
+  Loader2, Gauge, Zap, Trophy, Upload, Flame, Archive, Play, Copy,
+  CheckCircle2,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -58,6 +60,7 @@ interface PlanRow {
   analysis_start: string; analysis_end: string
   target_value: number; base_forecast: number | null
   distribution_mode: string; source_pref: string
+  status: string  // draft | active | archived
   note: string | null; created_at: string; items_count: number
 }
 interface Cabinet { id: string; name: string }
@@ -88,8 +91,17 @@ function exportItemsCsv(items: BottomupItem[]) {
   URL.revokeObjectURL(url)
 }
 
+type TabKey = 'list' | 'wizard' | 'fact' | 'kpi' | 'game'
+
 export function SalesPlan() {
-  const [tab, setTab] = useState<'wizard' | 'fact' | 'kpi' | 'game'>('wizard')
+  const [params, setParams] = useSearchParams()
+  const tab = (params.get('tab') as TabKey) || 'list'
+  const selectedPlanFromUrl = params.get('plan_id') || null
+  const setTab = (t: TabKey, planId?: string | null) => {
+    const next: Record<string, string> = { tab: t }
+    if (planId) next.plan_id = planId
+    setParams(next)
+  }
 
   return (
     <div className="space-y-5">
@@ -112,12 +124,13 @@ export function SalesPlan() {
 
       <div className="flex gap-1 border-b border-border-subtle flex-wrap">
         {[
-          { key: 'wizard', label: 'Постановка плана', icon: Sliders },
-          { key: 'fact', label: 'Факт', icon: BarChart3 },
-          { key: 'kpi', label: 'KPI менеджмента', icon: Award },
-          { key: 'game', label: 'Игровой режим', icon: Gauge },
+          { key: 'list' as TabKey, label: 'Все планы', icon: ListTree },
+          { key: 'wizard' as TabKey, label: 'Постановка плана', icon: Sliders },
+          { key: 'fact' as TabKey, label: 'Факт', icon: BarChart3 },
+          { key: 'kpi' as TabKey, label: 'KPI менеджмента', icon: Award },
+          { key: 'game' as TabKey, label: 'Игровой режим', icon: Gauge },
         ].map(({ key, label, icon: Icon }) => (
-          <button key={key} onClick={() => setTab(key as any)}
+          <button key={key} onClick={() => setTab(key)}
             className={cn(
               'px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px inline-flex items-center gap-2',
               tab === key ? 'border-purple-500 text-purple-700'
@@ -129,10 +142,11 @@ export function SalesPlan() {
         ))}
       </div>
 
-      {tab === 'wizard' && <WizardTab />}
-      {tab === 'fact' && <FactTab />}
-      {tab === 'kpi' && <KpiTab />}
-      {tab === 'game' && <GameTab />}
+      {tab === 'list' && <PlansListTab onOpen={(id, target) => setTab(target, id)} />}
+      {tab === 'wizard' && <WizardTab onSaved={(id) => setTab('fact', id)} />}
+      {tab === 'fact' && <FactTab initialId={selectedPlanFromUrl} />}
+      {tab === 'kpi' && <KpiTab initialId={selectedPlanFromUrl} />}
+      {tab === 'game' && <GameTab initialId={selectedPlanFromUrl} />}
     </div>
   )
 }
@@ -142,7 +156,158 @@ export function SalesPlan() {
 // WIZARD — bottom-up
 // ===========================================
 
-function WizardTab() {
+function PlansListTab({ onOpen }: {
+  onOpen: (planId: string, target: TabKey) => void
+}) {
+  const qc = useQueryClient()
+  const { data: plans = [] } = useQuery<PlanRow[]>({
+    queryKey: ['plans'],
+    queryFn: async () => (await api.get('/plans')).data,
+  })
+  const [filter, setFilter] = useState<'all' | 'active' | 'draft' | 'archived'>('active')
+
+  const update = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) =>
+      (await api.patch(`/plans/${id}`, { status })).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['plans'] }),
+  })
+  const remove = useMutation({
+    mutationFn: async (id: string) => (await api.delete(`/plans/${id}`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['plans'] }),
+  })
+  const clonePlan = useMutation({
+    mutationFn: async (id: string) =>
+      (await api.post(`/plans/${id}/clone`)).data,
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['plans'] })
+      alert(`Клон создан как «черновик»: ${data.name}`)
+    },
+  })
+
+  const filtered = plans.filter((p) => filter === 'all' || p.status === filter)
+
+  const counts = {
+    all: plans.length,
+    active: plans.filter((p) => p.status === 'active').length,
+    draft: plans.filter((p) => p.status === 'draft').length,
+    archived: plans.filter((p) => p.status === 'archived').length,
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2 items-center flex-wrap">
+        {(['all', 'active', 'draft', 'archived'] as const).map((k) => (
+          <button key={k} onClick={() => setFilter(k)}
+            className={cn('px-3 py-1.5 rounded-md text-xs font-medium border transition-colors',
+              filter === k
+                ? 'bg-purple-600 text-white border-purple-600'
+                : 'bg-bg border-border-subtle text-fg-muted hover:bg-bg-subtle')}>
+            {k === 'all' && `Все · ${counts.all}`}
+            {k === 'active' && `Активные · ${counts.active}`}
+            {k === 'draft' && `Черновики · ${counts.draft}`}
+            {k === 'archived' && `Архив · ${counts.archived}`}
+          </button>
+        ))}
+      </div>
+
+      <Card className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-xs text-fg-muted bg-bg-subtle/30">
+            <tr>
+              <th className="py-2 px-3 text-left">Название</th>
+              <th className="py-2 px-3 text-left">Метрика</th>
+              <th className="py-2 px-3 text-left">Период</th>
+              <th className="py-2 px-3 text-right">Цель</th>
+              <th className="py-2 px-3 text-right">SKU</th>
+              <th className="py-2 px-3 text-center">Статус</th>
+              <th className="py-2 px-3 text-right w-48">Действия</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((p) => (
+              <tr key={p.id} className="border-t border-border-subtle/40 hover:bg-bg-subtle/20">
+                <td className="py-2 px-3">
+                  <button onClick={() => onOpen(p.id, 'fact')}
+                          className="text-fg hover:text-purple-700 font-medium">
+                    {p.name}
+                  </button>
+                  {p.scope_type === 'cabinet' && (
+                    <div className="text-[10px] text-fg-muted">кабинет</div>
+                  )}
+                </td>
+                <td className="py-2 px-3 text-xs">{p.metric_code}</td>
+                <td className="py-2 px-3 text-xs font-mono">
+                  {p.period_start} … {p.period_end}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums">
+                  {p.target_value.toLocaleString('ru-RU')}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums">{p.items_count}</td>
+                <td className="py-2 px-3 text-center">
+                  <span className={cn('inline-block text-[10px] px-2 py-0.5 rounded',
+                    p.status === 'active' && 'bg-emerald-100 text-emerald-800',
+                    p.status === 'draft' && 'bg-slate-100 text-slate-700',
+                    p.status === 'archived' && 'bg-amber-100 text-amber-800')}>
+                    {p.status === 'active' && 'активен'}
+                    {p.status === 'draft' && 'черновик'}
+                    {p.status === 'archived' && 'архив'}
+                  </span>
+                </td>
+                <td className="py-2 px-3 text-right">
+                  <div className="inline-flex gap-1">
+                    <button onClick={() => onOpen(p.id, 'fact')}
+                            title="Открыть факт"
+                            className="p-1.5 hover:bg-bg-subtle rounded">
+                      <BarChart3 className="w-3.5 h-3.5 text-fg-muted" />
+                    </button>
+                    <button onClick={() => clonePlan.mutate(p.id)}
+                            title="Клонировать (шаблон)"
+                            className="p-1.5 hover:bg-bg-subtle rounded">
+                      <Copy className="w-3.5 h-3.5 text-fg-muted" />
+                    </button>
+                    {p.status !== 'active' && (
+                      <button onClick={() => update.mutate({ id: p.id, status: 'active' })}
+                              title="Активировать"
+                              className="p-1.5 hover:bg-emerald-100 rounded">
+                        <Play className="w-3.5 h-3.5 text-emerald-600" />
+                      </button>
+                    )}
+                    {p.status !== 'archived' && (
+                      <button onClick={() => update.mutate({ id: p.id, status: 'archived' })}
+                              title="В архив"
+                              className="p-1.5 hover:bg-amber-100 rounded">
+                        <Archive className="w-3.5 h-3.5 text-amber-600" />
+                      </button>
+                    )}
+                    <button onClick={() => {
+                      if (confirm(`Удалить план «${p.name}»?`)) remove.mutate(p.id)
+                    }} title="Удалить"
+                            className="p-1.5 hover:bg-rose-100 rounded">
+                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={7} className="py-8 text-center text-fg-muted">
+                Планов нет. Создай первый на вкладке «Постановка плана».
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </Card>
+
+      <Card className="p-3 text-xs text-fg-muted">
+        💡 Клонирование = шаблон. Создаётся как «черновик» с теми же SKU,
+        под новый период — потом запустишь его в работу через «Активировать».
+      </Card>
+    </div>
+  )
+}
+
+
+function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
   const qc = useQueryClient()
   const [step, setStep] = useState<1 | 2 | 3>(1)
 
@@ -263,6 +428,20 @@ function WizardTab() {
       qc.invalidateQueries({ queryKey: ['plans'] })
     },
   })
+
+  // Когда план сохранён — Step 3 показывает грид + 3 кнопки навигации
+  function handleSavedNavigate(target: 'fact' | 'list') {
+    if (savedPlanId) {
+      if (target === 'fact') onSaved(savedPlanId)
+      else if (target === 'list') {
+        // переключиться на список
+        const url = new URL(window.location.href)
+        url.searchParams.set('tab', 'list')
+        url.searchParams.delete('plan_id')
+        window.location.href = url.toString()
+      }
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -598,7 +777,27 @@ function WizardTab() {
               </Button>
             </div>
           ) : (
-            <WeeksGrid planId={savedPlanId} />
+            <>
+              <Card className="p-4 bg-emerald-50/40 border-emerald-300 flex items-center gap-3">
+                <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
+                <div className="flex-1">
+                  <div className="font-semibold text-emerald-900">План сохранён</div>
+                  <div className="text-xs text-emerald-800">
+                    Распределение по дням рассчитано · {planName || 'без названия'}
+                  </div>
+                </div>
+              </Card>
+              <WeeksGrid planId={savedPlanId} />
+              <div className="flex gap-2 justify-between">
+                <Button variant="secondary" onClick={() => handleSavedNavigate('list')}>
+                  ← К списку планов
+                </Button>
+                <Button onClick={() => handleSavedNavigate('fact')}
+                        className="bg-emerald-600 hover:bg-emerald-700">
+                  На факт →
+                </Button>
+              </div>
+            </>
           )}
         </Card>
       )}
@@ -665,12 +864,19 @@ function WeeksGrid({ planId }: { planId: string }) {
 // FACT TAB
 // ===========================================
 
-function FactTab() {
+function FactTab({ initialId }: { initialId: string | null }) {
   const { data: plans = [] } = useQuery<PlanRow[]>({
     queryKey: ['plans'],
     queryFn: async () => (await api.get('/plans')).data,
   })
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialId)
+  useEffect(() => { if (initialId) setSelectedId(initialId) }, [initialId])
+
+  const { data: overview } = useQuery<any>({
+    queryKey: ['plan-overview', selectedId],
+    queryFn: async () => (await api.get(`/plans/${selectedId}/overview`)).data,
+    enabled: !!selectedId,
+  })
   const { data: fact } = useQuery<any>({
     queryKey: ['plan-fact', selectedId],
     queryFn: async () => (await api.get(`/plans/${selectedId}/fact`)).data,
@@ -713,6 +919,92 @@ function FactTab() {
 
       {fact && (
         <>
+          {/* === 3 КОЛОНКИ: Цель | Сейчас | Прогноз === */}
+          {overview && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <Card className="p-5 bg-purple-50/40 border-purple-200">
+                <div className="text-xs text-fg-muted uppercase tracking-wide">🎯 Цель</div>
+                <div className="text-3xl font-bold tabular-nums mt-1">
+                  {overview.summary.target.toLocaleString('ru-RU')}
+                </div>
+                <div className="text-xs text-fg-muted mt-1">
+                  на {overview.period_start}…{overview.period_end} · {overview.metric_code}
+                </div>
+              </Card>
+              <Card className={cn('p-5 border-2',
+                (overview.summary.pct_current || 0) >= 80 ? 'border-emerald-300 bg-emerald-50/40' :
+                'border-amber-300 bg-amber-50/40')}>
+                <div className="text-xs text-fg-muted uppercase tracking-wide">📍 Сейчас</div>
+                <div className={cn('text-3xl font-bold tabular-nums mt-1',
+                  (overview.summary.pct_current || 0) >= 80 ? 'text-emerald-700' : 'text-amber-700')}>
+                  {overview.summary.current.toLocaleString('ru-RU')}
+                </div>
+                <div className="text-xs text-fg-muted mt-1">
+                  {overview.summary.pct_current !== null
+                    ? `${overview.summary.pct_current}% от плана`
+                    : ''} · день {overview.days_elapsed} из {overview.days_total}
+                </div>
+              </Card>
+              <Card className={cn('p-5 border',
+                (overview.summary.pct_forecast || 0) >= 100 ? 'border-emerald-300 bg-emerald-50/40' :
+                (overview.summary.pct_forecast || 0) >= 80 ? 'border-amber-300 bg-amber-50/40' :
+                'border-rose-300 bg-rose-50/40')}>
+                <div className="text-xs text-fg-muted uppercase tracking-wide">🔮 Прогноз</div>
+                <div className={cn('text-3xl font-bold tabular-nums mt-1',
+                  (overview.summary.pct_forecast || 0) >= 100 ? 'text-emerald-700' :
+                  (overview.summary.pct_forecast || 0) >= 80 ? 'text-amber-700' : 'text-rose-700')}>
+                  {Math.round(overview.summary.forecast).toLocaleString('ru-RU')}
+                </div>
+                <div className="text-xs text-fg-muted mt-1">
+                  при текущих темпах · {overview.summary.pct_forecast || 0}% от плана
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {/* Per-SKU таблица: где какие продаём */}
+          {overview && overview.sku_rows.length > 0 && (
+            <Card className="overflow-hidden">
+              <div className="p-3 border-b border-border-subtle flex items-center justify-between">
+                <h3 className="text-sm font-semibold">SKU: Цель | Сейчас | Прогноз</h3>
+                <div className="text-xs text-fg-muted">{overview.sku_rows.length} SKU</div>
+              </div>
+              <div className="overflow-x-auto max-h-[60vh]">
+                <table className="w-full text-sm">
+                  <thead className="text-xs text-fg-muted bg-bg-subtle/30 sticky top-0">
+                    <tr>
+                      <th className="py-2 px-3 text-left">Артикул</th>
+                      <th className="py-2 px-3 text-left">Товар</th>
+                      <th className="py-2 px-3 text-right">Цель</th>
+                      <th className="py-2 px-3 text-right">Сейчас</th>
+                      <th className="py-2 px-3 text-right">Прогноз</th>
+                      <th className="py-2 px-3 text-center">% прогн.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {overview.sku_rows.map((r: any) => (
+                      <tr key={r.product_id} className="border-t border-border-subtle/40 hover:bg-bg-subtle/10">
+                        <td className="py-1 px-3 font-mono text-xs">{r.sku || '—'}</td>
+                        <td className="py-1 px-3 max-w-[260px] truncate" title={r.name}>{r.name?.slice(0, 50)}</td>
+                        <td className="py-1 px-3 text-right tabular-nums">{r.target.toLocaleString('ru-RU')}</td>
+                        <td className="py-1 px-3 text-right tabular-nums">{r.current.toLocaleString('ru-RU')}</td>
+                        <td className="py-1 px-3 text-right tabular-nums">{Math.round(r.forecast).toLocaleString('ru-RU')}</td>
+                        <td className="py-1 px-3 text-center">
+                          <span className={cn('text-xs px-1.5 py-0.5 rounded font-semibold',
+                            r.tone === 'emerald' && 'bg-emerald-100 text-emerald-800',
+                            r.tone === 'amber' && 'bg-amber-100 text-amber-800',
+                            r.tone === 'rose' && 'bg-rose-100 text-rose-800')}>
+                            {r.pct_forecast !== null ? `${r.pct_forecast}%` : '—'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
           {/* Структура «Брутто − Возвраты = Нетто» */}
           {fact.revenue_breakdown && (
             <Card className="p-4 bg-blue-50/30 border-blue-200">
@@ -916,13 +1208,14 @@ interface KpiRow {
   bonus_rule: { model?: string; pct_of_net?: number; thresholds?: any[] } | null
 }
 
-function KpiTab() {
+function KpiTab({ initialId }: { initialId: string | null }) {
   const qc = useQueryClient()
   const { data: plans = [] } = useQuery<PlanRow[]>({
     queryKey: ['plans'],
     queryFn: async () => (await api.get('/plans')).data,
   })
-  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(initialId)
+  useEffect(() => { if (initialId) setSelectedPlanId(initialId) }, [initialId])
   const { data: kpis = [] } = useQuery<KpiRow[]>({
     queryKey: ['plan-kpi', selectedPlanId],
     queryFn: async () => (await api.get(`/plans/${selectedPlanId}/kpi`)).data,
@@ -1106,12 +1399,13 @@ function KpiTab() {
 // GAME MODE — спидометр + уровни + темп
 // ===========================================
 
-function GameTab() {
+function GameTab({ initialId }: { initialId: string | null }) {
   const { data: plans = [] } = useQuery<PlanRow[]>({
     queryKey: ['plans'],
     queryFn: async () => (await api.get('/plans')).data,
   })
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialId)
+  useEffect(() => { if (initialId) setSelectedId(initialId) }, [initialId])
   const { data: fact } = useQuery<any>({
     queryKey: ['plan-fact', selectedId],
     queryFn: async () => (await api.get(`/plans/${selectedId}/fact`)).data,

@@ -128,11 +128,11 @@ export const NAV_GROUPS: NavGroup[] = [
         },
       },
       {
-        path: '/analytics/plan-vs-fact',
-        label: 'План/Факт',
+        path: '/sales-plan',
+        label: 'План продаж',
         icon: FlagTriangleRight,
         placeholder: {
-          description: 'Цели на месяц vs реальность. Прогноз дотягивания.',
+          description: 'Bottom-up план продаж + факт + KPI + игровой режим.',
           plannedFeatures: [
             'Задать план по выручке / прибыли / заказам / марже',
             'Цвет-кодированные отставания и опережения',
