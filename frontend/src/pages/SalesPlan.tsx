@@ -60,6 +60,24 @@ const METRIC_OPTIONS = [
 
 function isoDate(d: Date) { return d.toISOString().slice(0, 10) }
 
+function exportItemsCsv(items: DistributeItem[]) {
+  const header = 'offer_id;name;analysis_value;share_pct;plan_value\n'
+  const rows = items.map((i) =>
+    [
+      i.offer_id || '', (i.name || '').replace(/;/g, ','),
+      i.analysis_value.toFixed(2), i.share_pct.toFixed(2),
+      i.plan_value.toFixed(2),
+    ].join(';')
+  ).join('\n')
+  const blob = new Blob(['﻿' + header + rows], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'plan_distribution.csv'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export function SalesPlan() {
   const [tab, setTab] = useState<'wizard' | 'fact' | 'kpi'>('wizard')
 
@@ -353,8 +371,8 @@ function WizardTab() {
                       disabled={calcDistribute.isPending} className="text-xs">
                 <RotateCcw className="w-3.5 h-3.5 mr-1" /> Сбросить (пропорции)
               </Button>
-              <Button variant="secondary" className="text-xs">
-                <FileSpreadsheet className="w-3.5 h-3.5 mr-1" /> Excel
+              <Button variant="secondary" onClick={() => exportItemsCsv(items)} className="text-xs">
+                <FileSpreadsheet className="w-3.5 h-3.5 mr-1" /> Скачать CSV
               </Button>
             </div>
           </div>
@@ -503,6 +521,11 @@ function FactTab() {
     queryFn: async () => (await api.get(`/plans/${selectedId}/fact`)).data,
     enabled: !!selectedId,
   })
+  const { data: timeseries } = useQuery<{ series: any[]; plan_total: number; today: string }>({
+    queryKey: ['plan-timeseries', selectedId],
+    queryFn: async () => (await api.get(`/plans/${selectedId}/timeseries`)).data,
+    enabled: !!selectedId,
+  })
 
   if (plans.length === 0) {
     return (
@@ -557,6 +580,33 @@ function FactTab() {
             </Card>
           )}
 
+          {/* Burn-up график */}
+          {timeseries && timeseries.series.length > 0 && (
+            <Card className="p-4">
+              <h4 className="text-sm font-semibold mb-3">Burn-up: накопительный факт vs план</h4>
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={timeseries.series}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="day" tick={{ fontSize: 9 }}
+                         tickFormatter={(d: string) => d.slice(5)} />
+                  <YAxis tick={{ fontSize: 10 }}
+                         tickFormatter={(v: number) => Number(v).toLocaleString('ru-RU')} />
+                  <Tooltip formatter={(v: any) => Number(v || 0).toLocaleString('ru-RU')} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <ReferenceLine y={timeseries.plan_total} stroke="#a78bfa" strokeDasharray="3 3"
+                                 label={{ value: 'Цель', fontSize: 10, fill: '#6d28d9' }} />
+                  <Line type="monotone" dataKey="plan_cum"
+                        stroke="#6b7280" name="План (pro-rata)" dot={false} strokeWidth={2} />
+                  <Line type="monotone" dataKey="fact_cum"
+                        stroke="#10b981" name="Факт" dot={false} strokeWidth={2.5} />
+                  <Line type="monotone" dataKey="run_rate_cum"
+                        stroke="#f59e0b" strokeDasharray="4 4"
+                        name="Run-rate прогноз" dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+          )}
+
           {/* Bridge waterfall */}
           {fact.bridge && fact.bridge.length > 0 && (
             <Card className="p-4">
@@ -589,17 +639,216 @@ function FactTab() {
 // ТАБ «KPI»
 // ===========================================
 
+interface KpiRow {
+  id: string; manager_name: string
+  metric_code: string; target_value: number
+  bonus_rule: { model?: string; pct_of_net?: number; thresholds?: any[] } | null
+}
+
 function KpiTab() {
+  const qc = useQueryClient()
+  const { data: plans = [] } = useQuery<PlanRow[]>({
+    queryKey: ['plans'],
+    queryFn: async () => (await api.get('/plans')).data,
+  })
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null)
+  const { data: kpis = [] } = useQuery<KpiRow[]>({
+    queryKey: ['plan-kpi', selectedPlanId],
+    queryFn: async () => (await api.get(`/plans/${selectedPlanId}/kpi`)).data,
+    enabled: !!selectedPlanId,
+  })
+  const { data: fact } = useQuery<any>({
+    queryKey: ['plan-fact', selectedPlanId],
+    queryFn: async () => (await api.get(`/plans/${selectedPlanId}/fact`)).data,
+    enabled: !!selectedPlanId,
+  })
+
+  const [form, setForm] = useState({
+    manager: '', metric: 'revenue', target: '',
+    model: 'A' as 'A' | 'B', pctOfNet: '5',
+    threshold1: '100', bonus1: '10000', threshold2: '120', bonus2: '20000',
+  })
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const bonus_rule = form.model === 'A'
+        ? { model: 'A', pct_of_net: Number(form.pctOfNet) }
+        : { model: 'B', thresholds: [
+            { at: Number(form.threshold1), bonus: Number(form.bonus1) },
+            { at: Number(form.threshold2), bonus: Number(form.bonus2) },
+          ] }
+      return (await api.post(`/plans/${selectedPlanId}/kpi`, {
+        manager_name: form.manager, metric_code: form.metric,
+        target_value: Number(form.target), bonus_rule,
+      })).data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['plan-kpi', selectedPlanId] })
+      setForm({ ...form, manager: '', target: '' })
+    },
+  })
+
+  const remove = useMutation({
+    mutationFn: async (kid: string) =>
+      (await api.delete(`/plans/${selectedPlanId}/kpi/${kid}`)).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['plan-kpi', selectedPlanId] }),
+  })
+
+  if (plans.length === 0) {
+    return (
+      <Card className="p-8 text-center text-fg-muted">
+        Создай план на вкладке «Постановка плана», потом сюда вернёшься.
+      </Card>
+    )
+  }
+
+  const enriched = kpis.map((k) => {
+    const factVal = fact?.fact_value || 0
+    const factScaled = fact?.plan_value
+      ? factVal * (k.target_value / fact.plan_value)
+      : 0
+    const completionPct = k.target_value > 0 ? (factScaled / k.target_value) * 100 : 0
+    return { ...k, factScaled, completionPct }
+  }).sort((a, b) => b.completionPct - a.completionPct)
+
   return (
-    <Card className="p-6 text-center">
-      <Award className="w-12 h-12 mx-auto text-purple-400 mb-2" />
-      <h3 className="text-sm font-semibold text-fg">KPI менеджмента</h3>
-      <p className="text-xs text-fg-muted mt-1 max-w-md mx-auto">
-        Назначение плана сотруднику + карточка план/факт/прогноз/% + светофор + мотивация
-        (A: % от чистой прибыли / B: бонус за пороги). Создаются через API /plans/&#123;id&#125;/kpi.
-        UI в ближайшем релизе.
-      </p>
-    </Card>
+    <div className="space-y-4">
+      <Card className="p-3">
+        <label className="text-xs text-fg-muted block mb-1">План</label>
+        <select value={selectedPlanId || ''}
+                onChange={(e) => setSelectedPlanId(e.target.value || null)}
+                className="w-full md:w-96 px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg">
+          <option value="">— выбери план —</option>
+          {plans.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.metric_code} {p.period_start}…{p.period_end})
+            </option>
+          ))}
+        </select>
+      </Card>
+
+      {selectedPlanId && (
+        <>
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold mb-3">Назначить KPI сотруднику</h3>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+              <input value={form.manager}
+                     onChange={(e) => setForm({ ...form, manager: e.target.value })}
+                     placeholder="ФИО сотрудника"
+                     className="px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+              <select value={form.metric}
+                      onChange={(e) => setForm({ ...form, metric: e.target.value })}
+                      className="px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg">
+                {METRIC_OPTIONS.map((m) => <option key={m.code} value={m.code}>{m.label}</option>)}
+              </select>
+              <input type="number" value={form.target}
+                     onChange={(e) => setForm({ ...form, target: e.target.value })}
+                     placeholder="Цель (значение)"
+                     className="px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+              <select value={form.model}
+                      onChange={(e) => setForm({ ...form, model: e.target.value as any })}
+                      className="px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg">
+                <option value="A">A: % от чистой прибыли</option>
+                <option value="B">B: бонус за пороги</option>
+              </select>
+            </div>
+
+            {form.model === 'A' ? (
+              <div className="mt-3 max-w-xs">
+                <label className="text-xs text-fg-muted">% от чистой прибыли</label>
+                <input type="number" step="0.1" value={form.pctOfNet}
+                       onChange={(e) => setForm({ ...form, pctOfNet: e.target.value })}
+                       className="w-full px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+                <div className="text-[10px] text-fg-muted mt-1">
+                  Бонус = чистая_прибыль × {form.pctOfNet}% при достижении плана.
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 grid grid-cols-2 gap-2 max-w-md">
+                <div>
+                  <label className="text-xs text-fg-muted">Порог 1, %</label>
+                  <input type="number" value={form.threshold1}
+                         onChange={(e) => setForm({ ...form, threshold1: e.target.value })}
+                         className="w-full px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+                </div>
+                <div>
+                  <label className="text-xs text-fg-muted">Бонус 1, ₽</label>
+                  <input type="number" value={form.bonus1}
+                         onChange={(e) => setForm({ ...form, bonus1: e.target.value })}
+                         className="w-full px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+                </div>
+                <div>
+                  <label className="text-xs text-fg-muted">Порог 2, %</label>
+                  <input type="number" value={form.threshold2}
+                         onChange={(e) => setForm({ ...form, threshold2: e.target.value })}
+                         className="w-full px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+                </div>
+                <div>
+                  <label className="text-xs text-fg-muted">Бонус 2, ₽</label>
+                  <input type="number" value={form.bonus2}
+                         onChange={(e) => setForm({ ...form, bonus2: e.target.value })}
+                         className="w-full px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+                </div>
+              </div>
+            )}
+
+            <Button onClick={() => create.mutate()}
+                    disabled={!form.manager || !form.target || create.isPending}
+                    className="mt-3">
+              {create.isPending ? 'Создаю…' : '+ Назначить KPI'}
+            </Button>
+          </Card>
+
+          {enriched.length > 0 && (
+            <Card>
+              <div className="p-3 border-b border-border-subtle">
+                <h3 className="text-sm font-semibold">Рейтинг по % выполнения</h3>
+              </div>
+              <div className="divide-y divide-border-subtle/40">
+                {enriched.map((k, idx) => {
+                  const tone = k.completionPct >= 100 ? 'emerald'
+                              : k.completionPct >= 80 ? 'amber' : 'rose'
+                  return (
+                    <div key={k.id} className="p-3 flex items-center gap-3">
+                      <div className={cn(
+                        'w-8 h-8 rounded-full inline-flex items-center justify-center font-bold text-sm',
+                        idx === 0 ? 'bg-yellow-100 text-yellow-700' :
+                        idx === 1 ? 'bg-slate-100 text-slate-700' :
+                        idx === 2 ? 'bg-orange-100 text-orange-700' :
+                                    'bg-bg-subtle text-fg-muted')}>{idx + 1}</div>
+                      <div className="flex-1">
+                        <div className="font-medium text-fg">{k.manager_name}</div>
+                        <div className="text-xs text-fg-muted">
+                          Цель {k.target_value.toLocaleString('ru-RU')} {k.metric_code}
+                          {k.bonus_rule?.model === 'A' && ` · бонус ${k.bonus_rule.pct_of_net}% от чистой`}
+                          {k.bonus_rule?.model === 'B' && ` · ${k.bonus_rule.thresholds?.length || 0} порогов`}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className={cn('text-lg font-semibold tabular-nums',
+                          tone === 'emerald' && 'text-emerald-700',
+                          tone === 'amber' && 'text-amber-700',
+                          tone === 'rose' && 'text-rose-700')}>
+                          {k.completionPct.toFixed(0)}%
+                        </div>
+                        <div className="text-[10px] text-fg-muted">
+                          {Math.round(k.factScaled).toLocaleString('ru-RU')} / {k.target_value.toLocaleString('ru-RU')}
+                        </div>
+                      </div>
+                      <button onClick={() => {
+                        if (confirm(`Удалить KPI «${k.manager_name}»?`)) remove.mutate(k.id)
+                      }} className="p-1.5 hover:bg-rose-100 rounded">
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
   )
 }
 

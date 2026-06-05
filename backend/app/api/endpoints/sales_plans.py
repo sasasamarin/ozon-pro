@@ -24,7 +24,11 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+import io
+
+import openpyxl
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -600,6 +604,270 @@ async def get_fact(
 # ============================================
 # KPI
 # ============================================
+
+@router.get("/{plan_id}/items.xlsx")
+async def export_items_xlsx(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Excel-экспорт распределения по SKU. Можно править в Excel и заливать обратно."""
+    try:
+        pid = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    plan = await _get_plan_owned(db, pid, current_user.company_id)
+    items = (await db.execute(
+        select(SalesPlanItem).where(SalesPlanItem.plan_id == pid)
+        .order_by(SalesPlanItem.plan_value.desc())
+    )).scalars().all()
+
+    # Карта product_id → product_name
+    from app.models import Product
+    pids = [i.product_id for i in items if i.product_id]
+    name_map: dict = {}
+    if pids:
+        rows = (await db.execute(
+            select(Product.id, Product.name).where(Product.id.in_(pids))
+        )).all()
+        name_map = {r.id: r.name for r in rows}
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "План"
+    ws.append([
+        "item_id", "product_id", "offer_id", "Товар",
+        "Период анализа", "Доля %", "План значение", "Lock",
+    ])
+    for col, w in zip("ABCDEFGH", [38, 38, 18, 50, 16, 10, 16, 6]):
+        ws.column_dimensions[col].width = w
+    for it in items:
+        ws.append([
+            str(it.id), str(it.product_id) if it.product_id else "",
+            it.sku or "", name_map.get(it.product_id, "")[:80],
+            float(it.analysis_value), float(it.share_pct),
+            float(it.plan_value), "lock" if it.is_locked else "",
+        ])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="plan_{plan.name[:30]}.xlsx"',
+        },
+    )
+
+
+@router.post("/{plan_id}/items/import")
+async def import_items_xlsx(
+    plan_id: str,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Загрузка Excel: обновляет plan_value/is_locked по item_id.
+
+    Только колонки G (План значение) и H (Lock) применяются. item_id строго
+    проверяется на принадлежность плану. Возвращает {updated, skipped, errors}.
+    """
+    try:
+        pid = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    plan = await _get_plan_owned(db, pid, current_user.company_id)
+
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(400, "Ожидается XLSX")
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Файл больше 5 МБ")
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"Не удалось открыть XLSX: {e}")
+    ws = wb.active
+
+    updated = 0
+    skipped = 0
+    errors: list[str] = []
+
+    # Загружаем все items плана сразу
+    items = (await db.execute(
+        select(SalesPlanItem).where(SalesPlanItem.plan_id == pid)
+    )).scalars().all()
+    by_id = {str(it.id): it for it in items}
+
+    for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if not row or not row[0]:
+            continue
+        item_id = str(row[0]).strip()
+        if item_id not in by_id:
+            errors.append(f"row {row_idx}: item_id {item_id[:8]}… не найден")
+            skipped += 1
+            continue
+        it = by_id[item_id]
+        try:
+            if row[6] is not None:
+                it.plan_value = Decimal(str(row[6]))
+            if row[7] is not None:
+                it.is_locked = str(row[7]).lower() in ("lock", "true", "1", "да")
+            updated += 1
+        except Exception as e:
+            errors.append(f"row {row_idx}: {e}")
+            skipped += 1
+
+    await db.commit()
+    return {"updated": updated, "skipped": skipped, "errors": errors[:20]}
+
+
+@router.get("/{plan_id}/timeseries")
+async def fact_timeseries(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Burn-up: дневной факт + дневной план (pro-rata) для графика.
+
+    Возвращает 3 ряда:
+      [{day, fact_cum, plan_cum, run_rate_cum}, ...]
+    """
+    from datetime import timedelta
+    try:
+        pid = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    plan = await _get_plan_owned(db, pid, current_user.company_id)
+
+    today = date.today()
+    days_total = (plan.period_end - plan.period_start).days + 1
+    plan_total = float(plan.target_value)
+    daily_plan = plan_total / days_total
+
+    cabinet = (uuid.UUID(plan.scope_ref)
+               if plan.scope_type == "cabinet" and plan.scope_ref else None)
+    extra = "AND oa.id = :cab" if cabinet else ""
+    params = {"cid": str(current_user.company_id),
+              "df": plan.period_start, "dt": plan.period_end}
+    if cabinet:
+        params["cab"] = str(cabinet)
+
+    if plan.metric_code == "revenue":
+        sql = f"""
+            SELECT t.operation_date::date AS d,
+                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS v
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND t.operation_type='OperationAgentDeliveredToCustomer'
+              {extra}
+            GROUP BY 1 ORDER BY 1
+        """
+    elif plan.metric_code == "orders":
+        sql = f"""
+            SELECT o.created_at::date AS d, COUNT(*)::float AS v
+            FROM orders o
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.status='delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
+              {extra}
+            GROUP BY 1 ORDER BY 1
+        """
+    else:
+        sql = f"""
+            SELECT t.operation_date::date AS d,
+                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS v
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              {extra}
+            GROUP BY 1 ORDER BY 1
+        """
+    from sqlalchemy import text as _sql
+    fact_rows = (await db.execute(_sql(sql), params)).all()
+    fact_by_day = {r.d: float(r.v or 0) for r in fact_rows}
+
+    series = []
+    fact_cum = 0.0
+    plan_cum = 0.0
+    fact_so_far = 0.0
+    days_elapsed = 0
+    for i in range(days_total):
+        d = plan.period_start + timedelta(days=i)
+        plan_cum += daily_plan
+        if d <= today:
+            fact_cum += fact_by_day.get(d, 0)
+            fact_so_far = fact_cum
+            days_elapsed = i + 1
+        series.append({
+            "day": d.isoformat(),
+            "fact_cum": round(fact_cum, 2) if d <= today else None,
+            "plan_cum": round(plan_cum, 2),
+        })
+
+    # Run-rate проекция: продолжаем средним темпом
+    if days_elapsed > 0 and days_elapsed < days_total:
+        avg_daily = fact_so_far / days_elapsed
+        for i in range(days_elapsed, days_total):
+            series[i]["run_rate_cum"] = round(
+                fact_so_far + avg_daily * (i - days_elapsed + 1), 2
+            )
+
+    return {"series": series, "plan_total": plan_total, "today": today.isoformat()}
+
+
+@router.patch("/{plan_id}/kpi/{kpi_id}")
+async def update_kpi(
+    plan_id: str,
+    kpi_id: str,
+    payload: KPICreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        pid = uuid.UUID(plan_id)
+        kid = uuid.UUID(kpi_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    await _get_plan_owned(db, pid, current_user.company_id)
+    kpi = (await db.execute(
+        select(PlanKPI).where(PlanKPI.id == kid, PlanKPI.plan_id == pid)
+    )).scalar_one_or_none()
+    if not kpi:
+        raise HTTPException(404, "KPI не найден")
+    kpi.manager_name = payload.manager_name
+    kpi.metric_code = payload.metric_code
+    kpi.target_value = Decimal(str(payload.target_value))
+    kpi.bonus_rule = payload.bonus_rule
+    await db.commit()
+    return {"id": str(kpi.id), "ok": True}
+
+
+@router.delete("/{plan_id}/kpi/{kpi_id}")
+async def delete_kpi(
+    plan_id: str,
+    kpi_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        pid = uuid.UUID(plan_id)
+        kid = uuid.UUID(kpi_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    await _get_plan_owned(db, pid, current_user.company_id)
+    kpi = (await db.execute(
+        select(PlanKPI).where(PlanKPI.id == kid, PlanKPI.plan_id == pid)
+    )).scalar_one_or_none()
+    if not kpi:
+        raise HTTPException(404, "KPI не найден")
+    await db.delete(kpi)
+    await db.commit()
+    return {"ok": True}
+
 
 @router.post("/{plan_id}/kpi")
 async def create_kpi(
