@@ -79,20 +79,28 @@ async def get_summary(
         )
         sku_count = int(sku_row.scalar() or 0)
 
-        # Revenue + orders
-        rev_row = (await db.execute(
-            select(
-                func.coalesce(func.sum(Order.total_amount), 0).label("revenue"),
-                func.count(Order.id).label("orders"),
-            ).where(
+        # Выручка продавца (Ozon начислил, accruals_for_sale из транзакций)
+        rev_tx_row = (await db.execute(
+            select(func.coalesce(func.sum(Transaction.accruals_for_sale), 0))
+            .where(
+                Transaction.ozon_account_id == acc.id,
+                Transaction.operation_date >= period_from,
+                Transaction.operation_date < period_to,
+                Transaction.operation_type == "OperationAgentDeliveredToCustomer",
+            )
+        )).scalar()
+        revenue = float(rev_tx_row or 0)
+
+        # Количество доставленных заказов
+        orders_row = (await db.execute(
+            select(func.count(Order.id)).where(
                 Order.ozon_account_id == acc.id,
                 Order.order_created_at >= period_from,
                 Order.order_created_at < period_to,
                 Order.status == "delivered",
             )
-        )).one()
-        revenue = float(rev_row.revenue or 0)
-        orders = int(rev_row.orders or 0)
+        )).scalar()
+        orders = int(orders_row or 0)
 
         # COGS
         cogs_row = await db.execute(
