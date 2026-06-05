@@ -78,7 +78,7 @@ async def _get_base_metrics(
         FROM orders o
         JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
         WHERE oa.company_id = :cid
-          AND o.created_at >= :df AND o.created_at <= :dt
+          AND o.order_created_at >= :df AND o.order_created_at <= :dt
           AND o.status = 'delivered'
           {extra}
     """), params)).first()

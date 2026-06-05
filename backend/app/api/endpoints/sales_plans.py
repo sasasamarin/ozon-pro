@@ -325,22 +325,22 @@ async def data_availability(
         """
     elif payload.metric == "orders":
         sql = f"""
-            SELECT o.created_at::date AS day, COUNT(*)::float AS v
+            SELECT o.order_created_at::date AS day, COUNT(*)::float AS v
             FROM orders o
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid AND o.status='delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
             GROUP BY 1 ORDER BY 1
         """
     elif payload.metric == "units":
         sql = f"""
-            SELECT o.created_at::date AS day, SUM(oi.quantity)::float AS v
+            SELECT o.order_created_at::date AS day, SUM(oi.quantity)::float AS v
             FROM order_items oi
             JOIN orders o ON o.id = oi.order_id
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid AND o.status='delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
             GROUP BY 1 ORDER BY 1
         """
@@ -474,7 +474,7 @@ async def bottomup_distribute(
         ), {"cid": str(current_user.company_id)})).scalar()
         chk_orders = (await db.execute(_sql("""
             SELECT COUNT(*) FROM orders o JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
-            WHERE oa.company_id = :cid AND o.created_at >= :df AND o.created_at <= :dt
+            WHERE oa.company_id = :cid AND o.order_created_at >= :df AND o.order_created_at <= :dt
         """), {"cid": str(current_user.company_id),
                "df": payload.analysis_start, "dt": payload.analysis_end})).scalar()
         chk_tx = (await db.execute(_sql("""
@@ -1371,7 +1371,7 @@ async def fact_overview(
             JOIN orders o ON o.id = oi.order_id
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid AND o.status='delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
             GROUP BY oi.product_id
         """
@@ -1383,7 +1383,7 @@ async def fact_overview(
             JOIN orders o ON o.id = oi.order_id
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid AND o.status='delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
             GROUP BY oi.product_id
         """
@@ -1395,7 +1395,7 @@ async def fact_overview(
             JOIN orders o ON o.id = oi.order_id
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid AND o.status='delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
             GROUP BY oi.product_id
         """
@@ -1522,7 +1522,7 @@ async def fact_dashboard(
             JOIN order_items oi ON oi.order_id = o.id
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid AND o.status='delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
         """
         sales = (await db.execute(_sql(sales_q), params)).first()
@@ -1682,7 +1682,7 @@ async def green_streak(
             FROM orders o
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid AND o.status='delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt {extra}
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt {extra}
             GROUP BY 1 ORDER BY 1 DESC
         """
     else:
@@ -1767,7 +1767,7 @@ async def fact_timeseries(
             FROM orders o
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid AND o.status='delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
             GROUP BY 1 ORDER BY 1
         """

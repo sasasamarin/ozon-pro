@@ -91,7 +91,7 @@ async def compute_fact(
             FROM orders o
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               AND o.status = 'delivered'
               {extra}
         """
@@ -102,7 +102,7 @@ async def compute_fact(
             JOIN order_items oi ON oi.order_id = o.id
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             WHERE oa.company_id = :cid
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               AND o.status = 'delivered'
               {extra}
         """

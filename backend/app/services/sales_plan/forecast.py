@@ -52,22 +52,22 @@ _METRIC_SQL = {
         GROUP BY 1 ORDER BY 1
     """,
     "orders": """
-        SELECT o.created_at::date AS day, COUNT(*)::float AS v
+        SELECT o.order_created_at::date AS day, COUNT(*)::float AS v
         FROM orders o
         JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
         WHERE oa.company_id = :cid
-          AND o.created_at >= :df AND o.created_at <= :dt
+          AND o.order_created_at >= :df AND o.order_created_at <= :dt
           AND o.status = 'delivered'
           {extra}
         GROUP BY 1 ORDER BY 1
     """,
     "units": """
-        SELECT o.created_at::date AS day, SUM(oi.quantity)::float AS v
+        SELECT o.order_created_at::date AS day, SUM(oi.quantity)::float AS v
         FROM orders o
         JOIN order_items oi ON oi.order_id = o.id
         JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
         WHERE oa.company_id = :cid
-          AND o.created_at >= :df AND o.created_at <= :dt
+          AND o.order_created_at >= :df AND o.order_created_at <= :dt
           AND o.status = 'delivered'
           {extra}
         GROUP BY 1 ORDER BY 1
@@ -308,11 +308,11 @@ async def _detect_outlier_days(
         return 0, 0
     agg = "COUNT(DISTINCT o.id)::float" if metric == "orders" else "SUM(oi.quantity)::float"
     rows = (await db.execute(_sql(f"""
-        SELECT o.created_at::date AS day, {agg} AS v
+        SELECT o.order_created_at::date AS day, {agg} AS v
         FROM order_items oi
         JOIN orders o ON o.id = oi.order_id
         WHERE oi.product_id = :pid AND o.status='delivered'
-          AND o.created_at >= :df AND o.created_at <= :dt
+          AND o.order_created_at >= :df AND o.order_created_at <= :dt
         GROUP BY 1
     """), {"pid": product_id, "df": df, "dt": dt})).all()
     if len(rows) < 2:
@@ -370,7 +370,7 @@ async def distribute_by_sku_bottomup(
             JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
               AND o.status = 'delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra_oa} {extra_p}
             GROUP BY p.id, p.offer_id, p.name, oa.id, oa.name
             HAVING SUM(oi.price * oi.quantity) > 0
@@ -388,7 +388,7 @@ async def distribute_by_sku_bottomup(
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               AND o.status = 'delivered'
               {extra_oa} {extra_p}
             GROUP BY p.id, p.offer_id, p.name, oa.id, oa.name
@@ -408,7 +408,7 @@ async def distribute_by_sku_bottomup(
             JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
               AND o.status = 'delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra_oa} {extra_p}
             GROUP BY p.id, p.offer_id, p.name, oa.id, oa.name
             HAVING SUM(oi.price * oi.quantity) > 0
@@ -509,7 +509,7 @@ async def distribute_by_sku(
             JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
               AND o.status = 'delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
             GROUP BY p.id, p.offer_id, p.name
             HAVING SUM(oi.price * oi.quantity) > 0
@@ -526,7 +526,7 @@ async def distribute_by_sku(
             JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
             JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               AND o.status = 'delivered'
               {extra}
             GROUP BY p.id, p.offer_id, p.name
@@ -545,7 +545,7 @@ async def distribute_by_sku(
             JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
               AND o.status = 'delivered'
-              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.order_created_at >= :df AND o.order_created_at <= :dt
               {extra}
             GROUP BY p.id, p.offer_id, p.name
             HAVING SUM(oi.price * oi.quantity) > 0
