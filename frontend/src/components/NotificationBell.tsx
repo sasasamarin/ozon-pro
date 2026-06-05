@@ -62,7 +62,7 @@ export function NotificationBell() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="relative h-9 w-9 inline-flex items-center justify-center rounded-md hover:bg-bg-subtle transition-colors"
+        className="relative h-11 w-11 sm:h-9 sm:w-9 inline-flex items-center justify-center rounded-md hover:bg-bg-subtle transition-colors"
         title="Алерты"
       >
         <Bell className={cn('w-4.5 h-4.5',

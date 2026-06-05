@@ -105,10 +105,10 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
           <button
             type="button"
             onClick={onOpenSidebar}
-            className="lg:hidden p-1.5 -ml-1.5 rounded-md text-fg-muted hover:bg-bg-subtle"
+            className="lg:hidden inline-flex items-center justify-center w-11 h-11 -ml-2 rounded-md text-fg-muted hover:bg-bg-subtle"
             aria-label="Открыть меню"
           >
-            <Menu className="w-5 h-5" />
+            <Menu className="w-6 h-6" />
           </button>
 
           {/* Mobile-only logo */}
@@ -236,10 +236,14 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
           </div>
         </div>
 
-        {/* Глобальные фильтры — товар / категория / тег */}
-        <ProductPickerGlobal />
-        <CategoryPickerGlobal />
-        <TagPickerGlobal />
+        {/* Глобальные фильтры — товар / категория / тег.
+            На мобиле прячем — занимают слишком много места.
+            Юзер может фильтровать на самих страницах. */}
+        <div className="hidden md:flex items-center gap-2">
+          <ProductPickerGlobal />
+          <CategoryPickerGlobal />
+          <TagPickerGlobal />
+        </div>
 
         {/* Бейджи статуса данных */}
         <div className="hidden lg:flex items-center gap-2">

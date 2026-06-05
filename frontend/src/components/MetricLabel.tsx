@@ -37,7 +37,8 @@ export function MetricLabel({ metricKey, override, className, iconClassName, hid
       <span>{override || info.label}</span>
       {!hideIcon && (
         <span
-          className="relative inline-block cursor-help"
+          className="relative inline-flex items-center justify-center cursor-help
+                     w-6 h-6 -m-1.5 sm:w-4 sm:h-4 sm:m-0"
           onMouseEnter={() => setOpen(true)}
           onMouseLeave={() => setOpen(false)}
           onClick={(e) => { e.stopPropagation(); setOpen((o) => !o) }}
