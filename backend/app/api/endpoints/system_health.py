@@ -42,7 +42,7 @@ class HealthResp(BaseModel):
 SOURCES = [
     ("products", "Товары",            ["sync_products"]),
     ("orders", "Заказы",              ["sync_orders_fbo", "sync_orders_fbs", "sync_orders"]),
-    ("transactions", "Транзакции",    ["sync_finance", "sync_transactions"]),
+    ("transactions", "Транзакции",    ["sync_finance", "sync_transactions", "sync_transactions_chunk"]),
     ("analytics", "Аналитика воронки",["sync_analytics_daily", "sync_analytics"]),
     ("ads", "Реклама",                ["sync_ad_statistics", "sync_ads", "sync_ad_campaigns"]),
     ("stocks", "Остатки",             ["sync_stocks"]),
