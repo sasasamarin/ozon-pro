@@ -648,7 +648,10 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
           </div>
 
           {forecast && (
-            <Card className="p-3 bg-indigo-50/40">
+            <Card className={cn('p-3',
+              forecast.reliability === 'low' || forecast.base_forecast === 0
+                ? 'bg-amber-50/40 border-amber-300'
+                : 'bg-indigo-50/40')}>
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div>
                   <div className="text-xs text-fg-muted">База прогноза</div>
@@ -672,6 +675,13 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                   </div>
                 </div>
               </div>
+              {forecast.base_forecast === 0 && (
+                <div className="mt-2 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded p-2">
+                  ⚠️ База прогноза = 0. Возможно: тренд за период ушёл в 0,
+                  мало данных или метрика без факта. Раздвинь период анализа на 60-90 дней
+                  или возьми другую метрику.
+                </div>
+              )}
               <div className="text-[10px] text-fg-muted mt-1">{forecast.note}</div>
             </Card>
           )}

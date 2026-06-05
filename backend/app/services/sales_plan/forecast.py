@@ -192,6 +192,9 @@ def compute_forecast(
     forecast_days = (forecast_end - forecast_start).days + 1
     history_end_idx = len(history)
 
+    # Среднее по истории — для fallback и sanity check
+    hist_avg = sum(v for _, v in history) / max(1, len(history))
+
     forecast: list[tuple[date, float]] = []
     for i in range(forecast_days):
         d = forecast_start + timedelta(days=i)
@@ -202,6 +205,18 @@ def compute_forecast(
         forecast.append((d, val))
 
     base = sum(v for _, v in forecast)
+
+    # Fallback: тренд ушёл в 0 (отрицательный slope при коротком ряду),
+    # но история ненулевая → используем среднее × сезонные веса.
+    used_fallback = False
+    if base <= 0 and hist_avg > 0:
+        used_fallback = True
+        forecast = []
+        for i in range(forecast_days):
+            d = forecast_start + timedelta(days=i)
+            seasonal = dow_weights.get(d.weekday(), 1.0)
+            forecast.append((d, max(0.0, hist_avg * seasonal)))
+        base = sum(v for _, v in forecast)
 
     # Модифицированный — масштаб под target
     modified: list[tuple[date, float]] | None = None
@@ -231,10 +246,19 @@ def compute_forecast(
         reliability = "low"
 
     note_parts = []
-    if history_days < 90:
+    if history_days < 30:
+        note_parts.append(
+            f"⚠ Истории всего {history_days}д с продажами — мало для точного прогноза. "
+            f"Раздвинь период анализа на 60-90 дней или возьми другую метрику."
+        )
+    elif history_days < 90:
         note_parts.append(f"История {history_days}д (рекомендуется ≥90)")
     if r2 < 0.3:
         note_parts.append(f"R²={r2:.2f} — низкая статистическая значимость")
+    if used_fallback:
+        note_parts.append(
+            "Тренд из истории ушёл в 0 → использовано среднее × сезонность"
+        )
     note_parts.append("Прогноз = тренд × сезонность по дню недели.")
     note = " · ".join(note_parts)
 
@@ -351,6 +375,8 @@ async def distribute_by_sku_bottomup(
     if forecast_days <= 0:
         raise ValueError(f"forecast_end ({forecast_end}) меньше forecast_start ({forecast_start})")
     scale = forecast_days / analysis_days
+    # На случай если периоды равны (scale=1) — план = факт. Если прогноз короче
+    # анализа — план меньше факта пропорционально. Это правильно.
 
     items: list[dict] = []
     total_forecast = 0.0
