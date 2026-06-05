@@ -114,11 +114,12 @@ export function SalesPlan() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-fg flex items-center gap-2">
-            <Target className="w-6 h-6 text-purple-500" />
+            <Target className="w-6 h-6 text-indigo-500" />
             План продаж
           </h1>
           <p className="text-sm text-fg-muted mt-1">
-            Bottom-up: прогноз per-SKU → правка → сумма ↑. Факт = брутто − возвраты.
+            Сначала задаём план на каждый товар (стартуем от прогноза), правим вручную —
+            общая сумма складывается снизу вверх. Факт показывается как «оплачено − возвраты».
           </p>
         </div>
         <AskAIButton
@@ -139,7 +140,7 @@ export function SalesPlan() {
           <button key={key} onClick={() => setTab(key)}
             className={cn(
               'px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px inline-flex items-center gap-2',
-              tab === key ? 'border-purple-500 text-purple-700'
+              tab === key ? 'border-indigo-500 text-indigo-700'
                           : 'border-transparent text-fg-muted hover:text-fg',
             )}>
             <Icon className="w-4 h-4" />
@@ -230,7 +231,7 @@ function PlansListTab({ onOpen }: {
             <button key={k} onClick={() => setFilter(k)}
               className={cn('px-3 py-1.5 rounded-md text-xs font-medium border transition-colors',
                 filter === k
-                  ? 'bg-purple-600 text-white border-purple-600'
+                  ? 'bg-indigo-600 text-white border-indigo-600'
                   : 'bg-bg border-border-subtle text-fg-muted hover:bg-bg-subtle')}>
               {k === 'all' && `Все · ${counts.all}`}
               {k === 'active' && `Активные · ${counts.active}`}
@@ -239,15 +240,23 @@ function PlansListTab({ onOpen }: {
             </button>
           ))}
         </div>
-        <Button variant="secondary" onClick={() => rollover.mutate()}
-                disabled={rollover.isPending} className="text-xs">
-          {rollover.isPending ? '…' : '🔄 Rollover'}
+        <Button variant="secondary" onClick={() => {
+                  if (confirm(
+                    'Закрыть все планы с прошедшей датой и автоматически создать новые '
+                    + 'из шаблонов (если они были привязаны)?\n\n'
+                    + 'Безопасно: можно нажимать сколько угодно раз — повторно ничего не сделает.',
+                  )) rollover.mutate()
+                }}
+                disabled={rollover.isPending}
+                title="Закрыть планы с прошедшей датой в архив + создать новые из шаблонов"
+                className="text-xs">
+          {rollover.isPending ? '…' : '🔄 Закрыть закончившиеся'}
         </Button>
       </div>
 
       {/* Bulk action bar */}
       {selectedIds.size > 0 && (
-        <Card className="p-3 bg-purple-50/40 border-purple-300 flex items-center justify-between flex-wrap gap-2">
+        <Card className="p-3 bg-indigo-50/40 border-indigo-300 flex items-center justify-between flex-wrap gap-2">
           <div className="text-sm">
             Выбрано: <b>{selectedIds.size}</b>
             <button onClick={() => setSelectedIds(new Set())}
@@ -303,7 +312,7 @@ function PlansListTab({ onOpen }: {
             {filtered.map((p) => (
               <tr key={p.id} className={cn(
                 'border-t border-border-subtle/40 hover:bg-bg-subtle/20',
-                selectedIds.has(p.id) && 'bg-purple-50/40')}>
+                selectedIds.has(p.id) && 'bg-indigo-50/40')}>
                 <td className="py-2 px-2 text-center">
                   <input type="checkbox" checked={selectedIds.has(p.id)}
                     onChange={(e) => {
@@ -314,12 +323,12 @@ function PlansListTab({ onOpen }: {
                 </td>
                 <td className="py-2 px-3">
                   <button onClick={() => onOpen(p.id, 'fact')}
-                          className="text-fg hover:text-purple-700 font-medium">
+                          className="text-fg hover:text-indigo-700 font-medium">
                     {p.name}
                   </button>
                   <div className="text-[10px] text-fg-muted">
                     {p.is_template && (
-                      <span className="text-purple-700 mr-1">
+                      <span className="text-indigo-700 mr-1">
                         📋 шаблон
                         {p.template_cabinet_ids && p.template_cabinet_ids.length > 0 && (
                           <span className="ml-1">· {p.template_cabinet_ids.join(', ')}</span>
@@ -554,7 +563,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
         {[1, 2, 3].map((s) => (
           <div key={s} className="flex items-center gap-2">
             <div className={cn('w-7 h-7 rounded-full inline-flex items-center justify-center font-semibold',
-              s === step ? 'bg-purple-600 text-white' :
+              s === step ? 'bg-indigo-600 text-white' :
               s < step ? 'bg-emerald-500 text-white' : 'bg-bg-subtle text-fg-muted')}>{s}</div>
             <span className={cn('font-medium', s === step ? 'text-fg' : 'text-fg-muted')}>
               {s === 1 && 'Выбор и прогноз'}
@@ -578,7 +587,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
               <button onClick={() => setSelectedCabinets([])}
                       className={cn('px-3 py-1 rounded-md text-xs border',
                         selectedCabinets.length === 0
-                          ? 'bg-purple-600 text-white border-purple-600'
+                          ? 'bg-indigo-600 text-white border-indigo-600'
                           : 'bg-bg border-border-subtle text-fg-muted')}>
                 Все кабинеты
               </button>
@@ -590,7 +599,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                   setSelectedCabinets(next)
                 }} className={cn('px-3 py-1 rounded-md text-xs border',
                   selectedCabinets.includes(c.id)
-                    ? 'bg-purple-100 border-purple-400 text-purple-800'
+                    ? 'bg-indigo-100 border-indigo-400 text-indigo-800'
                     : 'bg-bg border-border-subtle text-fg-muted hover:bg-bg-subtle')}>
                   {c.name}
                 </button>
@@ -639,7 +648,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
           </div>
 
           {forecast && (
-            <Card className="p-3 bg-purple-50/40">
+            <Card className="p-3 bg-indigo-50/40">
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div>
                   <div className="text-xs text-fg-muted">База прогноза</div>
@@ -779,17 +788,17 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                 {items.reduce((s, i) => s + i.analysis_value, 0).toLocaleString('ru-RU')}
               </div>
             </Card>
-            <Card className="p-3 bg-purple-50/40">
+            <Card className="p-3 bg-indigo-50/40">
               <div className="text-xs text-fg-muted">Прогноз ∑</div>
               <div className="text-lg font-semibold tabular-nums">
                 {items.reduce((s, i) => s + i.forecast_value, 0).toLocaleString('ru-RU')}
               </div>
             </Card>
-            <Card className="p-3 border-2 border-purple-300">
+            <Card className="p-3 border-2 border-indigo-300">
               <div className="text-xs text-fg-muted">План ∑ (правка распределит по unlocked)</div>
               <input type="number" value={Math.round(totalPlan)}
                      onChange={(e) => applyOverall(Number(e.target.value))}
-                     className="w-full px-2 py-1 mt-1 border border-purple-300 rounded text-lg font-semibold tabular-nums bg-bg" />
+                     className="w-full px-2 py-1 mt-1 border border-indigo-300 rounded text-lg font-semibold tabular-nums bg-bg" />
             </Card>
           </div>
 
@@ -877,7 +886,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                       <td className="py-1 px-3 text-right tabular-nums text-xs">
                         {it.analysis_value.toLocaleString('ru-RU')}
                       </td>
-                      <td className="py-1 px-3 text-right tabular-nums text-xs text-purple-700">
+                      <td className="py-1 px-3 text-right tabular-nums text-xs text-indigo-700">
                         {it.forecast_value.toLocaleString('ru-RU')}
                       </td>
                       <td className="py-1 px-3 text-right">
@@ -898,15 +907,15 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                 )}
               </tbody>
               <tfoot>
-                <tr className="border-t-2 border-purple-300 font-semibold sticky bottom-0 bg-bg">
+                <tr className="border-t-2 border-indigo-300 font-semibold sticky bottom-0 bg-bg">
                   <td colSpan={4} className="py-2 px-3">ИТОГО ∑:</td>
                   <td className="py-2 px-3 text-right tabular-nums">
                     {items.reduce((s, i) => s + i.analysis_value, 0).toLocaleString('ru-RU')}
                   </td>
-                  <td className="py-2 px-3 text-right tabular-nums text-purple-700">
+                  <td className="py-2 px-3 text-right tabular-nums text-indigo-700">
                     {items.reduce((s, i) => s + i.forecast_value, 0).toLocaleString('ru-RU')}
                   </td>
-                  <td className="py-2 px-3 text-right tabular-nums text-purple-700 text-base">
+                  <td className="py-2 px-3 text-right tabular-nums text-indigo-700 text-base">
                     {Math.round(totalPlan).toLocaleString('ru-RU')}
                   </td>
                 </tr>
@@ -1089,7 +1098,7 @@ function FactTab({ initialId }: { initialId: string | null }) {
           {/* === 3 КОЛОНКИ: Цель | Сейчас | Прогноз === */}
           {overview && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <Card className="p-5 bg-purple-50/40 border-purple-200">
+              <Card className="p-5 bg-indigo-50/40 border-indigo-200">
                 <div className="text-xs text-fg-muted uppercase tracking-wide">🎯 Цель</div>
                 <div className="text-3xl font-bold tabular-nums mt-1">
                   {overview.summary.target.toLocaleString('ru-RU')}
@@ -1264,8 +1273,8 @@ function FactTab({ initialId }: { initialId: string | null }) {
                   <tbody>
                     {Object.entries(dashboard.groups).map(([groupName, rows]: any) => (
                       <>
-                        <tr key={groupName} className="bg-purple-50/40">
-                          <td colSpan={10} className="py-1.5 px-3 text-[10px] font-semibold uppercase text-purple-800 tracking-wider">
+                        <tr key={groupName} className="bg-indigo-50/40">
+                          <td colSpan={10} className="py-1.5 px-3 text-[10px] font-semibold uppercase text-indigo-800 tracking-wider">
                             {groupName}
                           </td>
                         </tr>
@@ -1656,7 +1665,7 @@ function GameTab({ initialId }: { initialId: string | null }) {
                   return (
                     <div key={l} className="flex items-center gap-3">
                       <div className={cn('w-2 h-2 rounded-full',
-                        active ? 'bg-purple-600' : 'bg-bg-subtle')} />
+                        active ? 'bg-indigo-600' : 'bg-bg-subtle')} />
                       <div className={cn('text-sm', active ? 'font-semibold text-fg' : 'text-fg-muted')}>
                         {l} ({at}%+)
                       </div>
