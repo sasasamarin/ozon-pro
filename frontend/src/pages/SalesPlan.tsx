@@ -14,9 +14,9 @@ import {
   ResponsiveContainer, ReferenceLine, Legend,
 } from 'recharts'
 import {
-  Target, TrendingUp, AlertTriangle, Save, Lock, Unlock, Trash2,
+  Target, AlertTriangle, Save, Lock, Unlock, Trash2,
   FileSpreadsheet, Sliders, BarChart3, Award, ArrowRight, RotateCcw,
-  Loader2, Gauge, Zap, Trophy, Search,
+  Loader2, Gauge, Zap, Trophy, Upload, Flame,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -164,6 +164,7 @@ function WizardTab() {
   const [locked, setLocked] = useState<Set<string>>(new Set())
   const [overallPlan, setOverallPlan] = useState(0)
   const [savedPlanId, setSavedPlanId] = useState<string | null>(null)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
 
   const { data: cabinets = [] } = useQuery<Cabinet[]>({
     queryKey: ['cabinets'],
@@ -422,8 +423,36 @@ function WizardTab() {
               <Button variant="secondary" onClick={() => exportItemsCsv(items)} className="text-xs">
                 <FileSpreadsheet className="w-3.5 h-3.5 mr-1" /> CSV
               </Button>
+              {savedPlanId && (
+                <>
+                  <a href={`/api/v1/plans/${savedPlanId}/items.xlsx`} download
+                     className="inline-flex items-center gap-1 text-xs px-3 py-1.5 border border-border-subtle rounded hover:bg-bg-subtle">
+                    <FileSpreadsheet className="w-3.5 h-3.5" /> XLSX
+                  </a>
+                  <label className="inline-flex items-center gap-1 text-xs px-3 py-1.5 border border-border-subtle rounded hover:bg-bg-subtle cursor-pointer">
+                    <Upload className="w-3.5 h-3.5" /> Залить XLSX
+                    <input type="file" accept=".xlsx" className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0]
+                        if (!f || !savedPlanId) return
+                        const fd = new FormData()
+                        fd.append('file', f)
+                        try {
+                          const r = await api.post(`/plans/${savedPlanId}/items/import`, fd,
+                            { headers: { 'Content-Type': 'multipart/form-data' } })
+                          setImportMsg(`Обновлено ${r.data.updated}, пропущено ${r.data.skipped}`)
+                        } catch (err: any) {
+                          setImportMsg(err?.response?.data?.detail || 'Ошибка импорта')
+                        }
+                      }} />
+                  </label>
+                </>
+              )}
             </div>
           </div>
+          {importMsg && (
+            <div className="text-xs px-3 py-2 bg-blue-50 border border-blue-200 rounded">{importMsg}</div>
+          )}
 
           {loadBottomup.isPending && (
             <div className="text-center py-6"><Loader2 className="w-5 h-5 animate-spin inline" /></div>
@@ -647,6 +676,11 @@ function FactTab() {
     queryFn: async () => (await api.get(`/plans/${selectedId}/fact`)).data,
     enabled: !!selectedId,
   })
+  const { data: dashboard } = useQuery<any>({
+    queryKey: ['plan-dashboard', selectedId],
+    queryFn: async () => (await api.get(`/plans/${selectedId}/dashboard`)).data,
+    enabled: !!selectedId,
+  })
   const { data: timeseries } = useQuery<{ series: any[]; plan_total: number; today: string }>({
     queryKey: ['plan-timeseries', selectedId],
     queryFn: async () => (await api.get(`/plans/${selectedId}/timeseries`)).data,
@@ -729,6 +763,63 @@ function FactTab() {
                      value={fact.run_rate_forecast.toLocaleString('ru-RU')}
                      subtitle={`нужно ${fact.needed_per_day.toLocaleString('ru-RU')}/день`} />
           </div>
+
+          {/* Сводная таблица 3 среза × 3 группы метрик */}
+          {dashboard && (
+            <Card className="overflow-hidden">
+              <div className="p-3 border-b border-border-subtle">
+                <h3 className="text-sm font-semibold">Показатели в 3 срезах</h3>
+                <div className="text-[10px] text-fg-muted mt-0.5">
+                  Светофор по % выполнения плана. План фигурирует только для основной метрики ({dashboard.plan_metric}).
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-bg-subtle/40">
+                    <tr className="text-xs text-fg-muted">
+                      <th className="py-2 px-3 text-left">Метрика</th>
+                      <th className="py-2 px-3 text-center" colSpan={3}>День</th>
+                      <th className="py-2 px-3 text-center bg-bg-subtle/60" colSpan={3}>Накопительно</th>
+                      <th className="py-2 px-3 text-center" colSpan={3}>Месяц</th>
+                    </tr>
+                    <tr className="text-[10px] text-fg-subtle border-b border-border-subtle">
+                      <th></th>
+                      <th className="py-1 px-1 text-right">Факт</th>
+                      <th className="py-1 px-1 text-right">План</th>
+                      <th className="py-1 px-1 text-center">%</th>
+                      <th className="py-1 px-1 text-right bg-bg-subtle/60">Факт</th>
+                      <th className="py-1 px-1 text-right bg-bg-subtle/60">План</th>
+                      <th className="py-1 px-1 text-center bg-bg-subtle/60">%</th>
+                      <th className="py-1 px-1 text-right">Факт</th>
+                      <th className="py-1 px-1 text-right">План</th>
+                      <th className="py-1 px-1 text-center">%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(dashboard.groups).map(([groupName, rows]: any) => (
+                      <>
+                        <tr key={groupName} className="bg-purple-50/40">
+                          <td colSpan={10} className="py-1.5 px-3 text-[10px] font-semibold uppercase text-purple-800 tracking-wider">
+                            {groupName}
+                          </td>
+                        </tr>
+                        {rows.map((row: any) => (
+                          <tr key={row.code} className={cn(
+                            'border-t border-border-subtle/40 hover:bg-bg-subtle/20 cursor-pointer',
+                            row.is_main && 'font-semibold')}>
+                            <td className="py-1 px-3">{row.label}{row.is_main && ' ⭐'}</td>
+                            <MetricTriCell c={row.today} />
+                            <MetricTriCell c={row.cumulative} cumStyle />
+                            <MetricTriCell c={row.month} />
+                          </tr>
+                        ))}
+                      </>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
 
           {/* Дельта realization−transactions */}
           {fact.delta_realization_tx !== null && Math.abs(fact.delta_realization_tx) > 100 && (
@@ -1026,6 +1117,11 @@ function GameTab() {
     queryFn: async () => (await api.get(`/plans/${selectedId}/fact`)).data,
     enabled: !!selectedId,
   })
+  const { data: streak } = useQuery<{ streak: number; best_streak: number; plan_per_day: number }>({
+    queryKey: ['plan-streak', selectedId],
+    queryFn: async () => (await api.get(`/plans/${selectedId}/streak`)).data,
+    enabled: !!selectedId,
+  })
   const [tempRate, setTempRate] = useState<number | null>(null)
 
   if (plans.length === 0) {
@@ -1149,6 +1245,38 @@ function GameTab() {
             </div>
           </Card>
 
+          {/* Серия дней в зелёной зоне */}
+          {streak && (
+            <Card className="p-4 bg-gradient-to-r from-orange-50/50 to-yellow-50/30">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <Flame className="w-4 h-4 text-orange-500" />
+                Серия дней
+              </h3>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <div className="text-xs text-fg-muted">Текущая 🔥</div>
+                  <div className="text-3xl font-bold text-orange-600 tabular-nums">
+                    {streak.streak}
+                  </div>
+                  <div className="text-[10px] text-fg-muted">подряд от сегодня</div>
+                </div>
+                <div>
+                  <div className="text-xs text-fg-muted">Рекорд</div>
+                  <div className="text-3xl font-bold text-fg tabular-nums">
+                    {streak.best_streak}
+                  </div>
+                  <div className="text-[10px] text-fg-muted">за этот план</div>
+                </div>
+                <div>
+                  <div className="text-xs text-fg-muted">Зелёная зона</div>
+                  <div className="text-xl font-semibold text-emerald-700 tabular-nums">
+                    ≥{Math.round(streak.plan_per_day).toLocaleString('ru-RU')}/день
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
+
           {/* Достижения */}
           <Card className="p-4">
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
@@ -1160,6 +1288,10 @@ function GameTab() {
               <Badge label="70% pro-rata" earned={completion >= 70} />
               <Badge label="В цель (95%)" earned={completion >= 95} />
               <Badge label="Сверх плана" earned={completion >= 110} />
+              <Badge label="3 дня в зелёной" earned={(streak?.streak || 0) >= 3} />
+              <Badge label="7 дней в зелёной" earned={(streak?.streak || 0) >= 7} />
+              <Badge label="14 дней рекорд" earned={(streak?.best_streak || 0) >= 14} />
+              <Badge label="30 дней рекорд" earned={(streak?.best_streak || 0) >= 30} />
             </div>
           </Card>
         </>
@@ -1199,6 +1331,37 @@ function Badge({ label, earned }: { label: string; earned: boolean }) {
              : 'bg-bg-subtle border-border-subtle text-fg-subtle')}>
       {earned ? '🏆 ' : '🔒 '}{label}
     </div>
+  )
+}
+
+
+function MetricTriCell({ c, cumStyle }: {
+  c: { fact: number; plan: number; pct: number | null }
+  cumStyle?: boolean
+}) {
+  const bg = cumStyle ? 'bg-bg-subtle/40' : ''
+  const tone = c.pct === null ? 'fg' :
+               c.pct >= 100 ? 'emerald' :
+               c.pct >= 80 ? 'amber' : 'rose'
+  return (
+    <>
+      <td className={cn('py-1 px-1 text-right tabular-nums text-xs', bg)}>
+        {c.fact.toLocaleString('ru-RU')}
+      </td>
+      <td className={cn('py-1 px-1 text-right tabular-nums text-xs text-fg-muted', bg)}>
+        {c.plan > 0 ? c.plan.toLocaleString('ru-RU') : '—'}
+      </td>
+      <td className={cn('py-1 px-1 text-center text-xs', bg)}>
+        {c.pct === null ? '—' : (
+          <span className={cn('px-1.5 py-0.5 rounded font-semibold',
+            tone === 'emerald' && 'bg-emerald-100 text-emerald-800',
+            tone === 'amber' && 'bg-amber-100 text-amber-800',
+            tone === 'rose' && 'bg-rose-100 text-rose-800')}>
+            {c.pct.toFixed(0)}%
+          </span>
+        )}
+      </td>
+    </>
   )
 }
 

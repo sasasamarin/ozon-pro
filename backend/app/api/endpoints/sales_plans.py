@@ -966,6 +966,248 @@ async def import_items_xlsx(
     return {"updated": updated, "skipped": skipped, "errors": errors[:20]}
 
 
+@router.get("/{plan_id}/dashboard")
+async def fact_dashboard(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Сводный дашборд факта в 3 срезах × 3 группы метрик.
+
+    Срезы: today (день) | cumulative (накопительно с начала плана) | month (текущий месяц)
+    Группы:
+      ПРОДАЖИ: заказы, выкуп, выручка-нетто
+      ФИНАНСЫ: маржинальная прибыль, чистая прибыль (УСН 6% эвристика)
+      ПРОДВИЖЕНИЕ: ДРР, рекламный расход
+    Для каждой ячейки: {fact, plan_prorata, pct}.
+    Светофор по pct: ≥100 emerald, ≥80 amber, <80 rose.
+    """
+    from datetime import timedelta as _td
+    from sqlalchemy import text as _sql
+    try:
+        pid = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    plan = await _get_plan_owned(db, pid, current_user.company_id)
+
+    today = date.today()
+    cabinet = (uuid.UUID(plan.scope_ref)
+               if plan.scope_type == "cabinet" and plan.scope_ref else None)
+    extra = "AND oa.id = :cab" if cabinet else ""
+    base_params = {"cid": str(current_user.company_id)}
+    if cabinet:
+        base_params["cab"] = str(cabinet)
+
+    # Период плана
+    days_total = (plan.period_end - plan.period_start).days + 1
+    plan_target = float(plan.target_value)
+
+    async def fetch(df: date, dt: date) -> dict:
+        params = {**base_params, "df": df, "dt": dt}
+        sales_q = f"""
+            SELECT
+              COUNT(DISTINCT o.id)::float AS orders,
+              COALESCE(SUM(oi.quantity), 0)::float AS units
+            FROM orders o
+            JOIN order_items oi ON oi.order_id = o.id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.status='delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
+              {extra}
+        """
+        sales = (await db.execute(_sql(sales_q), params)).first()
+
+        fin_q = f"""
+            SELECT
+              COALESCE(SUM(t.accruals_for_sale) FILTER (
+                WHERE t.operation_type='OperationAgentDeliveredToCustomer'), 0)::float AS revenue,
+              COALESCE(SUM(ABS(t.sale_commission)), 0)::float AS commission,
+              COALESCE(SUM(ABS(t.delivery_to_customer)), 0)::float AS logistics,
+              COALESCE(SUM(ABS(t.acquiring)), 0)::float AS acquiring,
+              COALESCE(SUM(ABS(t.advertising)), 0)::float AS advertising
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              {extra}
+        """
+        fin = (await db.execute(_sql(fin_q), params)).first()
+
+        rev = float(fin.revenue or 0)
+        ad = float(fin.advertising or 0)
+        marginal = rev - float(fin.commission or 0) - float(fin.logistics or 0) \
+                       - float(fin.acquiring or 0) - ad
+        # Чистая прибыль: эвристика УСН 6% (точнее — через services/tax.py, но
+        # для сводки достаточно проксики)
+        net = marginal - rev * 0.06
+
+        drr = (ad / rev * 100) if rev > 0 else 0
+
+        return {
+            "orders": float(sales.orders or 0),
+            "units": float(sales.units or 0),
+            "revenue": rev,
+            "marginal_profit": marginal,
+            "net_profit": net,
+            "ad_spend": ad,
+            "drr_pct": drr,
+        }
+
+    # 3 среза
+    today_data = await fetch(today, today)
+    cum_data = await fetch(plan.period_start, min(today, plan.period_end))
+    month_start = date(today.year, today.month, 1)
+    if today.month == 12:
+        month_end = date(today.year + 1, 1, 1) - _td(days=1)
+    else:
+        month_end = date(today.year, today.month + 1, 1) - _td(days=1)
+    month_data = await fetch(month_start, min(today, month_end))
+
+    days_elapsed = max(0, min(days_total, (today - plan.period_start).days + 1))
+
+    def prorata(metric_target_total: float) -> float:
+        return metric_target_total * days_elapsed / days_total if days_total else 0
+
+    # Pro-rata план на разные срезы
+    plan_per_day = plan_target / days_total if days_total else 0
+    plan_today = plan_per_day if (plan.period_start <= today <= plan.period_end) else 0
+    plan_cum = prorata(plan_target)
+    # Месяц pro-rata: пересечение плана и месяца / план_per_day × дни_пересечения
+    overlap_start = max(month_start, plan.period_start)
+    overlap_end = min(month_end, plan.period_end, today)
+    overlap_days = max(0, (overlap_end - overlap_start).days + 1)
+    plan_month = plan_per_day * overlap_days
+
+    def make_cell(fact_v: float, plan_v: float) -> dict:
+        pct = (fact_v / plan_v * 100) if plan_v > 0 else None
+        return {
+            "fact": round(fact_v, 2),
+            "plan": round(plan_v, 2),
+            "pct": round(pct, 1) if pct is not None else None,
+        }
+
+    # Метрики смапим: план есть только для plan.metric_code, остальные — без плана
+    def build_group(metric_key: str, label: str, group: str) -> dict:
+        # Только для main metric плана есть pro-rata план
+        is_main = metric_key == plan.metric_code
+        plan_t = plan_today if is_main else 0
+        plan_c = plan_cum if is_main else 0
+        plan_m = plan_month if is_main else 0
+        return {
+            "code": metric_key, "label": label, "group": group,
+            "is_main": is_main,
+            "today": make_cell(today_data.get(metric_key, 0), plan_t),
+            "cumulative": make_cell(cum_data.get(metric_key, 0), plan_c),
+            "month": make_cell(month_data.get(metric_key, 0), plan_m),
+        }
+
+    return {
+        "plan_id": str(pid),
+        "plan_name": plan.name,
+        "plan_metric": plan.metric_code,
+        "days_elapsed": days_elapsed,
+        "days_total": days_total,
+        "groups": {
+            "ПРОДАЖИ": [
+                build_group("orders", "Заказы", "ПРОДАЖИ"),
+                build_group("units", "Единицы", "ПРОДАЖИ"),
+                build_group("revenue", "Выручка", "ПРОДАЖИ"),
+            ],
+            "ФИНАНСЫ": [
+                build_group("marginal_profit", "Маржинальная прибыль", "ФИНАНСЫ"),
+                build_group("net_profit", "Чистая прибыль (≈УСН 6%)", "ФИНАНСЫ"),
+            ],
+            "ПРОДВИЖЕНИЕ": [
+                build_group("ad_spend", "Расход на рекламу", "ПРОДВИЖЕНИЕ"),
+                build_group("drr_pct", "ДРР, %", "ПРОДВИЖЕНИЕ"),
+            ],
+        },
+    }
+
+
+@router.get("/{plan_id}/streak")
+async def green_streak(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Серия дней «в зелёной зоне» (pro-rata план выполнен на день).
+
+    Идём от сегодня назад: пока факт-день ≥ план-день — серия растёт.
+    """
+    from sqlalchemy import text as _sql
+    from datetime import timedelta as _td
+    try:
+        pid = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    plan = await _get_plan_owned(db, pid, current_user.company_id)
+
+    today = date.today()
+    days_total = (plan.period_end - plan.period_start).days + 1
+    plan_per_day = float(plan.target_value) / days_total if days_total else 0
+
+    cabinet = (uuid.UUID(plan.scope_ref)
+               if plan.scope_type == "cabinet" and plan.scope_ref else None)
+    extra = "AND oa.id = :cab" if cabinet else ""
+    params = {"cid": str(current_user.company_id),
+              "df": plan.period_start, "dt": min(today, plan.period_end)}
+    if cabinet:
+        params["cab"] = str(cabinet)
+
+    if plan.metric_code == "revenue":
+        sql = f"""
+            SELECT t.operation_date::date AS d,
+                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS v
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND t.operation_type='OperationAgentDeliveredToCustomer' {extra}
+            GROUP BY 1 ORDER BY 1 DESC
+        """
+    elif plan.metric_code == "orders":
+        sql = f"""
+            SELECT o.created_at::date AS d, COUNT(*)::float AS v
+            FROM orders o
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.status='delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt {extra}
+            GROUP BY 1 ORDER BY 1 DESC
+        """
+    else:
+        return {"streak": 0, "note": "Серия считается для revenue и orders"}
+
+    rows = (await db.execute(_sql(sql), params)).all()
+    by_day = {r.d: float(r.v or 0) for r in rows}
+
+    # Идём от сегодня назад
+    streak = 0
+    best_streak = 0
+    cur = 0
+    d = min(today, plan.period_end)
+    while d >= plan.period_start:
+        v = by_day.get(d, 0)
+        if v >= plan_per_day:
+            cur += 1
+            best_streak = max(best_streak, cur)
+            if d == min(today, plan.period_end) or streak == cur - 1:
+                # Текущая серия (от сегодня без пропусков)
+                streak = cur
+        else:
+            if cur > best_streak:
+                best_streak = cur
+            cur = 0
+        d -= _td(days=1)
+
+    return {
+        "streak": streak,
+        "best_streak": best_streak,
+        "plan_per_day": round(plan_per_day, 2),
+        "note": f"Серия дней где факт ≥ {plan_per_day:.0f}/день",
+    }
+
+
 @router.get("/{plan_id}/timeseries")
 async def fact_timeseries(
     plan_id: str,
