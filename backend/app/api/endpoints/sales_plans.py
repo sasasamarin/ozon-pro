@@ -39,6 +39,7 @@ from app.models import User
 from app.models.sales_plan import PlanKPI, SalesPlan, SalesPlanDaily, SalesPlanItem
 from app.services.sales_plan.cascade import simulate_plan_change
 from app.services.sales_plan.fact import compute_fact
+from app.services.sales_plan.rbac import filter_cabinet_ids
 from app.services.sales_plan.forecast import (
     compute_forecast, distribute_by_sku, distribute_by_sku_bottomup, fetch_history,
 )
@@ -143,6 +144,10 @@ class PlanCreate(BaseModel):
     source_pref: str = "operational"
     note: str | None = None
     items: list[DistributeItem] = []
+    workspace_notes: str | None = None
+    manual_adjustment: float = 0.0
+    is_template: bool = False
+    template_cabinet_ids: list[str] | None = None
 
 
 class PlanItemRow(BaseModel):
@@ -173,6 +178,11 @@ class PlanRow(BaseModel):
     source_pref: str
     status: str
     note: str | None
+    is_template: bool = False
+    template_cabinet_ids: list[str] | None = None
+    workspace_notes: str | None = None
+    manual_adjustment: float = 0.0
+    rolled_from_id: str | None = None
     created_at: str
     items_count: int
 
@@ -187,6 +197,10 @@ class PlanUpdate(BaseModel):
     distribution_mode: str | None = None
     status: str | None = None  # draft | active | archived
     note: str | None = None
+    workspace_notes: str | None = None
+    manual_adjustment: float | None = None
+    is_template: bool | None = None
+    template_cabinet_ids: list[str] | None = None
 
 
 class ItemUpdate(BaseModel):
@@ -241,6 +255,15 @@ def _plan_to_row(plan: SalesPlan, items_count: int = 0) -> PlanRow:
         source_pref=plan.source_pref,
         status=plan.status or "active",
         note=plan.note,
+        is_template=bool(getattr(plan, "is_template", False)),
+        template_cabinet_ids=(
+            [str(c) for c in (plan.template_cabinet_ids or [])]
+            if getattr(plan, "template_cabinet_ids", None) else None
+        ),
+        workspace_notes=getattr(plan, "workspace_notes", None),
+        manual_adjustment=float(getattr(plan, "manual_adjustment", 0) or 0),
+        rolled_from_id=str(getattr(plan, "rolled_from_id", None))
+                       if getattr(plan, "rolled_from_id", None) else None,
         created_at=plan.created_at.isoformat(),
         items_count=items_count,
     )
@@ -304,7 +327,10 @@ async def bottomup_distribute(
 
     Юзер потом правит вручную, авто-сумма обновляется на фронте.
     """
-    cabs = [uuid.UUID(c) for c in payload.cabinet_ids] if payload.cabinet_ids else None
+    requested = [uuid.UUID(c) for c in payload.cabinet_ids] if payload.cabinet_ids else None
+    cabs = await filter_cabinet_ids(db, current_user, requested)
+    if cabs is not None and len(cabs) == 0:
+        raise HTTPException(403, "Нет доступа к выбранным кабинетам")
     pids = [uuid.UUID(p) for p in payload.product_ids] if payload.product_ids else None
     items = await distribute_by_sku_bottomup(
         db, company_id=current_user.company_id, metric=payload.metric,
@@ -382,6 +408,10 @@ async def create_plan(
         distribution_mode=payload.distribution_mode,
         source_pref=payload.source_pref,
         note=payload.note,
+        is_template=payload.is_template,
+        template_cabinet_ids=payload.template_cabinet_ids,
+        workspace_notes=payload.workspace_notes,
+        manual_adjustment=Decimal(str(payload.manual_adjustment or 0)),
     )
     db.add(plan)
     await db.flush()
@@ -477,6 +507,14 @@ async def update_plan(
         plan.status = payload.status
     if payload.note is not None:
         plan.note = payload.note
+    if payload.workspace_notes is not None:
+        plan.workspace_notes = payload.workspace_notes
+    if payload.manual_adjustment is not None:
+        plan.manual_adjustment = Decimal(str(payload.manual_adjustment))
+    if payload.is_template is not None:
+        plan.is_template = payload.is_template
+    if payload.template_cabinet_ids is not None:
+        plan.template_cabinet_ids = payload.template_cabinet_ids
     plan.updated_at = datetime.now(tz=plan.updated_at.tzinfo if plan.updated_at.tzinfo else None)
     await db.commit()
     return _plan_to_row(plan)
@@ -1024,6 +1062,73 @@ async def clone_plan(
     return _plan_to_row(new, len(src_items))
 
 
+@router.post("/rollover")
+async def rollover_plans(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Idempotent rollover: закрывает все активные планы где period_end < today
+    в архив. Если у плана есть rolled_from_id указывающий на шаблон —
+    создаёт новый активный план в следующем периоде с теми же items.
+    """
+    from datetime import timedelta as _td
+    today = date.today()
+    closed = (await db.execute(
+        select(SalesPlan).where(
+            SalesPlan.company_id == current_user.company_id,
+            SalesPlan.status == "active",
+            SalesPlan.period_end < today,
+            SalesPlan.is_template == False,
+        )
+    )).scalars().all()
+
+    archived = 0
+    rolled = 0
+    new_plans: list[str] = []
+
+    for plan in closed:
+        plan.status = "archived"
+        archived += 1
+        if plan.rolled_from_id:
+            tpl = (await db.execute(
+                select(SalesPlan).where(SalesPlan.id == plan.rolled_from_id)
+            )).scalar_one_or_none()
+            if tpl and tpl.is_template:
+                period_len = (plan.period_end - plan.period_start).days + 1
+                new_start = plan.period_end + _td(days=1)
+                new_end = new_start + _td(days=period_len - 1)
+                new_plan = SalesPlan(
+                    company_id=current_user.company_id, user_id=current_user.id,
+                    name=f"{tpl.name} — {new_start.isoformat()}",
+                    scope_type=tpl.scope_type, scope_ref=tpl.scope_ref,
+                    metric_code=tpl.metric_code,
+                    period_start=new_start, period_end=new_end,
+                    analysis_start=plan.analysis_start,
+                    analysis_end=plan.analysis_end,
+                    target_value=tpl.target_value,
+                    distribution_mode=tpl.distribution_mode,
+                    source_pref=tpl.source_pref,
+                    status="active",
+                    rolled_from_id=tpl.id,
+                )
+                db.add(new_plan)
+                await db.flush()
+                src_items = (await db.execute(
+                    select(SalesPlanItem).where(SalesPlanItem.plan_id == plan.id)
+                )).scalars().all()
+                for it in src_items:
+                    db.add(SalesPlanItem(
+                        plan_id=new_plan.id,
+                        product_id=it.product_id, sku=it.sku,
+                        analysis_value=it.analysis_value,
+                        share_pct=it.share_pct, plan_value=it.plan_value,
+                    ))
+                rolled += 1
+                new_plans.append(str(new_plan.id))
+    await db.commit()
+    return {"archived": archived, "rolled": rolled, "new_plan_ids": new_plans}
+
+
 @router.get("/{plan_id}/overview")
 async def fact_overview(
     plan_id: str,
@@ -1121,12 +1226,15 @@ async def fact_overview(
     total_target = 0.0
     total_current = 0.0
     total_forecast = 0.0
+    prorata_factor = (days_elapsed / days_total) if days_total > 0 else 0
     for pid_str, it in items_by_pid.items():
         target = float(it.plan_value)
         current = fact_by_pid.get(pid_str, 0)
         forecast = (current / days_elapsed * days_total) if days_elapsed > 0 else 0
         pct_cur = (current / target * 100) if target > 0 else None
         pct_fc = (forecast / target * 100) if target > 0 else None
+        prorata_target = target * prorata_factor
+        deviation = current - prorata_target
 
         n, off = name_map.get(pid_str, ("", ""))
         tone = "rose"
@@ -1141,6 +1249,8 @@ async def fact_overview(
             "target": round(target, 2),
             "current": round(current, 2),
             "forecast": round(forecast, 2),
+            "prorata_target": round(prorata_target, 2),
+            "deviation": round(deviation, 2),
             "pct_current": round(pct_cur, 1) if pct_cur is not None else None,
             "pct_forecast": round(pct_fc, 1) if pct_fc is not None else None,
             "tone": tone,
@@ -1149,7 +1259,8 @@ async def fact_overview(
         total_current += current
         total_forecast += forecast
 
-    sku_rows.sort(key=lambda r: r["target"], reverse=True)
+    # Сортировка по |отклонению| — проблемные SKU наверху
+    sku_rows.sort(key=lambda r: abs(r["deviation"] or 0), reverse=True)
 
     summary_pct_cur = (total_current / total_target * 100) if total_target > 0 else None
     summary_pct_fc = (total_forecast / total_target * 100) if total_target > 0 else None

@@ -61,7 +61,13 @@ interface PlanRow {
   target_value: number; base_forecast: number | null
   distribution_mode: string; source_pref: string
   status: string  // draft | active | archived
-  note: string | null; created_at: string; items_count: number
+  note: string | null
+  is_template?: boolean
+  template_cabinet_ids?: string[] | null
+  workspace_notes?: string | null
+  manual_adjustment?: number
+  rolled_from_id?: string | null
+  created_at: string; items_count: number
 }
 interface Cabinet { id: string; name: string }
 
@@ -184,6 +190,14 @@ function PlansListTab({ onOpen }: {
     },
   })
 
+  const rollover = useMutation({
+    mutationFn: async () => (await api.post('/plans/rollover')).data,
+    onSuccess: (data: any) => {
+      qc.invalidateQueries({ queryKey: ['plans'] })
+      alert(`Архивировано: ${data.archived} · Создано из шаблона: ${data.rolled}`)
+    },
+  })
+
   const filtered = plans.filter((p) => filter === 'all' || p.status === filter)
 
   const counts = {
@@ -195,19 +209,25 @@ function PlansListTab({ onOpen }: {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 items-center flex-wrap">
-        {(['all', 'active', 'draft', 'archived'] as const).map((k) => (
-          <button key={k} onClick={() => setFilter(k)}
-            className={cn('px-3 py-1.5 rounded-md text-xs font-medium border transition-colors',
-              filter === k
-                ? 'bg-purple-600 text-white border-purple-600'
-                : 'bg-bg border-border-subtle text-fg-muted hover:bg-bg-subtle')}>
-            {k === 'all' && `Все · ${counts.all}`}
-            {k === 'active' && `Активные · ${counts.active}`}
-            {k === 'draft' && `Черновики · ${counts.draft}`}
-            {k === 'archived' && `Архив · ${counts.archived}`}
-          </button>
-        ))}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex gap-2 items-center flex-wrap">
+          {(['all', 'active', 'draft', 'archived'] as const).map((k) => (
+            <button key={k} onClick={() => setFilter(k)}
+              className={cn('px-3 py-1.5 rounded-md text-xs font-medium border transition-colors',
+                filter === k
+                  ? 'bg-purple-600 text-white border-purple-600'
+                  : 'bg-bg border-border-subtle text-fg-muted hover:bg-bg-subtle')}>
+              {k === 'all' && `Все · ${counts.all}`}
+              {k === 'active' && `Активные · ${counts.active}`}
+              {k === 'draft' && `Черновики · ${counts.draft}`}
+              {k === 'archived' && `Архив · ${counts.archived}`}
+            </button>
+          ))}
+        </div>
+        <Button variant="secondary" onClick={() => rollover.mutate()}
+                disabled={rollover.isPending} className="text-xs">
+          {rollover.isPending ? '…' : '🔄 Rollover'}
+        </Button>
       </div>
 
       <Card className="overflow-x-auto">
@@ -231,9 +251,11 @@ function PlansListTab({ onOpen }: {
                           className="text-fg hover:text-purple-700 font-medium">
                     {p.name}
                   </button>
-                  {p.scope_type === 'cabinet' && (
-                    <div className="text-[10px] text-fg-muted">кабинет</div>
-                  )}
+                  <div className="text-[10px] text-fg-muted">
+                    {p.is_template && <span className="text-purple-700 mr-1">📋 шаблон</span>}
+                    {p.scope_type === 'cabinet' && <span>кабинет</span>}
+                    {p.rolled_from_id && <span className="text-blue-700 ml-1">↻ из шаблона</span>}
+                  </div>
                 </td>
                 <td className="py-2 px-3 text-xs">{p.metric_code}</td>
                 <td className="py-2 px-3 text-xs font-mono">
@@ -330,6 +352,10 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
   const [overallPlan, setOverallPlan] = useState(0)
   const [savedPlanId, setSavedPlanId] = useState<string | null>(null)
   const [importMsg, setImportMsg] = useState<string | null>(null)
+  // Доп. рабочее поле (v4)
+  const [workspaceNotes, setWorkspaceNotes] = useState('')
+  const [manualAdjustment, setManualAdjustment] = useState('0')
+  const [isTemplate, setIsTemplate] = useState(false)
 
   const { data: cabinets = [] } = useQuery<Cabinet[]>({
     queryKey: ['cabinets'],
@@ -420,6 +446,10 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
         analysis_value: i.analysis_value, share_pct: i.share_pct,
         plan_value: i.plan_value,
       })),
+      workspace_notes: workspaceNotes || null,
+      manual_adjustment: Number(manualAdjustment) || 0,
+      is_template: isTemplate,
+      template_cabinet_ids: isTemplate ? (selectedCabinets.length ? selectedCabinets : null) : null,
     })).data,
     onSuccess: async (data) => {
       setSavedPlanId(data.id)
@@ -658,6 +688,39 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                      className="w-full px-2 py-1 mt-1 border border-purple-300 rounded text-lg font-semibold tabular-nums bg-bg" />
             </Card>
           </div>
+
+          {/* === ДОП. РАБОЧЕЕ ПОЛЕ === */}
+          <Card className="p-3 bg-blue-50/30 border-blue-200">
+            <h4 className="text-xs font-semibold text-blue-900 uppercase mb-2">
+              Рабочее поле — сценарий / заметки / корректировка
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
+              <div className="md:col-span-2">
+                <label className="text-xs text-fg-muted">Заметки к плану / сценарий</label>
+                <textarea value={workspaceNotes}
+                          onChange={(e) => setWorkspaceNotes(e.target.value)}
+                          placeholder="напр.: новый канал привлечения, акция, рост рекламы…"
+                          rows={2}
+                          className="w-full px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+              </div>
+              <div>
+                <label className="text-xs text-fg-muted">Ручная корректировка (±)</label>
+                <input type="number" value={manualAdjustment}
+                       onChange={(e) => setManualAdjustment(e.target.value)}
+                       placeholder="0"
+                       className="w-full px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+                <div className="text-[10px] text-fg-muted mt-0.5">
+                  Добавится к ∑ SKU без изменения долей
+                </div>
+              </div>
+            </div>
+            <label className="inline-flex items-center gap-2 text-xs text-fg-muted cursor-pointer">
+              <input type="checkbox" checked={isTemplate}
+                     onChange={(e) => setIsTemplate(e.target.checked)}
+                     className="rounded" />
+              <span>Сохранить как <b>шаблон</b> (для rollover в следующий период)</span>
+            </label>
+          </Card>
 
           {/* По кабинетам */}
           {byCabinetTotals.length > 1 && (
@@ -978,6 +1041,7 @@ function FactTab({ initialId }: { initialId: string | null }) {
                       <th className="py-2 px-3 text-right">Цель</th>
                       <th className="py-2 px-3 text-right">Сейчас</th>
                       <th className="py-2 px-3 text-right">Прогноз</th>
+                      <th className="py-2 px-3 text-right">Δ от темпа</th>
                       <th className="py-2 px-3 text-center">% прогн.</th>
                     </tr>
                   </thead>
@@ -989,6 +1053,12 @@ function FactTab({ initialId }: { initialId: string | null }) {
                         <td className="py-1 px-3 text-right tabular-nums">{r.target.toLocaleString('ru-RU')}</td>
                         <td className="py-1 px-3 text-right tabular-nums">{r.current.toLocaleString('ru-RU')}</td>
                         <td className="py-1 px-3 text-right tabular-nums">{Math.round(r.forecast).toLocaleString('ru-RU')}</td>
+                        <td className="py-1 px-3 text-right">
+                          <span className={cn('text-xs tabular-nums font-semibold',
+                            (r.deviation || 0) >= 0 ? 'text-emerald-700' : 'text-rose-700')}>
+                            {(r.deviation || 0) >= 0 ? '+' : ''}{Math.round(r.deviation || 0).toLocaleString('ru-RU')}
+                          </span>
+                        </td>
                         <td className="py-1 px-3 text-center">
                           <span className={cn('text-xs px-1.5 py-0.5 rounded font-semibold',
                             r.tone === 'emerald' && 'bg-emerald-100 text-emerald-800',

@@ -75,7 +75,23 @@ class SalesPlan(Base):
     source: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="user"
     )
+    # draft | active | archived (lifecycle статус)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="active"
+    )
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # === Шаблоны и rollover ===
+    is_template: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    template_cabinet_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    manual_adjustment: Mapped[Decimal] = mapped_column(
+        Numeric(16, 2), nullable=False, server_default="0"
+    )
+    workspace_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rolled_from_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
