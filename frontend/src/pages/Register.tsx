@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, Link, useSearchParams, Navigate } from 'react-router-dom'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Logo } from '@/components/ui/Logo'
@@ -8,6 +8,16 @@ import { getErrorMessage } from '@/lib/errors'
 
 export function Register() {
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+
+  // ВАЖНО: если на /register пришли с invite-токеном (старая ссылка
+  // или ручной share invite_link), редиректим на /accept-invite чтобы
+  // юзер НЕ создал новую компанию, а присоединился к существующей.
+  const inviteToken = params.get('invite') || params.get('token')
+  if (inviteToken) {
+    return <Navigate to={`/accept-invite?token=${inviteToken}`} replace />
+  }
+
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
   const [companyName, setCompanyName] = useState('')

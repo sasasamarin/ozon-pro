@@ -102,7 +102,7 @@ async def list_invitations(
             id=str(i.id), email=i.email, role=i.role,
             status=i.status,
             expires_at=i.expires_at.isoformat(),
-            invite_link=f"/register?invite={i.token}",
+            invite_link=f"/accept-invite?token={i.token}",
         )
         for i in rows
     ]
