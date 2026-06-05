@@ -38,6 +38,9 @@ from app.models.ozon_account import (  # noqa: F401
     SyncStatus,
 )
 from app.models.product import PriceHistory, Product, ProductCommissionHistory, Stock  # noqa: F401
+from app.models.sales_plan import (  # noqa: F401
+    PlanKPI, SalesPlan, SalesPlanDaily, SalesPlanItem,
+)
 
 # Phase 2
 from app.models.ai import (  # noqa: F401

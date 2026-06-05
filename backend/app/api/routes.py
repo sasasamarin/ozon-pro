@@ -29,6 +29,7 @@ from app.api.endpoints import (
     procurement_calendar,
     procurement_quality,
     reverse_funnel,
+    sales_plans,
     product_stats,
     seasonality,
     ai_chat,
@@ -187,6 +188,9 @@ api_router.include_router(
 )
 api_router.include_router(
     plan_purchase.router, prefix="/analytics/plan-purchase", tags=["analytics"]
+)
+api_router.include_router(
+    sales_plans.router, prefix="/plans", tags=["plans"]
 )
 api_router.include_router(credit.router, prefix="/credit", tags=["credit"])
 api_router.include_router(loans.router, prefix="/loans", tags=["loans"])

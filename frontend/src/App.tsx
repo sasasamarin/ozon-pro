@@ -39,6 +39,7 @@ import { Team } from '@/pages/Team'
 import { AIChat } from '@/pages/AIChat'
 import { ReverseFunnel } from '@/pages/ReverseFunnel'
 import { PlanVsFact } from '@/pages/PlanVsFact'
+import { SalesPlan } from '@/pages/SalesPlan'
 import { PlanPurchase } from '@/pages/PlanPurchase'
 import { AccountBalance } from '@/pages/AccountBalance'
 import { Credit } from '@/pages/Credit'
@@ -142,6 +143,8 @@ export default function App() {
         <Route path="/finance/margin" element={<Margin />} />
         <Route path="/finance/taxes" element={<Taxes />} />
         <Route path="/analytics/plan-vs-fact" element={<PlanVsFact />} />
+        <Route path="/analytics/plan-fact" element={<SalesPlan />} />
+        <Route path="/sales-plan" element={<SalesPlan />} />
         <Route path="/analytics/plan-purchase" element={<PlanPurchase />} />
         <Route path="/finance/account-balance" element={<AccountBalance />} />
         <Route path="/credit" element={<Credit />} />

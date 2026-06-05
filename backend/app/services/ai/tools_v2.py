@@ -612,6 +612,78 @@ async def price_optimizer(
 
 
 # ============================================================
+# PLAN-FACT TOOLS (бridges to sales_plans endpoints)
+# ============================================================
+
+
+async def _get_plan_fact_tool(db: AsyncSession, company_id: uuid.UUID, *, plan_id: str) -> dict:
+    """Tool wrapper для get /plans/{id}/fact."""
+    from app.models.sales_plan import SalesPlan
+    from app.services.sales_plan.fact import compute_fact
+    try:
+        pid = uuid.UUID(plan_id)
+    except (ValueError, AttributeError):
+        return {"error": "Невалидный plan_id"}
+    plan = (await db.execute(
+        select(SalesPlan).where(
+            SalesPlan.id == pid, SalesPlan.company_id == company_id,
+        )
+    )).scalar_one_or_none()
+    if not plan:
+        return {"error": "План не найден"}
+    cabinet = (uuid.UUID(plan.scope_ref)
+               if plan.scope_type == "cabinet" and plan.scope_ref else None)
+    result = await compute_fact(
+        db, company_id=company_id, plan_value=float(plan.target_value),
+        metric=plan.metric_code, period_start=plan.period_start,
+        period_end=plan.period_end, cabinet_id=cabinet,
+    )
+    return {
+        "plan_name": plan.name,
+        "metric": plan.metric_code,
+        "period": f"{plan.period_start.isoformat()}…{plan.period_end.isoformat()}",
+        "plan_value": result.plan_value,
+        "fact_value": result.fact_value,
+        "fact_source": result.fact_source,
+        "is_preliminary": result.is_preliminary,
+        "completion_pct": result.completion_pct,
+        "run_rate_forecast": result.run_rate_forecast,
+        "needed_per_day": result.needed_per_day,
+        "probability_pct": result.probability_pct,
+        "delta_realization_tx": result.delta_realization_tx,
+        "bridge_top": [
+            {"name": b.name, "value": b.value, "explanation": b.explanation}
+            for b in result.bridge[:3]
+        ],
+        "note": result.note,
+    }
+
+
+async def _simulate_plan_change_tool(
+    db: AsyncSession, company_id: uuid.UUID, *,
+    metric: str, delta: float, cabinet_id: str | None = None,
+) -> dict:
+    """Tool wrapper для /plans/simulate."""
+    from app.services.sales_plan.cascade import simulate_plan_change as _sim
+    cab = uuid.UUID(cabinet_id) if cabinet_id else None
+    res = await _sim(db, company_id=company_id, metric=metric,
+                    delta=delta, cabinet_id=cab)
+    return {
+        "input_metric": res.input_metric,
+        "input_delta": res.input_delta,
+        "effects": [
+            {"metric": e.metric, "delta": round(e.delta, 2),
+             "explanation": e.explanation}
+            for e in res.effects
+        ],
+        "drr_before_pct": res.drr_before_pct,
+        "drr_after_pct": res.drr_after_pct,
+        "cpc_breakeven": round(res.cpc_breakeven, 2) if res.cpc_breakeven else None,
+        "note": res.note,
+    }
+
+
+# ============================================================
 # REGISTRY (OpenAI format)
 # ============================================================
 
@@ -782,6 +854,47 @@ TOOLS_V2: dict[str, dict] = {
                     "search_range_pct": {"type": "number", "default": 20},
                 },
                 "required": ["product_id"],
+            },
+        },
+    },
+    # ─── plan-fact tools ───
+    "get_plan_fact": {
+        "fn": _get_plan_fact_tool,
+        "spec": {
+            "name": "get_plan_fact",
+            "description": (
+                "План/факт по сохранённому плану продаж: target, текущий факт "
+                "(realization если месяц закрыт), run-rate прогноз, темп/день, "
+                "вероятность достижения, bridge компонентов отклонения."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plan_id": {"type": "string", "description": "UUID плана"},
+                },
+                "required": ["plan_id"],
+            },
+        },
+    },
+    "simulate_plan_change": {
+        "fn": _simulate_plan_change_tool,
+        "spec": {
+            "name": "simulate_plan_change",
+            "description": (
+                "Симуляция каскадного эффекта изменения метрики. "
+                "Например «+10000 кликов» → каскад на заказы, выручку, ДРР, маржу, "
+                "break-even CPC. Использует историч. коэффициенты компании."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric": {"type": "string",
+                               "enum": ["ad_spend", "orders", "revenue", "clicks"]},
+                    "delta": {"type": "number",
+                              "description": "величина изменения (положительная)"},
+                    "cabinet_id": {"type": "string", "description": "UUID кабинета (опц.)"},
+                },
+                "required": ["metric", "delta"],
             },
         },
     },
