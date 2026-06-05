@@ -459,6 +459,15 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
     onSuccess: (data) => setForecast(data),
   })
 
+  // C.1 — Data availability heatmap по месяцам
+  const dataAvail = useMutation<{ months: any[]; metric: string }, any, void>({
+    mutationFn: async () => (await api.post('/plans/data-availability', {
+      metric,
+      analysis_start: analysisFrom, analysis_end: analysisTo,
+      forecast_start: forecastFrom, forecast_end: forecastTo,
+    })).data,
+  })
+
   const loadBottomup = useMutation<BottomupResp, any, void>({
     mutationFn: async () => (await api.post('/plans/bottomup', {
       metric,
@@ -644,12 +653,41 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                      className="w-full px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
             </div>
             <div className="self-end flex gap-2">
-              <Button variant="secondary" onClick={() => calcForecast.mutate()}
+              <Button variant="secondary" onClick={() => {
+                        calcForecast.mutate()
+                        dataAvail.mutate()
+                      }}
                       disabled={calcForecast.isPending}>
                 {calcForecast.isPending ? '…' : 'Общий прогноз'}
               </Button>
             </div>
           </div>
+
+          {/* Data availability heatmap по месяцам */}
+          {dataAvail.data && dataAvail.data.months.length > 0 && (
+            <Card className="p-3">
+              <h4 className="text-xs font-semibold text-fg-muted uppercase mb-2">
+                Доступность данных по месяцам
+              </h4>
+              <div className="flex flex-wrap gap-1.5">
+                {dataAvail.data.months.map((m: any) => (
+                  <div key={m.month}
+                       title={`${m.month}: ${m.days_with_data}/${m.days_total} дн (${m.coverage_pct}%), Σ=${m.value.toLocaleString('ru-RU')}`}
+                       className={cn(
+                         'px-2 py-1 rounded text-xs cursor-help border',
+                         m.status === 'green' && 'bg-emerald-100 border-emerald-300 text-emerald-800',
+                         m.status === 'yellow' && 'bg-amber-100 border-amber-300 text-amber-800',
+                         m.status === 'red' && 'bg-rose-100 border-rose-300 text-rose-800',
+                       )}>
+                    {m.month} · {m.coverage_pct}%
+                  </div>
+                ))}
+              </div>
+              <div className="text-[10px] text-fg-muted mt-2">
+                🟢 ≥80% дней с данными — надёжно; 🟡 40-80% — частично; 🔴 &lt;40% — в прогноз не берём.
+              </div>
+            </Card>
+          )}
 
           {forecast && (
             <Card className={cn('p-3',
@@ -1189,9 +1227,11 @@ function FactTab({ initialId }: { initialId: string | null }) {
                   </thead>
                   <tbody>
                     {overview.sku_rows.map((r: any) => (
-                      <tr key={r.product_id} className="border-t border-border-subtle/40 hover:bg-bg-subtle/10">
+                      <tr key={r.product_id} className="border-t border-border-subtle/40 hover:bg-bg-subtle/10 cursor-pointer"
+                          onClick={() => r.product_id && window.open(`/products/${r.product_id}`, '_blank')}
+                          title="Открыть карточку товара в новой вкладке">
                         <td className="py-1 px-3 font-mono text-xs">{r.sku || '—'}</td>
-                        <td className="py-1 px-3 max-w-[260px] truncate" title={r.name}>{r.name?.slice(0, 50)}</td>
+                        <td className="py-1 px-3 max-w-[260px] truncate text-blue-700 hover:underline" title={r.name}>{r.name?.slice(0, 50)}</td>
                         <td className="py-1 px-3 text-right tabular-nums">{r.target.toLocaleString('ru-RU')}</td>
                         <td className="py-1 px-3 text-right tabular-nums">{r.current.toLocaleString('ru-RU')}</td>
                         <td className="py-1 px-3 text-right tabular-nums">{Math.round(r.forecast).toLocaleString('ru-RU')}</td>
@@ -1341,18 +1381,29 @@ function FactTab({ initialId }: { initialId: string | null }) {
           {/* Stock hints */}
           {hints && hints.hints.length > 0 && (
             <Card className="p-3 bg-yellow-50/40 border-yellow-200">
-              <h4 className="text-xs font-semibold text-yellow-900 uppercase mb-2 flex items-center gap-1">
-                🟡 Подсказки по складу ({hints.hints.length})
-              </h4>
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <h4 className="text-xs font-semibold text-yellow-900 uppercase flex items-center gap-1">
+                  🟡 Подсказки по складу ({hints.hints.length})
+                </h4>
+                <Button variant="secondary" onClick={() => window.open('/procurement/supplies/new', '_blank')}
+                        className="text-xs">
+                  + Создать потребность в поставке
+                </Button>
+              </div>
               <div className="space-y-1 text-sm max-h-40 overflow-y-auto">
                 {hints.hints.slice(0, 10).map((h: any) => (
-                  <div key={h.product_id} className="text-xs text-yellow-900">
-                    <span className="font-mono">{h.sku}</span>: {h.message}
+                  <div key={h.product_id} className="text-xs text-yellow-900 flex items-center gap-2">
+                    <span className="font-mono">{h.sku}</span>
+                    <span className="flex-1">{h.message}</span>
+                    {h.product_id && (
+                      <a href={`/products/${h.product_id}`} target="_blank" rel="noopener"
+                         className="text-blue-700 hover:underline text-[10px]">→ карточка</a>
+                    )}
                   </div>
                 ))}
               </div>
               <div className="text-[10px] text-fg-muted mt-1">
-                Подсказка не блокирует план. Иди в /procurement докинуть поставку.
+                Подсказка не блокирует план. Кнопка справа открывает форму создания новой поставки.
               </div>
             </Card>
           )}

@@ -290,6 +290,102 @@ def _item_to_row(item: SalesPlanItem, name: str | None = None) -> PlanItemRow:
 # Forecast / Distribute (без сохранения)
 # ============================================
 
+@router.post("/data-availability")
+async def data_availability(
+    payload: ForecastRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """🟢🟡🔴 по месяцам — где данные надёжные для прогноза.
+
+    Возвращает по каждому месяцу analysis-периода:
+      coverage_pct, status (green/yellow/red), days с данными, summa
+    """
+    from sqlalchemy import text as _sql
+    from datetime import timedelta as _td
+
+    cabinet = uuid.UUID(payload.cabinet_id) if payload.cabinet_id else None
+    extra = "AND oa.id = :cab" if cabinet else ""
+    params: dict = {"cid": str(current_user.company_id),
+                    "df": payload.analysis_start, "dt": payload.analysis_end}
+    if cabinet:
+        params["cab"] = str(cabinet)
+
+    if payload.metric == "revenue":
+        sql = f"""
+            SELECT t.operation_date::date AS day,
+                   SUM(t.accruals_for_sale)::float AS v
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND t.operation_type='OperationAgentDeliveredToCustomer'
+              {extra}
+            GROUP BY 1 ORDER BY 1
+        """
+    elif payload.metric == "orders":
+        sql = f"""
+            SELECT o.created_at::date AS day, COUNT(*)::float AS v
+            FROM orders o
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.status='delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
+              {extra}
+            GROUP BY 1 ORDER BY 1
+        """
+    elif payload.metric == "units":
+        sql = f"""
+            SELECT o.created_at::date AS day, SUM(oi.quantity)::float AS v
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.status='delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
+              {extra}
+            GROUP BY 1 ORDER BY 1
+        """
+    else:
+        sql = f"""
+            SELECT t.operation_date::date AS day, COUNT(*)::float AS v
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              {extra}
+            GROUP BY 1 ORDER BY 1
+        """
+
+    rows = (await db.execute(_sql(sql), params)).all()
+    by_day = {r.day: float(r.v or 0) for r in rows}
+
+    months: dict[str, dict] = {}
+    d = payload.analysis_start
+    while d <= payload.analysis_end:
+        key = f"{d.year:04d}-{d.month:02d}"
+        if key not in months:
+            months[key] = {"days_with_data": 0, "days_total": 0, "sum_value": 0}
+        months[key]["days_total"] += 1
+        v = by_day.get(d, 0)
+        if v > 0:
+            months[key]["days_with_data"] += 1
+            months[key]["sum_value"] += v
+        d += _td(days=1)
+
+    out = []
+    for key, m in months.items():
+        coverage = m["days_with_data"] / m["days_total"] * 100 if m["days_total"] else 0
+        status = "green" if coverage >= 80 else ("yellow" if coverage >= 40 else "red")
+        out.append({
+            "month": key,
+            "days_total": m["days_total"],
+            "days_with_data": m["days_with_data"],
+            "coverage_pct": round(coverage, 1),
+            "status": status,
+            "value": round(m["sum_value"], 2),
+        })
+    return {"months": out, "metric": payload.metric}
+
+
 @router.post("/forecast", response_model=ForecastResponse)
 async def forecast_plan(
     payload: ForecastRequest,
