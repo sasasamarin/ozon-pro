@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -104,6 +104,22 @@ class OzonAccount(BaseModel, SoftDeleteMixin):
     # Метаданные с Озона (заполняется при синхронизации)
     seller_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    # === Налоги per-cabinet ===
+    # Переопределяет company-level настройки. NULL = брать из Company.
+    # Один селлер может иметь кабинет в льготном регионе (УСН 1%) и
+    # другой в обычном (ОСНО 20% + НДС 22% возвратный).
+    tax_regime: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    tax_rate_pct: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    # НДС-ставка отдельно. На УСН с доходом >60млн в 2025 году НДС 5% обязателен.
+    vat_rate_pct: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    # vat_refundable=True → ОСНО, можно вычитать входной НДС.
+    # vat_refundable=False → УСН с НДС 5%/7% — входной НДС не возвращается, фактически расход.
+    vat_refundable: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False,
+    )
+    # Свободный комментарий: «Калмыкия УСН 1%», «Москва ОСНО»
+    tax_region_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Связи
     company = relationship("Company", back_populates="ozon_accounts")

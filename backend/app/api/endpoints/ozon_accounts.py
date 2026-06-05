@@ -46,6 +46,12 @@ class OzonAccountResponse(BaseModel):
     last_sync_at: str | None
     last_sync_error: str | None
     has_performance_api: bool
+    # Налоги per-cabinet (NULL = используется company-default)
+    tax_regime: str | None = None
+    tax_rate_pct: float | None = None
+    vat_rate_pct: float | None = None
+    vat_refundable: bool = False
+    tax_region_note: str | None = None
 
     class Config:
         from_attributes = True
@@ -62,6 +68,11 @@ def _account_to_response(account: OzonAccount) -> OzonAccountResponse:
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
         last_sync_error=account.last_sync_error,
         has_performance_api=bool(account.perf_client_id_encrypted),
+        tax_regime=account.tax_regime,
+        tax_rate_pct=float(account.tax_rate_pct) if account.tax_rate_pct is not None else None,
+        vat_rate_pct=float(account.vat_rate_pct) if account.vat_rate_pct is not None else None,
+        vat_refundable=account.vat_refundable,
+        tax_region_note=account.tax_region_note,
     )
 
 
@@ -148,7 +159,12 @@ async def create_ozon_account(
 
 
 class OzonAccountUpdate(BaseModel):
-    """Все поля опциональные — обновляем только пришедшие."""
+    """Все поля опциональные — обновляем только пришедшие.
+
+    Налоговые поля для пер-кабинетного override (NULL = использовать company-default).
+    Это позволяет одному селлеру иметь кабинет в льготном регионе (УСН 1%)
+    и другой в Москве (ОСНО 20% + НДС 22% возвратный) одновременно.
+    """
 
     name: str | None = None
     description: str | None = None
@@ -158,6 +174,12 @@ class OzonAccountUpdate(BaseModel):
     perf_client_secret: str | None = None
     premium_tier: str | None = None
     is_active: bool | None = None
+    # Налоги per-cabinet (None = не меняем; "" / 0 явно — обнуление)
+    tax_regime: str | None = None        # usn_income / usn_income_minus / osno / none
+    tax_rate_pct: float | None = None    # 1.0 / 6.0 / 15.0 / 20.0 etc.
+    vat_rate_pct: float | None = None    # 5 / 7 / 22 (None = без НДС)
+    vat_refundable: bool | None = None   # True для ОСНО, False для УСН с НДС
+    tax_region_note: str | None = None   # «Калмыкия УСН 1%»
 
 
 class PerfTestRequest(BaseModel):
@@ -253,6 +275,19 @@ async def update_ozon_account(
         account.premium_tier = payload.premium_tier
     if payload.is_active is not None:
         account.is_active = payload.is_active
+
+    # Налоговые поля. None = не трогаем. Иначе — пишем как есть (0 / "" / False валидны).
+    if payload.tax_regime is not None:
+        account.tax_regime = payload.tax_regime or None
+    if payload.tax_rate_pct is not None:
+        account.tax_rate_pct = payload.tax_rate_pct
+    if payload.vat_rate_pct is not None:
+        # 0 = «без НДС» эквивалентно None для расчёта
+        account.vat_rate_pct = payload.vat_rate_pct if payload.vat_rate_pct > 0 else None
+    if payload.vat_refundable is not None:
+        account.vat_refundable = payload.vat_refundable
+    if payload.tax_region_note is not None:
+        account.tax_region_note = payload.tax_region_note or None
 
     await db.flush()
     log.info("ozon_account_updated", account_id=str(account.id))
