@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_rbac import require_admin, require_owner
 from app.core.logging import log
 from app.core.security import decrypt_secret, encrypt_secret  # noqa: F401
 from app.db.session import get_db

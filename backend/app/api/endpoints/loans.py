@@ -25,6 +25,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_rbac import require_finance
 from app.db.session import get_db
 from app.models import Loan, LoanPayment, OzonAccount, User
 from app.services.loan_schedule import build_schedule
