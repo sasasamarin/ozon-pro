@@ -433,6 +433,8 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
   const [forecastTo, setForecastTo] = useState(isoDate(nextMonthEnd))
   const [selectedCabinets, setSelectedCabinets] = useState<string[]>([])
   const [productSearch, setProductSearch] = useState('')
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([])
+  const [showProductPicker, setShowProductPicker] = useState(false)
   const [planName, setPlanName] = useState('')
   const [forecast, setForecast] = useState<ForecastResp | null>(null)
   const [items, setItems] = useState<BottomupItem[]>([])
@@ -474,6 +476,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
       analysis_start: analysisFrom, analysis_end: analysisTo,
       forecast_start: forecastFrom, forecast_end: forecastTo,
       cabinet_ids: selectedCabinets,
+      product_ids: selectedProductIds,
     })).data,
     onSuccess: (data) => {
       setItems(data.items)
@@ -610,6 +613,8 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                     ? selectedCabinets.filter((x) => x !== c.id)
                     : [...selectedCabinets, c.id]
                   setSelectedCabinets(next)
+                  // При смене кабинетов сбрасываем выбор продуктов
+                  setSelectedProductIds([])
                 }} className={cn('px-3 py-1 rounded-md text-xs border',
                   selectedCabinets.includes(c.id)
                     ? 'bg-indigo-100 border-indigo-400 text-indigo-800'
@@ -618,6 +623,43 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Product picker (optional) */}
+          <div>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <label className="text-xs text-fg-muted">
+                Товары
+                {selectedProductIds.length > 0 && (
+                  <span className="ml-2 text-indigo-700 font-semibold">
+                    выбрано: {selectedProductIds.length}
+                  </span>
+                )}
+              </label>
+              <div className="flex gap-2">
+                {selectedProductIds.length > 0 && (
+                  <Button variant="secondary" onClick={() => setSelectedProductIds([])} className="text-xs">
+                    Сбросить
+                  </Button>
+                )}
+                <Button variant="secondary" onClick={() => setShowProductPicker(!showProductPicker)} className="text-xs">
+                  {showProductPicker ? 'Скрыть' : 'Выбрать товары (опц.)'}
+                </Button>
+              </div>
+            </div>
+            {selectedProductIds.length === 0 && !showProductPicker && (
+              <div className="text-[10px] text-fg-muted mt-1">
+                По умолчанию — все товары из выбранных кабинетов.
+                Кнопка справа открывает выбор конкретных SKU.
+              </div>
+            )}
+            {showProductPicker && (
+              <ProductPickerForWizard
+                cabinetIds={selectedCabinets}
+                selected={selectedProductIds}
+                onChange={setSelectedProductIds}
+              />
+            )}
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -1107,6 +1149,154 @@ function WeeksGrid({ planId }: { planId: string }) {
 // FACT TAB
 // ===========================================
 
+function ProductPickerForWizard({ cabinetIds, selected, onChange }: {
+  cabinetIds: string[]
+  selected: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const [search, setSearch] = useState('')
+  const { data: products = [] } = useQuery<Array<{
+    id: string; offer_id: string; name: string; ozon_sku: number
+  }>>({
+    queryKey: ['products-for-plan'],
+    queryFn: async () => (await api.get('/products/?limit=2000')).data?.items
+                       || (await api.get('/products/?limit=2000')).data
+                       || [],
+    staleTime: 5 * 60_000,
+  })
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    if (!q) return products.slice(0, 200)
+    return products.filter((p) =>
+      p.name?.toLowerCase().includes(q) ||
+      p.offer_id?.toLowerCase().includes(q) ||
+      String(p.ozon_sku).includes(q)
+    ).slice(0, 200)
+  }, [products, search])
+
+  return (
+    <Card className="p-3 mt-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <input value={search}
+               onChange={(e) => setSearch(e.target.value)}
+               placeholder="Поиск товара по имени / артикулу / SKU…"
+               className="flex-1 px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg" />
+        <Button variant="secondary" onClick={() => {
+          // Выбрать все из текущего фильтра
+          const allFiltered = filtered.map((p) => p.id)
+          const next = Array.from(new Set([...selected, ...allFiltered]))
+          onChange(next)
+        }} className="text-xs">
+          Выделить всё (видимое)
+        </Button>
+      </div>
+      <div className="max-h-72 overflow-y-auto border border-border-subtle rounded divide-y divide-border-subtle/40">
+        {filtered.map((p) => {
+          const isSel = selected.includes(p.id)
+          return (
+            <button key={p.id} onClick={() => {
+              const next = isSel
+                ? selected.filter((x) => x !== p.id)
+                : [...selected, p.id]
+              onChange(next)
+            }} className={cn(
+              'w-full px-3 py-1.5 text-left text-xs hover:bg-bg-subtle/40 transition-colors flex items-center gap-2',
+              isSel && 'bg-indigo-50/40',
+            )}>
+              <input type="checkbox" checked={isSel} readOnly className="rounded" />
+              <span className="font-mono text-fg-subtle min-w-[120px]">{p.offer_id || '—'}</span>
+              <span className="flex-1 truncate">{p.name}</span>
+            </button>
+          )
+        })}
+        {filtered.length === 0 && (
+          <div className="p-4 text-center text-xs text-fg-muted">Ничего не найдено.</div>
+        )}
+      </div>
+      <div className="text-[10px] text-fg-muted">
+        Показаны первые 200. Уточняй поиском.{' '}
+        {cabinetIds.length === 0 && 'Покажутся товары из ВСЕХ кабинетов.'}
+      </div>
+    </Card>
+  )
+}
+
+
+function PlanQuickPicker({ plans, selectedId, onSelect }: {
+  plans: PlanRow[]
+  selectedId: string | null
+  onSelect: (id: string | null) => void
+}) {
+  const { data: cabinets = [] } = useQuery<Cabinet[]>({
+    queryKey: ['cabinets'],
+    queryFn: async () => (await api.get('/ozon-accounts/')).data || [],
+  })
+  const [cabFilter, setCabFilter] = useState<string | null>(null)
+  // Активные планы (не архив, не черновики)
+  const activePlans = plans.filter((p) => p.status === 'active')
+  // По кабинету
+  const filtered = cabFilter
+    ? activePlans.filter((p) => p.scope_ref === cabFilter)
+    : activePlans
+
+  if (activePlans.length === 0) {
+    return (
+      <Card className="p-3 text-sm text-fg-muted">
+        Активных планов нет. Создай в «Постановка плана» или активируй из «Все планы».
+      </Card>
+    )
+  }
+
+  return (
+    <Card className="p-3 space-y-2">
+      {cabinets.length > 1 && (
+        <div>
+          <div className="text-[10px] text-fg-muted uppercase mb-1">Фильтр по кабинету</div>
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setCabFilter(null)}
+              className={cn('px-2 py-1 rounded text-xs border',
+                !cabFilter
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-bg border-border-subtle text-fg-muted hover:bg-bg-subtle')}>
+              Все ({activePlans.length})
+            </button>
+            {cabinets.map((c) => {
+              const n = activePlans.filter((p) => p.scope_ref === c.id).length
+              if (n === 0) return null
+              return (
+                <button key={c.id} onClick={() => setCabFilter(c.id)}
+                  className={cn('px-2 py-1 rounded text-xs border',
+                    cabFilter === c.id
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-bg border-border-subtle text-fg-muted hover:bg-bg-subtle')}>
+                  {c.name} ({n})
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+      <div>
+        <div className="text-[10px] text-fg-muted uppercase mb-1">План</div>
+        <div className="flex flex-wrap gap-1.5">
+          {filtered.map((p) => (
+            <button key={p.id} onClick={() => onSelect(p.id)}
+              className={cn('px-2.5 py-1.5 rounded text-xs border transition-colors',
+                selectedId === p.id
+                  ? 'bg-indigo-100 border-indigo-400 text-indigo-900 font-medium'
+                  : 'bg-bg border-border-subtle text-fg-muted hover:bg-bg-subtle')}>
+              {p.name.slice(0, 40)}
+              <span className="text-fg-subtle ml-1">{p.metric_code}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+
 function FactTab({ initialId }: { initialId: string | null }) {
   const { data: plans = [] } = useQuery<PlanRow[]>({
     queryKey: ['plans'],
@@ -1154,7 +1344,8 @@ function FactTab({ initialId }: { initialId: string | null }) {
 
   return (
     <div className="space-y-4">
-      <Card className="p-3">
+      <PlanQuickPicker plans={plans} selectedId={selectedId} onSelect={setSelectedId} />
+      <Card className="p-3" style={{ display: 'none' }}>
         <label className="text-xs text-fg-muted block mb-1">План</label>
         <select value={selectedId || ''} onChange={(e) => setSelectedId(e.target.value || null)}
                 className="w-full md:w-96 px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg">
@@ -1569,19 +1760,7 @@ function KpiTab({ initialId }: { initialId: string | null }) {
 
   return (
     <div className="space-y-4">
-      <Card className="p-3">
-        <label className="text-xs text-fg-muted block mb-1">План</label>
-        <select value={selectedPlanId || ''}
-                onChange={(e) => setSelectedPlanId(e.target.value || null)}
-                className="w-full md:w-96 px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg">
-          <option value="">— выбери план —</option>
-          {plans.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} ({p.metric_code} {p.period_start}…{p.period_end})
-            </option>
-          ))}
-        </select>
-      </Card>
+      <PlanQuickPicker plans={plans} selectedId={selectedPlanId} onSelect={setSelectedPlanId} />
 
       {selectedPlanId && (
         <>
@@ -1741,16 +1920,7 @@ function GameTab({ initialId }: { initialId: string | null }) {
 
   return (
     <div className="space-y-4">
-      <Card className="p-3">
-        <label className="text-xs text-fg-muted block mb-1">План</label>
-        <select value={selectedId || ''} onChange={(e) => setSelectedId(e.target.value || null)}
-                className="w-full md:w-96 px-2 py-1.5 border border-border-subtle rounded text-sm bg-bg">
-          <option value="">— выбери план —</option>
-          {plans.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-      </Card>
+      <PlanQuickPicker plans={plans} selectedId={selectedId} onSelect={setSelectedId} />
 
       {fact && (
         <>
