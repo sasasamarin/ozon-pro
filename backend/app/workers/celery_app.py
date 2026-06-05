@@ -91,10 +91,11 @@ celery_app.conf.beat_schedule = {
     # P0 #5: глубокий sliding window раз в сутки — ловит мутации (отмены/
     # доставка с лагом, статус обновился задним числом). Из диагностики:
     # 268 заказов KOO мутируют в окне 1-7 дней — 30 дней покрывает с запасом.
-    "sync-orders-deep-30-days-daily": {
+    "sync-orders-deep-90-days-daily": {
         "task": "app.workers.tasks.sync_orders.sync_all_orders",
         "schedule": crontab(hour=2, minute=30),  # 02:30 UTC (тихий час)
-        "kwargs": {"days_window": 30},
+        # 90 дней нужны для прогнозов сезонности в /sales-plan
+        "kwargs": {"days_window": 90},
     },
     # Догоняем customer_price для свежих postings (хвост 500 шт).
     # Полный backfill 29k запускается вручную:

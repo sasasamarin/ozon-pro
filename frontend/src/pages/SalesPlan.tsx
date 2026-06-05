@@ -76,10 +76,10 @@ interface PlanRow {
 interface Cabinet { id: string; name: string }
 
 const METRIC_OPTIONS = [
-  { code: 'revenue', label: 'Выручка (₽) — длинная история' },
+  { code: 'revenue', label: 'Выручка (₽)' },
   { code: 'gross_profit', label: 'Маржинальная прибыль (₽)' },
-  { code: 'orders', label: 'Заказы (шт) — только последние ~30 дней' },
-  { code: 'units', label: 'Единицы выкупа — только последние ~30 дней' },
+  { code: 'orders', label: 'Заказы (шт)' },
+  { code: 'units', label: 'Единицы выкупа' },
 ]
 
 function isoDate(d: Date) { return d.toISOString().slice(0, 10) }
