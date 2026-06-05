@@ -361,6 +361,35 @@ async def bottomup_distribute(
         for v in by_cab.values()
     ]
 
+    if len(items) == 0:
+        # Подсказка юзеру: товаров с продажами не нашли. Возможные причины.
+        from sqlalchemy import text as _sql
+        chk_oa = (await db.execute(_sql(
+            "SELECT COUNT(*) FROM ozon_accounts WHERE company_id = :cid AND deleted_at IS NULL"
+        ), {"cid": str(current_user.company_id)})).scalar()
+        chk_orders = (await db.execute(_sql("""
+            SELECT COUNT(*) FROM orders o JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.created_at >= :df AND o.created_at <= :dt
+        """), {"cid": str(current_user.company_id),
+               "df": payload.analysis_start, "dt": payload.analysis_end})).scalar()
+        chk_tx = (await db.execute(_sql("""
+            SELECT COUNT(*) FROM transactions t JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid AND t.operation_date >= :df AND t.operation_date <= :dt
+        """), {"cid": str(current_user.company_id),
+               "df": payload.analysis_start, "dt": payload.analysis_end})).scalar()
+        raise HTTPException(404, detail={
+            "message": "Нет данных по выбранным фильтрам",
+            "cabinets_in_company": chk_oa,
+            "cabinets_selected": len(cabs) if cabs else "all",
+            "orders_in_period": chk_orders,
+            "transactions_in_period": chk_tx,
+            "hint": (
+                "Проверь: 1) подключены ли кабинеты с данными; "
+                "2) сделана ли синхронизация за выбранный период; "
+                "3) есть ли у роли доступ к этим кабинетам (MemberAccountAccess)."
+            ),
+        })
+
     return BottomupResponse(
         items=[BottomupItem(**i) for i in items],
         total_analysis=round(sum(i["analysis_value"] for i in items), 2),
@@ -447,12 +476,27 @@ async def list_plans(
         .order_by(SalesPlan.period_start.desc())
     )).scalars().all()
 
+    # Карта кабинетов для подстановки названий в template_cabinet_ids
+    from app.models import OzonAccount
+    cabs_rows = (await db.execute(
+        select(OzonAccount.id, OzonAccount.name).where(
+            OzonAccount.company_id == current_user.company_id,
+        )
+    )).all()
+    cab_name = {str(r.id): r.name for r in cabs_rows}
+
     rows = []
     for p in plans:
         cnt = (await db.execute(
             select(SalesPlanItem).where(SalesPlanItem.plan_id == p.id)
         )).scalars().all()
-        rows.append(_plan_to_row(p, len(cnt)))
+        row = _plan_to_row(p, len(cnt))
+        # Шаблон → подставить имена кабинетов в template_cabinet_ids
+        if row.template_cabinet_ids:
+            row.template_cabinet_ids = [
+                cab_name.get(cid, cid) for cid in row.template_cabinet_ids
+            ]
+        rows.append(row)
     return rows
 
 
@@ -1060,6 +1104,50 @@ async def clone_plan(
     await db.commit()
     await db.refresh(new)
     return _plan_to_row(new, len(src_items))
+
+
+class BulkAction(BaseModel):
+    plan_ids: list[str]
+    action: str  # 'delete' | 'archive' | 'activate' | 'draft'
+
+
+@router.post("/bulk")
+async def bulk_action(
+    payload: BulkAction,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Массовое действие над выбранными планами компании."""
+    if payload.action not in ("delete", "archive", "activate", "draft"):
+        raise HTTPException(400, f"Неизвестное действие: {payload.action}")
+    try:
+        pids = [uuid.UUID(p) for p in payload.plan_ids]
+    except ValueError:
+        raise HTTPException(400, "Невалидный plan_id в списке")
+
+    if not pids:
+        return {"affected": 0}
+
+    plans = (await db.execute(
+        select(SalesPlan).where(
+            SalesPlan.id.in_(pids),
+            SalesPlan.company_id == current_user.company_id,
+        )
+    )).scalars().all()
+
+    affected = 0
+    for p in plans:
+        if payload.action == "delete":
+            await db.delete(p)
+        elif payload.action == "archive":
+            p.status = "archived"
+        elif payload.action == "activate":
+            p.status = "active"
+        elif payload.action == "draft":
+            p.status = "draft"
+        affected += 1
+    await db.commit()
+    return {"affected": affected, "action": payload.action}
 
 
 @router.post("/rollover")

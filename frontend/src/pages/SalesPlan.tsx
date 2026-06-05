@@ -198,7 +198,22 @@ function PlansListTab({ onOpen }: {
     },
   })
 
+  // Массовый выбор
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const bulkAction = useMutation({
+    mutationFn: async (action: 'delete' | 'archive' | 'activate' | 'draft') =>
+      (await api.post('/plans/bulk', {
+        plan_ids: [...selectedIds], action,
+      })).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['plans'] })
+      setSelectedIds(new Set())
+    },
+  })
+
   const filtered = plans.filter((p) => filter === 'all' || p.status === filter)
+  const allFilteredIds = filtered.map((p) => p.id)
+  const allSelected = filtered.length > 0 && allFilteredIds.every((id) => selectedIds.has(id))
 
   const counts = {
     all: plans.length,
@@ -230,10 +245,51 @@ function PlansListTab({ onOpen }: {
         </Button>
       </div>
 
+      {/* Bulk action bar */}
+      {selectedIds.size > 0 && (
+        <Card className="p-3 bg-purple-50/40 border-purple-300 flex items-center justify-between flex-wrap gap-2">
+          <div className="text-sm">
+            Выбрано: <b>{selectedIds.size}</b>
+            <button onClick={() => setSelectedIds(new Set())}
+                    className="ml-3 text-xs text-fg-muted hover:underline">снять</button>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <Button variant="secondary" onClick={() => bulkAction.mutate('activate')}
+                    disabled={bulkAction.isPending} className="text-xs">
+              <Play className="w-3.5 h-3.5 mr-1 inline" /> В работу
+            </Button>
+            <Button variant="secondary" onClick={() => bulkAction.mutate('draft')}
+                    disabled={bulkAction.isPending} className="text-xs">
+              В черновики
+            </Button>
+            <Button variant="secondary" onClick={() => bulkAction.mutate('archive')}
+                    disabled={bulkAction.isPending} className="text-xs">
+              <Archive className="w-3.5 h-3.5 mr-1 inline" /> В архив
+            </Button>
+            <Button variant="secondary" onClick={() => {
+                      if (confirm(`Удалить ${selectedIds.size} плана(ов)?`)) {
+                        bulkAction.mutate('delete')
+                      }
+                    }}
+                    disabled={bulkAction.isPending}
+                    className="text-xs text-rose-700 border-rose-300 hover:bg-rose-50">
+              <Trash2 className="w-3.5 h-3.5 mr-1 inline" /> Удалить
+            </Button>
+          </div>
+        </Card>
+      )}
+
       <Card className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-xs text-fg-muted bg-bg-subtle/30">
             <tr>
+              <th className="py-2 px-2 w-8">
+                <input type="checkbox" checked={allSelected}
+                  onChange={(e) => {
+                    if (e.target.checked) setSelectedIds(new Set(allFilteredIds))
+                    else setSelectedIds(new Set())
+                  }} />
+              </th>
               <th className="py-2 px-3 text-left">Название</th>
               <th className="py-2 px-3 text-left">Метрика</th>
               <th className="py-2 px-3 text-left">Период</th>
@@ -245,14 +301,31 @@ function PlansListTab({ onOpen }: {
           </thead>
           <tbody>
             {filtered.map((p) => (
-              <tr key={p.id} className="border-t border-border-subtle/40 hover:bg-bg-subtle/20">
+              <tr key={p.id} className={cn(
+                'border-t border-border-subtle/40 hover:bg-bg-subtle/20',
+                selectedIds.has(p.id) && 'bg-purple-50/40')}>
+                <td className="py-2 px-2 text-center">
+                  <input type="checkbox" checked={selectedIds.has(p.id)}
+                    onChange={(e) => {
+                      const next = new Set(selectedIds)
+                      if (e.target.checked) next.add(p.id); else next.delete(p.id)
+                      setSelectedIds(next)
+                    }} />
+                </td>
                 <td className="py-2 px-3">
                   <button onClick={() => onOpen(p.id, 'fact')}
                           className="text-fg hover:text-purple-700 font-medium">
                     {p.name}
                   </button>
                   <div className="text-[10px] text-fg-muted">
-                    {p.is_template && <span className="text-purple-700 mr-1">📋 шаблон</span>}
+                    {p.is_template && (
+                      <span className="text-purple-700 mr-1">
+                        📋 шаблон
+                        {p.template_cabinet_ids && p.template_cabinet_ids.length > 0 && (
+                          <span className="ml-1">· {p.template_cabinet_ids.join(', ')}</span>
+                        )}
+                      </span>
+                    )}
                     {p.scope_type === 'cabinet' && <span>кабинет</span>}
                     {p.rolled_from_id && <span className="text-blue-700 ml-1">↻ из шаблона</span>}
                   </div>
@@ -312,7 +385,7 @@ function PlansListTab({ onOpen }: {
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={7} className="py-8 text-center text-fg-muted">
+              <tr><td colSpan={8} className="py-8 text-center text-fg-muted">
                 Планов нет. Создай первый на вкладке «Постановка плана».
               </td></tr>
             )}
@@ -666,6 +739,35 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
           {loadBottomup.isPending && (
             <div className="text-center py-6"><Loader2 className="w-5 h-5 animate-spin inline" /></div>
           )}
+
+          {/* Debug-сообщение если bottomup вернул 404 с подсказкой */}
+          {loadBottomup.error && (() => {
+            const err = loadBottomup.error as any
+            const detail = err?.response?.data?.detail
+            if (typeof detail === 'object') {
+              return (
+                <Card className="p-4 bg-amber-50/40 border-amber-300">
+                  <h4 className="text-sm font-semibold text-amber-900 mb-2">
+                    ⚠️ {detail.message || 'Нет данных'}
+                  </h4>
+                  <div className="text-xs text-amber-800 space-y-0.5">
+                    <div>Кабинетов в компании: <b>{detail.cabinets_in_company ?? '—'}</b></div>
+                    <div>Выбрано: <b>{String(detail.cabinets_selected ?? '—')}</b></div>
+                    <div>Заказов за период: <b>{detail.orders_in_period ?? 0}</b></div>
+                    <div>Транзакций за период: <b>{detail.transactions_in_period ?? 0}</b></div>
+                  </div>
+                  {detail.hint && (
+                    <div className="text-xs text-fg-muted mt-2">💡 {detail.hint}</div>
+                  )}
+                </Card>
+              )
+            }
+            return (
+              <Card className="p-3 bg-rose-50 border-rose-200 text-sm text-rose-800">
+                {detail || 'Ошибка загрузки данных'}
+              </Card>
+            )
+          })()}
 
           {/* Общий план — top-down коррекция */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
