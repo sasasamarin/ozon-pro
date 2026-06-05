@@ -72,10 +72,10 @@ interface PlanRow {
 interface Cabinet { id: string; name: string }
 
 const METRIC_OPTIONS = [
-  { code: 'orders', label: 'Заказы (шт)' },
-  { code: 'units', label: 'Единицы (выкуплено)' },
-  { code: 'revenue', label: 'Выручка (₽)' },
+  { code: 'revenue', label: 'Выручка (₽) — длинная история' },
   { code: 'gross_profit', label: 'Маржинальная прибыль (₽)' },
+  { code: 'orders', label: 'Заказы (шт) — только последние ~30 дней' },
+  { code: 'units', label: 'Единицы выкупа — только последние ~30 дней' },
 ]
 
 function isoDate(d: Date) { return d.toISOString().slice(0, 10) }
@@ -422,7 +422,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
   const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1)
   const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0)
 
-  const [metric, setMetric] = useState('orders')
+  const [metric, setMetric] = useState('revenue')
   const [analysisFrom, setAnalysisFrom] = useState(isoDate(monthAgo))
   const [analysisTo, setAnalysisTo] = useState(isoDate(today))
   const [forecastFrom, setForecastFrom] = useState(isoDate(nextMonthStart))

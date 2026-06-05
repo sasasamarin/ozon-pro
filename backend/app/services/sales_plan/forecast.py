@@ -98,7 +98,12 @@ async def fetch_history(
     cabinet_id: uuid.UUID | None = None,
     product_id: uuid.UUID | None = None,
 ) -> list[tuple[date, float]]:
-    """История метрики по дням для analysis-периода."""
+    """История метрики по дням для analysis-периода.
+
+    ВАЖНО: для metric=orders/units источник — таблица `orders`, которая
+    может содержать ограниченное историческое окно (sliding sync ~30 дней).
+    Метрики revenue/gross_profit — из `transactions`, обычно полная история.
+    """
     if metric not in _METRIC_SQL:
         raise ValueError(f"Unknown metric: {metric}")
 
@@ -248,8 +253,9 @@ def compute_forecast(
     note_parts = []
     if history_days < 30:
         note_parts.append(
-            f"⚠ Истории всего {history_days}д с продажами — мало для точного прогноза. "
-            f"Раздвинь период анализа на 60-90 дней или возьми другую метрику."
+            f"⚠ Истории всего {history_days}д с продажами. "
+            f"Для метрик «заказы»/«единицы» хранится короткое окно "
+            f"— используй «Выручка ₽» для длинной истории."
         )
     elif history_days < 90:
         note_parts.append(f"История {history_days}д (рекомендуется ≥90)")
