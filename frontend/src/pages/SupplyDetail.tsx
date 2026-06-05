@@ -67,6 +67,13 @@ export function SupplyDetailPage() {
     actual_departure_date: '',
     supply_date: isNew ? new Date().toISOString().slice(0, 10) : '',
     total_cost: '',
+    cabinet_id: '' as string | '',
+  })
+  // Кабинеты для селектора (отдельный запрос — store держит только выбранные id)
+  const { data: cabinets = [] } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ['cabinets-for-supplies'],
+    queryFn: async () => (await api.get('/ozon-accounts/')).data || [],
+    staleTime: 5 * 60_000,
   })
   const [items, setItems] = useState<SupplyItem[]>([])
   const [costs, setCosts] = useState<SupplyCost[]>([])
@@ -89,6 +96,7 @@ export function SupplyDetailPage() {
       actual_departure_date: existing.actual_departure_date || '',
       supply_date: existing.supply_date || '',
       total_cost: existing.total_cost?.toString() || '',
+      cabinet_id: existing.cabinet_id || '',
     })
     setItems(existing.items.map(i => ({
       id: i.id, product_id: i.product_id, offer_id: i.offer_id,
@@ -129,6 +137,7 @@ export function SupplyDetailPage() {
         dispatch_from: form.dispatch_from || null,
         actual_departure_date: form.actual_departure_date || null,
         supply_date: form.supply_date || null,
+        cabinet_id: form.cabinet_id || null,
         items: items.map(i => ({
           product_id: i.product_id, offer_id: i.offer_id,
           name: i.name, qty: i.qty,
@@ -146,29 +155,60 @@ export function SupplyDetailPage() {
         : await api.patch(`/supplies/${paramId}`, payload)
       const supplyId = r.data.id
 
+      // Загружаем файлы по одному. Если какой-то упадёт — другие сохраняем,
+      // оставляем упавшие в pendingFiles чтобы юзер мог повторить save.
+      const failed: typeof pendingFiles = []
+      const uploaded: typeof pendingFiles = []
       for (const pf of pendingFiles) {
-        const fd = new FormData()
-        fd.append('file', pf.file)
-        if (pf.scope === 'item' && pf.itemIdx !== null && r.data.items[pf.itemIdx]) {
-          fd.append('supply_item_id', r.data.items[pf.itemIdx].id)
+        try {
+          const fd = new FormData()
+          fd.append('file', pf.file)
+          if (pf.scope === 'item' && pf.itemIdx !== null && r.data.items[pf.itemIdx]) {
+            fd.append('supply_item_id', r.data.items[pf.itemIdx].id)
+          }
+          await api.post(`/supplies/${supplyId}/documents`, fd, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          })
+          uploaded.push(pf)
+        } catch (upErr: any) {
+          failed.push(pf)
+          console.error('Не удалось загрузить файл:', pf.file.name, upErr)
         }
-        await api.post(`/supplies/${supplyId}/documents`, fd, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        })
       }
+
       qc.invalidateQueries({ queryKey: ['supplies'] })
       if (isNew) {
+        if (failed.length > 0) {
+          // Сохраняем pending для повторной попытки на детальной странице
+          setPendingFiles(failed)
+          setError(`Поставка создана, но ${failed.length} файл(а) не загрузились. Нажми «Сохранить» ещё раз.`)
+        }
         navigate(`/procurement/supplies/${supplyId}`, { replace: true })
       } else {
         qc.invalidateQueries({ queryKey: ['supplies', paramId] })
-        setPendingFiles([])
+        setPendingFiles(failed)
+        if (failed.length > 0) {
+          setError(`Сохранено, но ${failed.length} файл(а) не загрузились (${uploaded.length} OK). Жми «Сохранить» снова.`)
+        }
       }
     } catch (e: any) {
-      setError(e?.response?.data?.detail || 'Ошибка сохранения')
+      setError(e?.response?.data?.detail || 'Ошибка сохранения. Данные и файлы НЕ потеряны — попробуй ещё раз.')
     } finally {
       setSaving(false)
     }
   }
+
+  // Защита от потери данных: warning перед уходом со страницы
+  // если есть pending files или незавершённое редактирование
+  useEffect(() => {
+    if (pendingFiles.length === 0) return
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    return () => window.removeEventListener('beforeunload', beforeUnload)
+  }, [pendingFiles.length])
 
   return (
     <div className="flex flex-col gap-5 max-w-5xl">
@@ -222,6 +262,17 @@ export function SupplyDetailPage() {
                  onChange={(v) => setForm({ ...form, total_cost: v })} placeholder="справочно" />
         </div>
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3 mt-3">
+          <div className="md:col-span-4">
+            <label className="text-[10px] text-fg-muted uppercase block mb-1">Кабинет Ozon</label>
+            <select value={form.cabinet_id}
+                    onChange={(e) => setForm({ ...form, cabinet_id: e.target.value })}
+                    className="w-full px-2 py-1.5 border border-fg-subtle/30 rounded text-sm bg-bg">
+              <option value="">— не указан —</option>
+              {cabinets.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
           <div className="md:col-span-3">
             <label className="text-[10px] text-fg-muted uppercase block mb-1">Тип перевозки</label>
             <select value={form.transport_type}
@@ -233,7 +284,7 @@ export function SupplyDetailPage() {
               ))}
             </select>
           </div>
-          <Field className="md:col-span-9" label="Маршрут" value={form.route}
+          <Field className="md:col-span-5" label="Маршрут" value={form.route}
                  onChange={(v) => setForm({ ...form, route: v })}
                  placeholder="например: Шэньчжэнь → Алматы → Москва" />
         </div>
