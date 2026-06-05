@@ -285,6 +285,41 @@ def compute_forecast(
 # Распределение по SKU
 # ============================================
 
+async def _detect_outlier_days(
+    db: AsyncSession,
+    *,
+    metric: str,
+    product_id: str,
+    df: date,
+    dt: date,
+) -> tuple[int, int]:
+    """Возвращает (outlier_units, normal_days_count) для SKU.
+
+    Outlier = день где значение > median × 10 (типичный bulk-импорт исторических
+    данных, когда тысячи заказов получили дату=сегодня вместо реальной).
+    """
+    from sqlalchemy import text as _sql
+    if metric not in ("orders", "units"):
+        return 0, 0
+    agg = "COUNT(DISTINCT o.id)::float" if metric == "orders" else "SUM(oi.quantity)::float"
+    rows = (await db.execute(_sql(f"""
+        SELECT o.created_at::date AS day, {agg} AS v
+        FROM order_items oi
+        JOIN orders o ON o.id = oi.order_id
+        WHERE oi.product_id = :pid AND o.status='delivered'
+          AND o.created_at >= :df AND o.created_at <= :dt
+        GROUP BY 1
+    """), {"pid": product_id, "df": df, "dt": dt})).all()
+    if len(rows) < 2:
+        return 0, len(rows)
+    vals = sorted([float(r.v or 0) for r in rows])
+    median = vals[len(vals) // 2]
+    threshold = max(median * 10, median + 50)  # whatever bigger
+    outliers = sum(int(r.v or 0) for r in rows if (r.v or 0) > threshold)
+    normal_days = sum(1 for r in rows if (r.v or 0) <= threshold)
+    return outliers, normal_days
+
+
 async def distribute_by_sku_bottomup(
     db: AsyncSession,
     *,
@@ -388,16 +423,34 @@ async def distribute_by_sku_bottomup(
     total_forecast = 0.0
     for r in rows:
         analysis_v = float(r.analysis_value or 0)
-        forecast_v = analysis_v * scale
+
+        # Outlier detection: для orders/units проверяем что аналиc-значение
+        # не накачано bulk-импортом исторических заказов в один день.
+        outlier = 0
+        normal_days = 0
+        clean_v = analysis_v
+        if metric in ("orders", "units"):
+            outlier, normal_days = await _detect_outlier_days(
+                db, metric=metric, product_id=r.product_id,
+                df=analysis_start, dt=analysis_end,
+            )
+            if outlier > 0:
+                # Вычитаем outlier из анализа — это нерепрезентативные данные
+                clean_v = max(0, analysis_v - outlier)
+
+        forecast_v = clean_v * scale
         total_forecast += forecast_v
         items.append({
             "product_id": r.product_id, "sku": r.offer_id,
             "name": r.name, "offer_id": r.offer_id,
             "cabinet_id": r.cabinet_id, "cabinet_name": r.cabinet_name,
             "analysis_value": round(analysis_v, 2),
+            "analysis_value_clean": round(clean_v, 2),
+            "outlier_excluded": round(outlier, 2),
+            "normal_days": normal_days,
             "forecast_value": round(forecast_v, 2),
-            "plan_value": round(forecast_v, 2),  # стартовое = прогноз
-            "share_pct": 0.0,  # пересчитаем ниже
+            "plan_value": round(forecast_v, 2),
+            "share_pct": 0.0,
         })
 
     # 3. Доли — от total_forecast

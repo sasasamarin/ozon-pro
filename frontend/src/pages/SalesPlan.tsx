@@ -42,7 +42,11 @@ interface BottomupItem {
   product_id: string | null; sku: string | null; name: string | null
   offer_id: string | null
   cabinet_id: string | null; cabinet_name: string | null
-  analysis_value: number; forecast_value: number
+  analysis_value: number
+  analysis_value_clean?: number | null
+  outlier_excluded?: number
+  normal_days?: number
+  forecast_value: number
   plan_value: number; share_pct: number
 }
 interface BottomupResp {
@@ -894,7 +898,21 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                       </td>
                       <td className="py-1 px-3 text-xs text-fg-muted">{it.cabinet_name || '—'}</td>
                       <td className="py-1 px-3 text-right tabular-nums text-xs">
-                        {it.analysis_value.toLocaleString('ru-RU')}
+                        <div className="flex items-center justify-end gap-1">
+                          {it.analysis_value.toLocaleString('ru-RU')}
+                          {!!it.outlier_excluded && it.outlier_excluded > 0 && (
+                            <span title={`Выброс ${Math.round(it.outlier_excluded)} (bulk-импорт) исключён из расчёта`}
+                                  className="text-amber-700 cursor-help">⚠</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-1 px-3 text-right tabular-nums text-xs text-fg-muted">
+                        {it.normal_days && it.normal_days > 0 ? (
+                          // Среднее в месяц = clean_value / normal_days × 30
+                          Math.round(
+                            ((it.analysis_value_clean ?? it.analysis_value) / it.normal_days) * 30
+                          ).toLocaleString('ru-RU')
+                        ) : '—'}
                       </td>
                       <td className="py-1 px-3 text-right tabular-nums text-xs text-indigo-700">
                         {it.forecast_value.toLocaleString('ru-RU')}
@@ -911,7 +929,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                   )
                 })}
                 {items.length === 0 && !loadBottomup.isPending && (
-                  <tr><td colSpan={7} className="py-6 text-center text-fg-muted">
+                  <tr><td colSpan={8} className="py-6 text-center text-fg-muted">
                     Вернись на Шаг 1 и нажми «Загрузить SKU».
                   </td></tr>
                 )}
@@ -922,6 +940,7 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                   <td className="py-2 px-3 text-right tabular-nums">
                     {items.reduce((s, i) => s + i.analysis_value, 0).toLocaleString('ru-RU')}
                   </td>
+                  <td className="py-2 px-3"></td>
                   <td className="py-2 px-3 text-right tabular-nums text-indigo-700">
                     {items.reduce((s, i) => s + i.forecast_value, 0).toLocaleString('ru-RU')}
                   </td>

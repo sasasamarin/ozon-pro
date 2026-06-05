@@ -117,6 +117,9 @@ class BottomupItem(BaseModel):
     cabinet_id: str | None
     cabinet_name: str | None
     analysis_value: float
+    analysis_value_clean: float | None = None
+    outlier_excluded: float = 0
+    normal_days: int = 0
     forecast_value: float
     plan_value: float
     share_pct: float
