@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { logout, useCurrentUser } from '@/lib/auth'
+import { logout, useCurrentUser, roleLabel } from '@/lib/auth'
 import { useCabinetStore, type OzonAccountSummary } from '@/stores/cabinet'
 import { Logo } from './ui/Logo'
 import { ReconcileBadge } from './ReconcileBadge'
@@ -276,6 +276,11 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
                 {user?.company_name && (
                   <p className="text-[11px] text-fg-subtle truncate mt-0.5">
                     {user.company_name}
+                  </p>
+                )}
+                {user?.role && (
+                  <p className="text-[11px] text-blue-700 mt-0.5">
+                    {roleLabel(user.role)}
                   </p>
                 )}
               </div>

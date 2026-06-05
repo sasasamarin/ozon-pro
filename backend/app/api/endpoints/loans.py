@@ -213,6 +213,7 @@ async def list_loans(
 async def create_loan(
     payload: LoanCreate,
     current_user: User = Depends(get_current_user),
+    _role=Depends(require_finance),
     db: AsyncSession = Depends(get_db),
 ) -> LoanRow:
     if payload.cabinet_id:
@@ -289,6 +290,7 @@ async def create_loan(
 async def delete_loan(
     loan_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
+    _role=Depends(require_finance),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     loan = await _get_loan_owned(db, loan_id, current_user.company_id)
@@ -327,6 +329,7 @@ async def mark_paid(
     paid_at: date_cls | None = Query(None,
         description="Если не указано — берём pay_date из графика"),
     current_user: User = Depends(get_current_user),
+    _role=Depends(require_finance),
     db: AsyncSession = Depends(get_db),
 ) -> PaymentRow:
     await _get_loan_owned(db, loan_id, current_user.company_id)
@@ -356,6 +359,7 @@ async def add_manual_payment(
     loan_id: uuid.UUID,
     payload: ManualPayment,
     current_user: User = Depends(get_current_user),
+    _role=Depends(require_finance),
     db: AsyncSession = Depends(get_db),
 ) -> PaymentRow:
     loan = await _get_loan_owned(db, loan_id, current_user.company_id)

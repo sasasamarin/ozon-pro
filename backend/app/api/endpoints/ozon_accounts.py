@@ -87,6 +87,7 @@ async def list_ozon_accounts(
 async def create_ozon_account(
     payload: OzonAccountCreate,
     current_user: User = Depends(get_current_user),
+    _role=Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> OzonAccountResponse:
     """
@@ -298,6 +299,7 @@ async def test_performance_credentials(
 async def delete_ozon_account(
     account_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
+    _role=Depends(require_owner),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Soft delete магазина (данные остаются)."""

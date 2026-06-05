@@ -184,9 +184,18 @@ class MeUpdateRequest(BaseModel):
 
 
 async def _build_me_response(user: User, db: AsyncSession) -> MeResponse:
-    role = (
-        await db.execute(select(Role).where(Role.id == user.role_id))
-    ).scalar_one_or_none()
+    # Роль из CompanyMember (новый RBAC). Если строки нет — юзер сам создал
+    # компанию, считаем OWNER (legacy совместимость).
+    from app.models.team import CompanyMember, MemberRole, MemberStatus
+    cm = (await db.execute(
+        select(CompanyMember).where(
+            CompanyMember.user_id == user.id,
+            CompanyMember.company_id == user.company_id,
+            CompanyMember.status == MemberStatus.ACTIVE.value,
+        )
+    )).scalar_one_or_none()
+    role_name = cm.role if cm else MemberRole.OWNER.value
+
     company = (
         await db.execute(select(Company).where(Company.id == user.company_id))
     ).scalar_one_or_none()
@@ -196,7 +205,7 @@ async def _build_me_response(user: User, db: AsyncSession) -> MeResponse:
         full_name=user.full_name,
         company_id=str(user.company_id),
         company_name=company.name if company else None,
-        role=role.name if role else "viewer",
+        role=role_name,
         is_admin=user.is_admin,
     )
 

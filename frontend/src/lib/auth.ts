@@ -72,3 +72,47 @@ export function useUpdateProfile() {
     return res.data as CurrentUser
   }
 }
+
+
+// === RBAC helpers (синхронизированы с backend/app/api/deps_rbac.py) ===
+
+export const ROLE_OWNER = 'owner'
+export const ROLE_ADMIN = 'admin'
+export const ROLE_MANAGER = 'manager'
+export const ROLE_ACCOUNTANT = 'accountant'
+export const ROLE_VIEWER = 'viewer'
+
+export function canManageTeam(role?: string): boolean {
+  return role === ROLE_OWNER || role === ROLE_ADMIN
+}
+
+export function canManageCabinets(role?: string): boolean {
+  return role === ROLE_OWNER || role === ROLE_ADMIN
+}
+
+export function canDeleteCabinet(role?: string): boolean {
+  return role === ROLE_OWNER
+}
+
+export function canManageFinance(role?: string): boolean {
+  return role === ROLE_OWNER || role === ROLE_ADMIN || role === ROLE_ACCOUNTANT
+}
+
+export function canManageOperations(role?: string): boolean {
+  return role === ROLE_OWNER || role === ROLE_ADMIN || role === ROLE_MANAGER
+}
+
+export function isReadOnly(role?: string): boolean {
+  return role === ROLE_VIEWER
+}
+
+export function roleLabel(role?: string): string {
+  switch (role) {
+    case ROLE_OWNER: return 'Владелец'
+    case ROLE_ADMIN: return 'Администратор'
+    case ROLE_MANAGER: return 'Менеджер'
+    case ROLE_ACCOUNTANT: return 'Бухгалтер'
+    case ROLE_VIEWER: return 'Наблюдатель'
+    default: return role || '—'
+  }
+}

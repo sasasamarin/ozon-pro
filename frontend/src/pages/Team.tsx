@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useCurrentUser, canManageTeam, roleLabel } from '@/lib/auth'
 
 interface MemberRow {
   id: string
@@ -45,6 +46,9 @@ export function Team() {
     queryFn: async () => (await api.get('/team/invitations')).data,
   })
 
+  const { data: currentUser } = useCurrentUser()
+  const canInvite = canManageTeam(currentUser?.role)
+
   const [email, setEmail] = useState('')
   const [role, setRole] = useState('manager')
 
@@ -70,29 +74,36 @@ export function Team() {
         </p>
       </div>
 
-      <Card className="p-5">
-        <h3 className="text-base font-semibold text-fg mb-3">Пригласить участника</h3>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">Email</label>
-            <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@company.ru" />
+      {canInvite ? (
+        <Card className="p-5">
+          <h3 className="text-base font-semibold text-fg mb-3">Пригласить участника</h3>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">Email</label>
+              <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@company.ru" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">Роль</label>
+              <select value={role} onChange={(e) => setRole(e.target.value)}
+                className="h-9 px-3 rounded-md border border-border bg-surface text-sm">
+                <option value="admin">Админ</option>
+                <option value="manager">Менеджер</option>
+                <option value="accountant">Бухгалтер</option>
+                <option value="viewer">Только просмотр</option>
+              </select>
+            </div>
+            <Button onClick={() => invite.mutate()} disabled={invite.isPending || !email}>
+              {invite.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              Пригласить
+            </Button>
           </div>
-          <div>
-            <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">Роль</label>
-            <select value={role} onChange={(e) => setRole(e.target.value)}
-              className="h-9 px-3 rounded-md border border-border bg-surface text-sm">
-              <option value="admin">Админ</option>
-              <option value="manager">Менеджер</option>
-              <option value="accountant">Бухгалтер</option>
-              <option value="viewer">Только просмотр</option>
-            </select>
-          </div>
-          <Button onClick={() => invite.mutate()} disabled={invite.isPending || !email}>
-            {invite.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-            Пригласить
-          </Button>
-        </div>
-      </Card>
+        </Card>
+      ) : (
+        <Card className="p-4 bg-amber-50/50 border-amber-200 text-sm text-amber-800">
+          У вашей роли (<b>{roleLabel(currentUser?.role)}</b>) нет прав приглашать участников.
+          Попросите владельца или администратора компании.
+        </Card>
+      )}
 
       <Card className="overflow-hidden">
         <div className="px-6 py-4 border-b border-border-subtle">

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_rbac import get_current_role, require_admin
 from app.core.config import settings
 from app.core.logging import log
 from app.core.security import create_access_token, create_refresh_token, hash_password
@@ -111,6 +112,7 @@ async def list_invitations(
 async def create_invitation(
     payload: InviteCreate,
     current_user: User = Depends(get_current_user),
+    _role=Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> InvitationRow:
     valid_roles = {r.value for r in MemberRole if r != MemberRole.OWNER}
@@ -292,6 +294,7 @@ async def accept_invitation(
 async def revoke_invitation(
     invitation_id: str,
     current_user: User = Depends(get_current_user),
+    _role=Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     try:
