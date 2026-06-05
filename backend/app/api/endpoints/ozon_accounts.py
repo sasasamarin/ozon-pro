@@ -337,7 +337,6 @@ async def sync_ozon_account(
     result = await db.execute(
         select(OzonAccount).where(
             OzonAccount.id == account_id,
-            OzonAccount.company_id == current_user.company_id,
             OzonAccount.deleted_at.is_(None),
         )
     )
