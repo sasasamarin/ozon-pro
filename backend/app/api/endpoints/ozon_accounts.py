@@ -343,9 +343,8 @@ async def sync_ozon_account(
     if not account:
         raise HTTPException(status_code=404, detail="Магазин не найден")
 
-    # TODO: запустить celery задачу sync_full(account_id)
-    # from app.workers.sync import sync_full_account
-    # task = sync_full_account.delay(str(account_id))
+    from app.workers.celery_app import celery_app
+    celery_app.send_task("app.workers.tasks.sync_products.sync_full_account", args=[str(account_id)])
 
     log.info("sync_requested", account_id=str(account_id))
 

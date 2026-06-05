@@ -124,7 +124,7 @@ async def _orchestrate(
         log.info(
             "transactions_backfill_done",
             account=str(acc.id),
-            **per_acc,
+            **res,
         )
 
     log.info("transactions_backfill_summary", **{k: v for k, v in summary.items() if k != "by_account"})

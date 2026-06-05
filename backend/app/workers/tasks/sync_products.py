@@ -774,3 +774,30 @@ def _to_decimal(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+@celery_app.task(name="app.workers.tasks.sync_products.sync_full_account")
+def sync_full_account(account_id: str) -> dict:
+    """Запуск полной последовательной цепочки синхронизации для одного кабинета."""
+    from app.workers.celery_app import celery_app
+
+    log.info("sync_full_account_started", account_id=account_id)
+
+    # Отправляем в очередь все задачи по очереди с фильтром по нашему кабинету
+    # 1. Сначала товары (наполняем каталог)
+    celery_app.send_task("app.workers.tasks.sync_products.sync_all_products", kwargs={"account_id": account_id})
+    # 2. Текущие остатки
+    celery_app.send_task("app.workers.tasks.sync_products.sync_all_stocks", kwargs={"account_id": account_id})
+    # 3. Текущие цены и комиссии
+    celery_app.send_task("app.workers.tasks.sync_products.sync_all_prices", kwargs={"account_id": account_id})
+    # 4. Заказы за последние 30 дней (для первого наполнения)
+    celery_app.send_task("app.workers.tasks.sync_orders.sync_all_orders",
+                         kwargs={"account_id": account_id, "days_window": 30})
+    # 5. Финансовые транзакции за последние 30 дней
+    celery_app.send_task("app.workers.tasks.sync_finance.sync_all_transactions",
+                         kwargs={"account_id": account_id, "days_window": 30})
+    # 6. Аналитику воронки за последние 30 дней
+    celery_app.send_task("app.workers.tasks.sync_analytics.sync_all_analytics",
+                         kwargs={"account_id": account_id, "days_window": 30})
+
+    return {"status": "success", "message": "Все задачи синхронизации успешно отправлены в очередь"}
