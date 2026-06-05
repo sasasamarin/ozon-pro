@@ -432,19 +432,22 @@ async def distribute_by_sku_bottomup(
 
     items: list[dict] = []
     total_forecast = 0.0
+    analysis_days_period = (analysis_end - analysis_start).days + 1
     for r in rows:
         analysis_v = float(r.analysis_value or 0)
 
         # Outlier detection: для orders/units проверяем что аналиc-значение
         # не накачано bulk-импортом исторических заказов в один день.
         outlier = 0
-        normal_days = 0
+        normal_days = analysis_days_period  # default — весь период считаем "нормальным"
         clean_v = analysis_v
         if metric in ("orders", "units"):
-            outlier, normal_days = await _detect_outlier_days(
+            outlier, nd = await _detect_outlier_days(
                 db, metric=metric, product_id=r.product_id,
                 df=analysis_start, dt=analysis_end,
             )
+            if nd > 0:
+                normal_days = nd
             if outlier > 0:
                 # Вычитаем outlier из анализа — это нерепрезентативные данные
                 clean_v = max(0, analysis_v - outlier)

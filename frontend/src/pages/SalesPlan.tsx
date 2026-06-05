@@ -944,6 +944,22 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
             </Card>
           )}
 
+          {/* Пояснение формулы */}
+          {items.length > 0 && (
+            <div className="text-xs text-fg-muted bg-bg-subtle/30 rounded p-2 border border-border-subtle/40">
+              <b className="text-fg">Как считается «Прогноз»:</b>{' '}
+              анализ за{' '}
+              <b className="text-fg">
+                {Math.round((new Date(analysisTo).getTime() - new Date(analysisFrom).getTime()) / 86400000) + 1}д
+              </b>
+              {' '}× ({Math.round((new Date(forecastTo).getTime() - new Date(forecastFrom).getTime()) / 86400000) + 1}д прогноза /{' '}
+              {Math.round((new Date(analysisTo).getTime() - new Date(analysisFrom).getTime()) / 86400000) + 1}д анализа).{' '}
+              <span className="text-fg-subtle">
+                То есть прогноз = средний темп твоих продаж × дни прогнозируемого периода.
+              </span>
+            </div>
+          )}
+
           {/* Таблица SKU */}
           <div className="overflow-x-auto max-h-[60vh]">
             <table className="w-full text-sm">
@@ -953,9 +969,22 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                   <th className="py-2 px-3 text-left">Артикул</th>
                   <th className="py-2 px-3 text-left">Товар</th>
                   <th className="py-2 px-3 text-left">Кабинет</th>
-                  <th className="py-2 px-3 text-right">Анализ</th>
-                  <th className="py-2 px-3 text-right">Прогноз</th>
-                  <th className="py-2 px-3 text-right">План</th>
+                  <th className="py-2 px-3 text-right"
+                      title="Сумма за весь период анализа (без выбросов)">
+                    Анализ
+                  </th>
+                  <th className="py-2 px-3 text-right"
+                      title="Очищенный средний темп в месяц — для sanity-check">
+                    ≈ср/мес
+                  </th>
+                  <th className="py-2 px-3 text-right"
+                      title="Прогноз на forecast-период = анализ × (forecast_days / analysis_days)">
+                    Прогноз
+                  </th>
+                  <th className="py-2 px-3 text-right"
+                      title="Что планируешь сделать. Стартовое значение = прогноз, можешь править.">
+                    План
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -987,12 +1016,19 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
                         </div>
                       </td>
                       <td className="py-1 px-3 text-right tabular-nums text-xs text-fg-muted">
-                        {it.normal_days && it.normal_days > 0 ? (
-                          // Среднее в месяц = clean_value / normal_days × 30
-                          Math.round(
-                            ((it.analysis_value_clean ?? it.analysis_value) / it.normal_days) * 30
-                          ).toLocaleString('ru-RU')
-                        ) : '—'}
+                        {(() => {
+                          // ≈ср/мес: для orders/units берём normal_days после outlier;
+                          // для revenue/gross_profit — analysis_value / analysis_days × 30.
+                          const analysisDays = Math.round(
+                            (new Date(analysisTo).getTime() - new Date(analysisFrom).getTime()) / 86400000
+                          ) + 1
+                          const cleanValue = it.analysis_value_clean ?? it.analysis_value
+                          const days = (it.normal_days && it.normal_days > 0)
+                            ? it.normal_days
+                            : analysisDays
+                          if (days <= 0) return '—'
+                          return Math.round(cleanValue / days * 30).toLocaleString('ru-RU')
+                        })()}
                       </td>
                       <td className="py-1 px-3 text-right tabular-nums text-xs text-indigo-700">
                         {it.forecast_value.toLocaleString('ru-RU')}
