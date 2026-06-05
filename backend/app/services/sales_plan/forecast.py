@@ -117,12 +117,17 @@ async def fetch_history(
         extra = "AND oa.id = :cab"
         params["cab"] = str(cabinet_id)
     if product_id:
-        # orders/units → через order_items
+        # transactions нет product_id — для revenue/gross_profit per-SKU
+        # фильтрация через posting_number ↔ order ↔ order_items
         if metric in ("orders", "units"):
             extra += " AND EXISTS(SELECT 1 FROM order_items oi2 WHERE oi2.order_id=o.id AND oi2.product_id=:pid)"
         else:
-            # revenue/gross_profit — попытка через product (если есть в транзакции — поле product_id)
-            extra += " AND t.product_id = :pid"
+            extra += (
+                " AND t.posting_number IN ("
+                "  SELECT DISTINCT o2.posting_number FROM orders o2"
+                "  JOIN order_items oi3 ON oi3.order_id=o2.id"
+                "  WHERE oi3.product_id=:pid AND o2.posting_number IS NOT NULL)"
+            )
         params["pid"] = str(product_id)
 
     sql = _METRIC_SQL[metric].format(extra=extra)
@@ -353,19 +358,22 @@ async def distribute_by_sku_bottomup(
         params["pids"] = [str(p) for p in product_ids]
 
     if metric == "revenue":
+        # transactions нет product_id — считаем revenue per-SKU через
+        # order_items × price × quantity. Для delivered orders.
         sql = f"""
             SELECT p.id::text AS product_id, p.offer_id, p.name,
                    oa.id::text AS cabinet_id, oa.name AS cabinet_name,
-                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS analysis_value
-            FROM transactions t
-            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
-            JOIN products p ON p.id = t.product_id
+                   COALESCE(SUM(oi.price * oi.quantity), 0)::float AS analysis_value
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
-              AND t.operation_date >= :df AND t.operation_date <= :dt
-              AND t.operation_type='OperationAgentDeliveredToCustomer'
+              AND o.status = 'delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
               {extra_oa} {extra_p}
             GROUP BY p.id, p.offer_id, p.name, oa.id, oa.name
-            HAVING SUM(t.accruals_for_sale) > 0
+            HAVING SUM(oi.price * oi.quantity) > 0
             ORDER BY analysis_value DESC
             LIMIT 500
         """
@@ -389,18 +397,21 @@ async def distribute_by_sku_bottomup(
             LIMIT 500
         """
     else:
+        # gross_profit fallback — упрощённо через price × quantity без расходов
         sql = f"""
             SELECT p.id::text AS product_id, p.offer_id, p.name,
                    oa.id::text AS cabinet_id, oa.name AS cabinet_name,
-                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS analysis_value
-            FROM transactions t
-            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
-            JOIN products p ON p.id = t.product_id
+                   COALESCE(SUM(oi.price * oi.quantity), 0)::float AS analysis_value
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
-              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND o.status = 'delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
               {extra_oa} {extra_p}
             GROUP BY p.id, p.offer_id, p.name, oa.id, oa.name
-            HAVING SUM(t.accruals_for_sale) > 0
+            HAVING SUM(oi.price * oi.quantity) > 0
             ORDER BY analysis_value DESC
             LIMIT 500
         """
@@ -486,20 +497,22 @@ async def distribute_by_sku(
         extra = "AND oa.id = :cab"
         params["cab"] = str(cabinet_id)
 
-    # SQL зависит от метрики
+    # SQL зависит от метрики. transactions нет product_id — используем
+    # order_items.price × quantity для per-SKU revenue.
     if metric == "revenue":
         sql = f"""
             SELECT p.id::text AS product_id, p.offer_id, p.name,
-                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS analysis_value
-            FROM transactions t
-            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
-            JOIN products p ON p.id = t.product_id
+                   COALESCE(SUM(oi.price * oi.quantity), 0)::float AS analysis_value
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
-              AND t.operation_date >= :df AND t.operation_date <= :dt
-              AND t.operation_type='OperationAgentDeliveredToCustomer'
+              AND o.status = 'delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
               {extra}
             GROUP BY p.id, p.offer_id, p.name
-            HAVING SUM(t.accruals_for_sale) > 0
+            HAVING SUM(oi.price * oi.quantity) > 0
             ORDER BY analysis_value DESC
             LIMIT 200
         """
@@ -522,18 +535,20 @@ async def distribute_by_sku(
             LIMIT 200
         """
     else:
-        # fallback — proxy через revenue
+        # fallback — proxy через price × qty
         sql = f"""
             SELECT p.id::text AS product_id, p.offer_id, p.name,
-                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS analysis_value
-            FROM transactions t
-            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
-            JOIN products p ON p.id = t.product_id
+                   COALESCE(SUM(oi.price * oi.quantity), 0)::float AS analysis_value
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            JOIN products p ON p.id = oi.product_id
             WHERE oa.company_id = :cid
-              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND o.status = 'delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
               {extra}
             GROUP BY p.id, p.offer_id, p.name
-            HAVING SUM(t.accruals_for_sale) > 0
+            HAVING SUM(oi.price * oi.quantity) > 0
             ORDER BY analysis_value DESC
             LIMIT 200
         """

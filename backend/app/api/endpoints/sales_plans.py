@@ -1362,19 +1362,18 @@ async def fact_overview(
     )).scalars().all()
     items_by_pid = {str(it.product_id): it for it in items if it.product_id}
 
-    # SKU-факт за период плана
+    # SKU-факт за период плана. transactions нет product_id → через order_items.
     if plan.metric_code == "revenue":
         sql = f"""
-            SELECT t.product_id::text AS pid,
-                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS v
-            FROM transactions t
-            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
-            WHERE oa.company_id = :cid
-              AND t.operation_date >= :df AND t.operation_date <= :dt
-              AND t.operation_type='OperationAgentDeliveredToCustomer'
-              AND t.product_id IS NOT NULL
+            SELECT oi.product_id::text AS pid,
+                   COALESCE(SUM(oi.price * oi.quantity), 0)::float AS v
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.status='delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
               {extra}
-            GROUP BY t.product_id
+            GROUP BY oi.product_id
         """
     elif plan.metric_code in ("orders", "units"):
         agg = "COUNT(DISTINCT o.id)::float" if plan.metric_code == "orders" else "SUM(oi.quantity)::float"
@@ -1390,15 +1389,15 @@ async def fact_overview(
         """
     else:
         sql = f"""
-            SELECT t.product_id::text AS pid,
-                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS v
-            FROM transactions t
-            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
-            WHERE oa.company_id = :cid
-              AND t.operation_date >= :df AND t.operation_date <= :dt
-              AND t.product_id IS NOT NULL
+            SELECT oi.product_id::text AS pid,
+                   COALESCE(SUM(oi.price * oi.quantity), 0)::float AS v
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            WHERE oa.company_id = :cid AND o.status='delivered'
+              AND o.created_at >= :df AND o.created_at <= :dt
               {extra}
-            GROUP BY t.product_id
+            GROUP BY oi.product_id
         """
     fact_rows = (await db.execute(_sql(sql), params)).all()
     fact_by_pid = {r.pid: float(r.v or 0) for r in fact_rows}
