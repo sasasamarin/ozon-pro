@@ -408,8 +408,10 @@ function WizardTab({ onSaved }: { onSaved: (planId: string) => void }) {
 
   const today = new Date()
   const monthAgo = new Date(today.getTime() - 90 * 86400 * 1000)
-  const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+  // ИСПРАВЛЕНО: `day 0` следующего месяца = последний день ТЕКУЩЕГО.
+  // Правильный «последний день следующего месяца» = day 0 от месяца+2.
   const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1)
+  const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0)
 
   const [metric, setMetric] = useState('orders')
   const [analysisFrom, setAnalysisFrom] = useState(isoDate(monthAgo))

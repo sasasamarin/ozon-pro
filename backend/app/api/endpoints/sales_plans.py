@@ -327,6 +327,12 @@ async def bottomup_distribute(
 
     Юзер потом правит вручную, авто-сумма обновляется на фронте.
     """
+    # Защита от инвертированных периодов
+    if payload.analysis_end < payload.analysis_start:
+        raise HTTPException(400, "analysis_end раньше analysis_start")
+    if payload.forecast_end < payload.forecast_start:
+        raise HTTPException(400, "forecast_end раньше forecast_start")
+
     requested = [uuid.UUID(c) for c in payload.cabinet_ids] if payload.cabinet_ids else None
     cabs = await filter_cabinet_ids(db, current_user, requested)
     if cabs is not None and len(cabs) == 0:

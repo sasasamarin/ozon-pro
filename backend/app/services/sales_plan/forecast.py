@@ -346,7 +346,11 @@ async def distribute_by_sku_bottomup(
     #    Простая модель: line projection — analysis_value × (forecast_days / analysis_days)
     analysis_days = (analysis_end - analysis_start).days + 1
     forecast_days = (forecast_end - forecast_start).days + 1
-    scale = forecast_days / analysis_days if analysis_days > 0 else 1.0
+    if analysis_days <= 0:
+        raise ValueError(f"analysis_end ({analysis_end}) меньше analysis_start ({analysis_start})")
+    if forecast_days <= 0:
+        raise ValueError(f"forecast_end ({forecast_end}) меньше forecast_start ({forecast_start})")
+    scale = forecast_days / analysis_days
 
     items: list[dict] = []
     total_forecast = 0.0
