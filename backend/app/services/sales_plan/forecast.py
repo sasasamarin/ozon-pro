@@ -255,6 +255,125 @@ def compute_forecast(
 # Распределение по SKU
 # ============================================
 
+async def distribute_by_sku_bottomup(
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    metric: str,
+    analysis_start: date,
+    analysis_end: date,
+    forecast_start: date,
+    forecast_end: date,
+    cabinet_ids: list[uuid.UUID] | None = None,
+    product_ids: list[uuid.UUID] | None = None,
+) -> list[dict]:
+    """
+    Bottom-up: для каждого выбранного SKU считаем СВОЙ прогноз на forecast_period
+    как стартовое значение plan_value. Юзер потом может править вручную.
+
+    Возвращает: [{product_id, sku, name, offer_id, cabinet_id, cabinet_name,
+                  analysis_value, forecast_value (= стартовое plan_value), share_pct}]
+    """
+    # 1. Берём список SKU из истории с метриками за analysis-период
+    extra_oa = ""
+    extra_p = ""
+    params: dict = {
+        "cid": str(company_id), "df": analysis_start, "dt": analysis_end,
+    }
+    if cabinet_ids:
+        extra_oa = "AND oa.id = ANY(:cabs)"
+        params["cabs"] = [str(c) for c in cabinet_ids]
+    if product_ids:
+        extra_p = "AND p.id = ANY(:pids)"
+        params["pids"] = [str(p) for p in product_ids]
+
+    if metric == "revenue":
+        sql = f"""
+            SELECT p.id::text AS product_id, p.offer_id, p.name,
+                   oa.id::text AS cabinet_id, oa.name AS cabinet_name,
+                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS analysis_value
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            JOIN products p ON p.id = t.product_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND t.operation_type='OperationAgentDeliveredToCustomer'
+              {extra_oa} {extra_p}
+            GROUP BY p.id, p.offer_id, p.name, oa.id, oa.name
+            HAVING SUM(t.accruals_for_sale) > 0
+            ORDER BY analysis_value DESC
+            LIMIT 500
+        """
+    elif metric in ("orders", "units"):
+        agg = "COUNT(DISTINCT o.id)::float" if metric == "orders" else "SUM(oi.quantity)::float"
+        sql = f"""
+            SELECT p.id::text AS product_id, p.offer_id, p.name,
+                   oa.id::text AS cabinet_id, oa.name AS cabinet_name,
+                   {agg} AS analysis_value
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN ozon_accounts oa ON oa.id = o.ozon_account_id
+            JOIN products p ON p.id = oi.product_id
+            WHERE oa.company_id = :cid
+              AND o.created_at >= :df AND o.created_at <= :dt
+              AND o.status = 'delivered'
+              {extra_oa} {extra_p}
+            GROUP BY p.id, p.offer_id, p.name, oa.id, oa.name
+            HAVING {agg} > 0
+            ORDER BY analysis_value DESC
+            LIMIT 500
+        """
+    else:
+        sql = f"""
+            SELECT p.id::text AS product_id, p.offer_id, p.name,
+                   oa.id::text AS cabinet_id, oa.name AS cabinet_name,
+                   COALESCE(SUM(t.accruals_for_sale), 0)::float AS analysis_value
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            JOIN products p ON p.id = t.product_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              {extra_oa} {extra_p}
+            GROUP BY p.id, p.offer_id, p.name, oa.id, oa.name
+            HAVING SUM(t.accruals_for_sale) > 0
+            ORDER BY analysis_value DESC
+            LIMIT 500
+        """
+
+    rows = (await db.execute(text(sql), params)).all()
+
+    # 2. Для каждого SKU считаем прогноз на forecast_period
+    #    Простая модель: line projection — analysis_value × (forecast_days / analysis_days)
+    analysis_days = (analysis_end - analysis_start).days + 1
+    forecast_days = (forecast_end - forecast_start).days + 1
+    scale = forecast_days / analysis_days if analysis_days > 0 else 1.0
+
+    items: list[dict] = []
+    total_forecast = 0.0
+    for r in rows:
+        analysis_v = float(r.analysis_value or 0)
+        forecast_v = analysis_v * scale
+        total_forecast += forecast_v
+        items.append({
+            "product_id": r.product_id, "sku": r.offer_id,
+            "name": r.name, "offer_id": r.offer_id,
+            "cabinet_id": r.cabinet_id, "cabinet_name": r.cabinet_name,
+            "analysis_value": round(analysis_v, 2),
+            "forecast_value": round(forecast_v, 2),
+            "plan_value": round(forecast_v, 2),  # стартовое = прогноз
+            "share_pct": 0.0,  # пересчитаем ниже
+        })
+
+    # 3. Доли — от total_forecast
+    for it in items:
+        it["share_pct"] = round(
+            (it["forecast_value"] / total_forecast * 100) if total_forecast > 0 else 0,
+            4,
+        )
+
+    return items
+
+
 async def distribute_by_sku(
     db: AsyncSession,
     *,

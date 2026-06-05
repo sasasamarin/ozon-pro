@@ -40,7 +40,7 @@ from app.models.sales_plan import PlanKPI, SalesPlan, SalesPlanDaily, SalesPlanI
 from app.services.sales_plan.cascade import simulate_plan_change
 from app.services.sales_plan.fact import compute_fact
 from app.services.sales_plan.forecast import (
-    compute_forecast, distribute_by_sku, fetch_history,
+    compute_forecast, distribute_by_sku, distribute_by_sku_bottomup, fetch_history,
 )
 
 
@@ -87,6 +87,17 @@ class DistributeRequest(BaseModel):
     cabinet_id: str | None = None
 
 
+class BottomupRequest(BaseModel):
+    """Bottom-up: выбираем кабинеты+товары, получаем стартовый прогноз per-SKU."""
+    metric: str
+    analysis_start: date
+    analysis_end: date
+    forecast_start: date
+    forecast_end: date
+    cabinet_ids: list[str] = []
+    product_ids: list[str] = []
+
+
 class DistributeItem(BaseModel):
     product_id: str | None
     sku: str | None
@@ -95,6 +106,26 @@ class DistributeItem(BaseModel):
     analysis_value: float
     share_pct: float
     plan_value: float
+
+
+class BottomupItem(BaseModel):
+    product_id: str | None
+    sku: str | None
+    name: str | None
+    offer_id: str | None
+    cabinet_id: str | None
+    cabinet_name: str | None
+    analysis_value: float
+    forecast_value: float
+    plan_value: float
+    share_pct: float
+
+
+class BottomupResponse(BaseModel):
+    items: list[BottomupItem]
+    total_analysis: float
+    total_forecast: float
+    by_cabinet: list[dict]
 
 
 class PlanCreate(BaseModel):
@@ -257,6 +288,55 @@ async def forecast_plan(
         reliability=result.reliability,
         reliability_pct=result.reliability_pct,
         note=result.note,
+    )
+
+
+@router.post("/bottomup", response_model=BottomupResponse)
+async def bottomup_distribute(
+    payload: BottomupRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BottomupResponse:
+    """Bottom-up: per-SKU прогноз → стартовые plan_value.
+
+    Юзер потом правит вручную, авто-сумма обновляется на фронте.
+    """
+    cabs = [uuid.UUID(c) for c in payload.cabinet_ids] if payload.cabinet_ids else None
+    pids = [uuid.UUID(p) for p in payload.product_ids] if payload.product_ids else None
+    items = await distribute_by_sku_bottomup(
+        db, company_id=current_user.company_id, metric=payload.metric,
+        analysis_start=payload.analysis_start, analysis_end=payload.analysis_end,
+        forecast_start=payload.forecast_start, forecast_end=payload.forecast_end,
+        cabinet_ids=cabs, product_ids=pids,
+    )
+
+    # Группировка по кабинету
+    by_cab: dict[str, dict] = {}
+    for it in items:
+        cid = it["cabinet_id"] or "—"
+        if cid not in by_cab:
+            by_cab[cid] = {
+                "cabinet_id": it["cabinet_id"],
+                "cabinet_name": it["cabinet_name"] or "(без кабинета)",
+                "analysis_sum": 0, "forecast_sum": 0, "plan_sum": 0,
+                "skus_count": 0,
+            }
+        by_cab[cid]["analysis_sum"] += it["analysis_value"]
+        by_cab[cid]["forecast_sum"] += it["forecast_value"]
+        by_cab[cid]["plan_sum"] += it["plan_value"]
+        by_cab[cid]["skus_count"] += 1
+    by_cabinet = [
+        {**v, "analysis_sum": round(v["analysis_sum"], 2),
+         "forecast_sum": round(v["forecast_sum"], 2),
+         "plan_sum": round(v["plan_sum"], 2)}
+        for v in by_cab.values()
+    ]
+
+    return BottomupResponse(
+        items=[BottomupItem(**i) for i in items],
+        total_analysis=round(sum(i["analysis_value"] for i in items), 2),
+        total_forecast=round(sum(i["forecast_value"] for i in items), 2),
+        by_cabinet=by_cabinet,
     )
 
 
@@ -474,6 +554,162 @@ async def rebalance(
     return await get_plan(plan_id=str(pid), current_user=current_user, db=db)
 
 
+@router.get("/{plan_id}/weeks")
+async def items_by_weeks(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Сетка SKU × недели для шага 3 визарда.
+
+    Возвращает:
+      weeks: список ISO-недель [{week_start, week_end, label}]
+      rows: [{item_id, sku, name, plan_value, weeks: [{week_start, value}]}]
+    """
+    from datetime import timedelta as _td
+    try:
+        pid = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    plan = await _get_plan_owned(db, pid, current_user.company_id)
+
+    # Список недель в периоде
+    weeks = []
+    cursor = plan.period_start - _td(days=plan.period_start.weekday())  # Mon
+    while cursor <= plan.period_end:
+        wend = min(cursor + _td(days=6), plan.period_end)
+        weeks.append({
+            "week_start": cursor.isoformat(),
+            "week_end": wend.isoformat(),
+            "label": f"{cursor.day:02d}.{cursor.month:02d}",
+        })
+        cursor += _td(days=7)
+
+    # Items с агрегацией daily по неделям
+    items = (await db.execute(
+        select(SalesPlanItem).where(SalesPlanItem.plan_id == pid)
+        .order_by(SalesPlanItem.plan_value.desc())
+    )).scalars().all()
+
+    from app.models import Product
+    pids = [i.product_id for i in items if i.product_id]
+    name_map = {}
+    if pids:
+        rows = (await db.execute(
+            select(Product.id, Product.name).where(Product.id.in_(pids))
+        )).all()
+        name_map = {r.id: r.name for r in rows}
+
+    rows_out = []
+    for it in items:
+        daily = (await db.execute(
+            select(SalesPlanDaily).where(SalesPlanDaily.plan_item_id == it.id)
+        )).scalars().all()
+        # Группировка по неделям
+        weeks_data = []
+        for w in weeks:
+            ws = date.fromisoformat(w["week_start"])
+            we = date.fromisoformat(w["week_end"])
+            total = sum(
+                float(d.plan_value) for d in daily
+                if ws <= d.date <= we
+            )
+            weeks_data.append({"week_start": w["week_start"], "value": round(total, 2)})
+        rows_out.append({
+            "item_id": str(it.id),
+            "product_id": str(it.product_id) if it.product_id else None,
+            "sku": it.sku, "name": name_map.get(it.product_id) or it.sku,
+            "plan_value": float(it.plan_value),
+            "weeks": weeks_data,
+        })
+    return {"weeks": weeks, "rows": rows_out}
+
+
+@router.get("/{plan_id}/stock-hint")
+async def stock_hint(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Мягкий hint о складе. НЕ блокирует план, только показывает дефицит.
+
+    Доступно = остаток + в пути + плановые поставки (со сроками).
+    Если план_шт > доступно → флаг hint 🟡 «нужен товар ~N шт».
+    """
+    try:
+        pid = uuid.UUID(plan_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    plan = await _get_plan_owned(db, pid, current_user.company_id)
+
+    items = (await db.execute(
+        select(SalesPlanItem).where(SalesPlanItem.plan_id == pid)
+    )).scalars().all()
+
+    hints = []
+    from sqlalchemy import text as _sql
+    for it in items:
+        if not it.product_id:
+            continue
+        plan_units = float(it.plan_value)
+        # Для метрики revenue/gross_profit — конверсия plan_units из ₽ в шт.
+        # Если метрика orders/units — plan_value уже в штуках.
+        # Простой случай: для revenue делим на seller_price.
+        if plan.metric_code in ("revenue", "gross_profit"):
+            sp_row = (await db.execute(_sql(
+                "SELECT marketing_seller_price FROM products WHERE id = :pid"
+            ), {"pid": str(it.product_id)})).first()
+            sp = float(sp_row.marketing_seller_price or 0) if sp_row else 0
+            if sp > 0:
+                plan_units = plan_units / sp
+
+        stock_row = (await db.execute(_sql("""
+            SELECT COALESCE(SUM(stock_for_sale), 0)::float AS stock
+            FROM warehouse_stocks
+            WHERE product_id = :pid
+              AND snapshot_date = (SELECT MAX(snapshot_date) FROM warehouse_stocks)
+        """), {"pid": str(it.product_id)})).first()
+        stock = float(stock_row.stock or 0) if stock_row else 0
+
+        # Плановые поставки (supplies) до конца плана-периода
+        supply_row = (await db.execute(_sql("""
+            SELECT COALESCE(SUM(si.qty), 0)::int AS qty,
+                   MIN(s.expected_date)::date AS earliest
+            FROM supply_items si
+            JOIN supplies s ON s.id = si.supply_id
+            WHERE si.product_id = :pid
+              AND (s.expected_date IS NULL OR s.expected_date <= :end)
+        """), {"pid": str(it.product_id), "end": plan.period_end})).first()
+        in_supply = int(supply_row.qty or 0) if supply_row else 0
+        earliest = supply_row.earliest if supply_row else None
+
+        available = stock + in_supply
+        if plan_units > available:
+            deficit = round(plan_units - available)
+            hints.append({
+                "product_id": str(it.product_id),
+                "sku": it.sku,
+                "plan_units": round(plan_units),
+                "stock_now": round(stock),
+                "in_supply": in_supply,
+                "available": round(available),
+                "deficit_units": deficit,
+                "earliest_supply": earliest.isoformat() if earliest else None,
+                "message": (
+                    f"🟡 Нужен товар ~{deficit} шт"
+                    + (f", поставка к {earliest.isoformat()}" if earliest
+                       else "; нет плановых поставок")
+                ),
+            })
+
+    return {
+        "plan_id": str(pid),
+        "hints": hints,
+        "blocked": False,  # mainly informational
+        "note": "Подсказка не блокирует план. Закупки — отдельный раздел.",
+    }
+
+
 @router.post("/{plan_id}/distribute-days")
 async def distribute_days(
     plan_id: str,
@@ -598,6 +834,14 @@ async def get_fact(
             for b in result.bridge
         ],
         "note": result.note,
+        # Структура отчёта Ozon: Оплачено(брутто) − Возвращено = Выручка(нетто)
+        "revenue_breakdown": {
+            "gross": result.gross_revenue,
+            "returns": result.returns_amount,
+            "returns_count": result.returns_count,
+            "net": result.net_revenue,
+            "formula": "Оплачено (брутто) − Возвращено = Выручка (нетто)",
+        },
     }
 
 

@@ -30,20 +30,25 @@ class FactBridgeRow:
 @dataclass
 class FactResult:
     plan_value: float
-    fact_value: float
-    fact_source: str             # 'realization' | 'transactions' | 'mixed'
-    is_preliminary: bool         # True если месяц ещё не закрыт
+    fact_value: float             # нетто (брутто − возвраты)
+    fact_source: str              # 'realization' | 'transactions' | 'mixed'
+    is_preliminary: bool          # True если месяц ещё не закрыт
     delta_realization_tx: float | None  # дельта между двумя источниками
-    completion_pct: float        # %выполнения плана
-    completion_prorata_pct: float  # % vs темпа (день / всего × 100)
-    run_rate_forecast: float     # экстраполяция до конца периода
-    needed_per_day: float        # сколько/день нужно чтобы добежать до плана
+    completion_pct: float         # %выполнения плана (нетто vs план)
+    completion_prorata_pct: float
+    run_rate_forecast: float
+    needed_per_day: float
     days_elapsed: int
     days_remaining: int
     days_total: int
-    probability_pct: float       # вероятность достижения (0-100)
+    probability_pct: float
     bridge: list[FactBridgeRow]
     note: str
+    # Структура «как в отчёте Ozon»: брутто − возвраты = нетто
+    gross_revenue: float          # Оплачено (брутто)
+    returns_amount: float         # Возвращено
+    net_revenue: float            # Выручка нетто = gross − returns (= fact_value)
+    returns_count: int            # количество возвратов
 
 
 async def compute_fact(
@@ -113,6 +118,40 @@ async def compute_fact(
 
     tx_fact = float((await db.execute(text(tx_fact_q), params)).scalar() or 0)
 
+    # === Структура «брутто − возвраты = нетто» (как в Ozon отчёте) ===
+    gross_revenue = 0.0
+    returns_amount = 0.0
+    returns_count = 0
+    if metric == "revenue":
+        # Брутто = OperationAgentDeliveredToCustomer (все доставленные accruals)
+        gross_q = f"""
+            SELECT COALESCE(SUM(t.accruals_for_sale), 0)::float AS v
+            FROM transactions t
+            JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
+            WHERE oa.company_id = :cid
+              AND t.operation_date >= :df AND t.operation_date <= :dt
+              AND t.operation_type='OperationAgentDeliveredToCustomer'
+              {extra}
+        """
+        gross_revenue = float((await db.execute(text(gross_q), params)).scalar() or 0)
+
+        # Возвраты — через returns
+        try:
+            ret_q = f"""
+                SELECT COALESCE(SUM(r.return_amount), 0)::float AS amt,
+                       COUNT(*) AS cnt
+                FROM returns r
+                JOIN ozon_accounts oa ON oa.id = r.ozon_account_id
+                WHERE oa.company_id = :cid
+                  AND r.return_date >= :df AND r.return_date <= :dt
+                  {extra}
+            """
+            row_r = (await db.execute(text(ret_q), params)).first()
+            returns_amount = float(row_r.amt or 0) if row_r else 0.0
+            returns_count = int(row_r.cnt or 0) if row_r else 0
+        except Exception:
+            pass
+
     # === Факт из realization (если есть и месяц закрыт) ===
     realization_fact: float | None = None
     delta_realiz = None
@@ -131,6 +170,9 @@ async def compute_fact(
                 delta_realiz = realization_fact - tx_fact
         except Exception:
             pass
+
+    # Net revenue = брутто − возвраты (только для revenue-метрики)
+    net_revenue = max(0.0, gross_revenue - returns_amount) if metric == "revenue" else 0.0
 
     fact = realization_fact if (realization_fact is not None and realization_fact > 0) else tx_fact
     fact_source = ("realization" if (realization_fact and realization_fact > 0) else "transactions")
@@ -217,4 +259,8 @@ async def compute_fact(
         probability_pct=round(probability_pct, 1),
         bridge=bridge,
         note=note,
+        gross_revenue=round(gross_revenue, 2),
+        returns_amount=round(returns_amount, 2),
+        net_revenue=round(net_revenue, 2),
+        returns_count=returns_count,
     )
