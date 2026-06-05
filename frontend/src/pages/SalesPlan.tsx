@@ -1140,6 +1140,13 @@ function FactTab({ initialId }: { initialId: string | null }) {
     queryFn: async () => (await api.get(`/plans/${selectedId}/stock-hint`)).data,
     enabled: !!selectedId,
   })
+  const { data: insights } = useQuery<{ insights: Array<{
+    level: string; title: string; detail: string; action: string | null
+  }> }>({
+    queryKey: ['plan-insights', selectedId],
+    queryFn: async () => (await api.get(`/plans/${selectedId}/insights`)).data,
+    enabled: !!selectedId,
+  })
 
   if (plans.length === 0) {
     return <Card className="p-8 text-center text-fg-muted">Планов нет. Создай первый.</Card>
@@ -1255,6 +1262,33 @@ function FactTab({ initialId }: { initialId: string | null }) {
                 </table>
               </div>
             </Card>
+          )}
+
+          {/* === АВТО-ИНСАЙТЫ (§15 + §21) === */}
+          {insights && insights.insights.length > 0 && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-fg flex items-center gap-2">
+                ✨ Что происходит — за 5 секунд
+              </h3>
+              {insights.insights.map((ins, idx) => (
+                <Card key={idx} className={cn('p-3 border-l-4',
+                  ins.level === 'critical' && 'bg-rose-50/30 border-l-rose-500',
+                  ins.level === 'warning' && 'bg-amber-50/30 border-l-amber-500',
+                  ins.level === 'info' && 'bg-blue-50/30 border-l-blue-500',
+                  ins.level === 'success' && 'bg-emerald-50/30 border-l-emerald-500',
+                )}>
+                  <div className="text-sm font-semibold text-fg">{ins.title}</div>
+                  <div className="text-xs text-fg-muted mt-1 whitespace-pre-line">
+                    {ins.detail}
+                  </div>
+                  {ins.action && (
+                    <div className="text-xs text-fg mt-1.5 font-medium">
+                      💡 {ins.action}
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
           )}
 
           {/* Структура «Брутто − Возвраты = Нетто» */}
