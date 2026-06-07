@@ -1,0 +1,3 @@
+-- pg_dump backup 2026-06-08
+-- Tables: sales_plan, sales_plan_item, sales_plan_daily, plan_kpi
+-- Status: tables did not exist before migration -- no data to dump.
