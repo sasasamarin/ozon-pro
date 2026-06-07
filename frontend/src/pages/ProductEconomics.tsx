@@ -19,6 +19,8 @@ import { useCabinetStore } from '@/stores/cabinet'
 import { useProductFilter } from '@/stores/product_filter'
 import { useCategoryFilter } from '@/stores/category_filter'
 import { useTagFilter } from '@/stores/tag_filter'
+import { DateRangeBar } from '@/components/DateRangeBar'
+import { addDateParams } from '@/lib/dateParams'
 
 interface EcoRow {
   product_id: string
@@ -125,14 +127,17 @@ export function ProductEconomics() {
   const { selectedCategoryId } = useCategoryFilter()
   const { selectedTags } = useTagFilter()
   const [days, setDays] = useState(30)
+  const [dateFrom, setDateFrom] = useState<string | null>(null)
+  const [dateTo, setDateTo] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<SortBy>('revenue')
   const [showArchived, setShowArchived] = useState(false)
   const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery<EcoResp>({
-    queryKey: ['products', 'economics', days, selectedCabinetIds, showArchived, selectedProductId, selectedCategoryId, selectedTags],
+    queryKey: ['products', 'economics', days, dateFrom, dateTo, selectedCabinetIds, showArchived, selectedProductId, selectedCategoryId, selectedTags],
     queryFn: async () => {
-      const p = new URLSearchParams({ days: String(days) })
+      const p = new URLSearchParams()
+      addDateParams(p, days, dateFrom, dateTo)
       selectedCabinetIds.forEach((id) => p.append('cabinet_ids', id))
       if (showArchived) p.append('include_archived', 'true')
       if (selectedProductId) p.append('product_id', selectedProductId)
@@ -171,30 +176,30 @@ export function ProductEconomics() {
           <p className="text-sm text-fg-muted mt-1.5">
             Полный P&amp;L по каждому товару: выручка → все вычеты → налог → чистая прибыль.
             {data && (
-              <span className="ml-2 text-xs">
+                <span className="ml-2 text-xs">
                 · Налог: <strong>{data.tax_regime_label} {data.tax_rate_pct}%</strong>{' '}
-                <Link to="/settings" className="text-blue-700 hover:underline">сменить</Link>
+                  <Link to="/settings" className="text-blue-700 hover:underline">сменить</Link>
               </span>
             )}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          {PERIODS.map((p) => (
-            <button key={p.d} onClick={() => setDays(p.d)} className={cn(
-              'px-3 py-1.5 rounded-md text-sm border transition-colors',
-              days === p.d ? 'border-fg bg-fg text-bg' : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
-            )}>
-              {p.label}
-            </button>
-          ))}
+          <DateRangeBar
+              days={days}
+              onChange={(r) => {
+                setDays(r.days);
+                setDateFrom(r.dateFrom);
+                setDateTo(r.dateTo)
+              }}
+          />
         </div>
       </div>
 
-      <SelectedProductBanner supported />
+      <SelectedProductBanner supported/>
 
       {/* Баннер «не заполнена себестоимость» — критично для корректности */}
       {data && data.totals.products_missing_cost > 0 && (
-        <Card className="p-4 flex items-start gap-3 bg-rose-50/60 border-rose-200/60">
+          <Card className="p-4 flex items-start gap-3 bg-rose-50/60 border-rose-200/60">
           <AlertTriangle className="w-5 h-5 text-rose-700 mt-0.5 shrink-0" />
           <div className="text-sm text-rose-900 flex-1">
             <strong>Прибыль ЗАВЫШЕНА:</strong> у {data.totals.products_missing_cost} из {data.totals.products_total} товаров

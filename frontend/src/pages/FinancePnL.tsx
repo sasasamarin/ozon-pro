@@ -56,7 +56,7 @@ export function FinancePnL() {
   const navigate = useNavigate()
 
   const { data, isLoading } = useQuery<PnLResp>({
-    queryKey: ['pnl', selectedCabinetIds, days],
+    queryKey: ['pnl', selectedCabinetIds, days, dateFrom, dateTo],
     queryFn: async () => {
       const params = new URLSearchParams({compare: 'true' })
       addDateParams(params, days, dateFrom, dateTo)
