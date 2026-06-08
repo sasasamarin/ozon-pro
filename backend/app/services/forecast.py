@@ -175,7 +175,7 @@ async def forecast(
         metric_code=metric,
         dates=[d.isoformat() for d in history_dates + forecast_dates],
         history=[round(v, 2) for v in history_values] + [None] * n_forecast,
-        base_forecast=[None] * n_analysis + forecast_values,  # type: ignore[list-item]
+        base_forecast=[0.0] * n_analysis + forecast_values,
         total_forecast=total,
         r2=round(r2, 4),
         data_points_count=data_points,

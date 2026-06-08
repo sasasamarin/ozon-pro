@@ -135,7 +135,7 @@ class ForecastResponse(BaseModel):
     metric_code: str
     dates: list[str]
     history: list[Optional[float]]
-    base_forecast: list[float]
+    base_forecast: list[Optional[float]]
     total_forecast: float
     r2: float
     data_points_count: int
