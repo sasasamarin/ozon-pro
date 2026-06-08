@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 METRIC_QUERY = {
@@ -104,9 +105,9 @@ async def forecast(
 
     sku_filter = ""
     params: dict = {
-        "cabinet_id": str(cabinet_id),
-        "ts_from": analysis_start,
-        "ts_to": analysis_end,
+        "cabinet_id": cabinet_id,
+        "date_from": analysis_start,
+        "date_to": analysis_end,
     }
     if skus:
         sku_filter = "AND posting_number IN (SELECT posting_number FROM order_items WHERE offer_id = ANY(:skus))"
@@ -117,13 +118,13 @@ async def forecast(
             DATE(time AT TIME ZONE 'Europe/Moscow') AS day,
             {agg_expr} AS value
         FROM transactions
-        WHERE ozon_account_id = :cabinet_id::uuid
-          AND time >= :ts_from
-          AND time <  :ts_to + INTERVAL '1 day'
+        WHERE ozon_account_id = :cabinet_id
+          AND time >= :date_from
+          AND time <  :date_to + INTERVAL '1 day'
           {sku_filter}
         GROUP BY 1
         ORDER BY 1
-    """)
+    """).bindparams(bindparam("cabinet_id", type_=PG_UUID()))
 
     rows = (await db.execute(sql, params)).mappings().all()
 
