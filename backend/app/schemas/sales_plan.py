@@ -100,7 +100,7 @@ class PlanKpiOut(BaseModel):
 # ── Прогноз ─────────────────────────────────────────────────────────────────
 
 class ForecastRequest(BaseModel):
-    cabinet_id: uuid.UUID
+    cabinet_id: Optional[str] = None
     skus: list[str] = []
     metric_code: Literal["revenue", "orders", "units", "margin"]
     analysis_start: date

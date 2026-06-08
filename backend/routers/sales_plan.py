@@ -496,13 +496,26 @@ async def forecast_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ForecastResponse:
+    cabinet_id_str = payload.cabinet_id
+    if cabinet_id_str is None:
+        rows = (await db.execute(
+            text(
+                "SELECT id FROM ozon_accounts"
+                " WHERE company_id = :cid AND deleted_at IS NULL"
+                " ORDER BY id"
+            ),
+            {"cid": current_user.company_id},
+        )).all()
+        if not rows:
+            raise HTTPException(400, "Нет доступных кабинетов для компании")
+        cabinet_id_str = str(rows[0][0])
     result = await run_forecast(
         metric=payload.metric_code,
         analysis_start=payload.analysis_start,
         analysis_end=payload.analysis_end,
         forecast_start=payload.forecast_start,
         forecast_end=payload.forecast_end,
-        cabinet_id=payload.cabinet_id,
+        cabinet_id=uuid.UUID(cabinet_id_str),
         db=db,
         skus=payload.skus if payload.skus else None,
     )
