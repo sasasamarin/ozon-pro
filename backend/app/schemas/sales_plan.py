@@ -12,7 +12,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 # ── Планы ──────────────────────────────────────────────────────────────────
@@ -107,6 +107,27 @@ class ForecastRequest(BaseModel):
     analysis_end: date
     forecast_start: date
     forecast_end: date
+
+    @model_validator(mode='before')
+    @classmethod
+    def _accept_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if 'cabinet_ids' in data and 'cabinet_id' not in data:
+            ids = data.pop('cabinet_ids')
+            if isinstance(ids, list) and ids:
+                data['cabinet_id'] = ids[0]
+        if 'metric' in data and 'metric_code' not in data:
+            data['metric_code'] = data.pop('metric')
+        if 'analysis_from' in data and 'analysis_start' not in data:
+            data['analysis_start'] = data.pop('analysis_from')
+        if 'analysis_to' in data and 'analysis_end' not in data:
+            data['analysis_end'] = data.pop('analysis_to')
+        if 'forecast_from' in data and 'forecast_start' not in data:
+            data['forecast_start'] = data.pop('forecast_from')
+        if 'forecast_to' in data and 'forecast_end' not in data:
+            data['forecast_end'] = data.pop('forecast_to')
+        return data
 
 
 class ForecastResponse(BaseModel):
