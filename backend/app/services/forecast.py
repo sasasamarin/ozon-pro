@@ -119,7 +119,7 @@ async def forecast(
         FROM transactions
         WHERE ozon_account_id = :cabinet_id
           AND time >= :date_from
-          AND time <  (:date_to::date + INTERVAL '1 day')
+          AND time <  CAST(:date_to AS timestamp) + INTERVAL '1 day'
           {sku_filter}
         GROUP BY 1
         ORDER BY 1
