@@ -80,7 +80,7 @@ app.add_middleware(
 
 # Подключаем все API endpoints
 app.include_router(api_router, prefix="/api/v1")
-app.include_router(sales_plan_router, prefix="/api/plan", tags=["plan"])
+app.include_router(sales_plan_router, prefix="/api/v1/plan", tags=["plan"])
 
 
 @app.get("/", tags=["root"])
