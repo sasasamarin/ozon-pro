@@ -242,7 +242,7 @@ export function PlanVsFact() {
   // Plan list (for Fact tab)
   const { data: planList = [] } = useQuery<PlanListItem[]>({
     queryKey: ['plan-sales-list'],
-    queryFn: async () => (await api.get('/api/v1/plan/sales')).data,
+    queryFn: async () => (await api.get('/plan/sales')).data,
     enabled: tab === 'fact',
   })
 
@@ -251,14 +251,14 @@ export function PlanVsFact() {
   // Fact data
   const { data: fact, isLoading: factLoading } = useQuery<FactResp>({
     queryKey: ['plan-fact', activePlanId],
-    queryFn: async () => (await api.get(`/api/v1/plan/sales/${activePlanId}/fact`)).data,
+    queryFn: async () => (await api.get(`/plan/sales/${activePlanId}/fact`)).data,
     enabled: tab === 'fact' && !!activePlanId,
   })
 
   // Forecast
   const forecastMut = useMutation({
     mutationFn: async () =>
-      (await api.post('/api/v1/plan/forecast', {
+      (await api.post('/plan/forecast', {
         cabinet_ids: selectedCabinets,
         metric,
         analysis_from: analysisFrom,
@@ -284,7 +284,7 @@ export function PlanVsFact() {
   // Save plan
   const saveMut = useMutation({
     mutationFn: async () => {
-      const { data: plan } = await api.post('/api/v1/plan/sales', {
+      const { data: plan } = await api.post('/plan/sales', {
         cabinet_ids: selectedCabinets,
         metric,
         period_from: forecastFrom,
@@ -295,8 +295,8 @@ export function PlanVsFact() {
         plan_value: parseFloat(planItems[it.sku_id]?.plan || '0'),
         locked: planItems[it.sku_id]?.locked ?? false,
       }))
-      await api.post(`/api/v1/plan/sales/${plan.id}/items`, { items })
-      await api.post(`/api/v1/plan/sales/${plan.id}/distribute`)
+      await api.post(`/plan/sales/${plan.id}/items`, { items })
+      await api.post(`/plan/sales/${plan.id}/distribute`)
       return plan as { id: string }
     },
     onSuccess: ({ id }) => setSavedPlanId(id),
