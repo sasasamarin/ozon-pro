@@ -29,7 +29,7 @@ const METRIC_LABELS: Record<Metric, string> = {
 }
 
 function isMoney(m: string) {
-  return m === 'revenue' || m === 'marginal_profit'
+  return m === 'revenue' || m === 'marginal_profit' || m === 'margin' || m === 'returns'
 }
 
 function fmtVal(v: number, m: string) {
@@ -70,14 +70,25 @@ interface FactRow {
   label: string
   fact: number
   plan: number | null
+  pro_rata: number | null
   pct: number | null
+  run_rate: number | null
 }
 
 interface FactResp {
   plan_id: string | null
   period_from: string
   period_to: string
+  total_days: number
+  days_passed: number
   rows: FactRow[]
+}
+
+// ── Fact date formatter ───────────────────────────────────────────────
+
+function fmtFactDate(iso: string) {
+  const d = new Date(iso + 'T00:00:00')
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────
@@ -776,8 +787,11 @@ export function PlanVsFact() {
           ) : fact ? (
             <Card className="overflow-hidden">
               <div className="px-5 py-3 border-b border-border-subtle bg-bg-subtle/50 flex items-center justify-between">
-                <p className="text-xs text-fg-muted">
-                  Период: {fact.period_from} … {fact.period_to}
+                <p className="text-sm font-medium text-fg">
+                  {fmtFactDate(fact.period_from)} — {fmtFactDate(fact.period_to)}{' '}
+                  <span className="text-fg-muted font-normal">
+                    ({fact.days_passed} из {fact.total_days} дней)
+                  </span>
                 </p>
                 {!fact.plan_id && (
                   <span className="text-xs text-fg-muted italic">план не задан</span>
@@ -789,7 +803,8 @@ export function PlanVsFact() {
                     <th className="py-2.5 px-4 font-medium">Метрика</th>
                     <th className="py-2.5 px-4 font-medium text-right">Факт</th>
                     <th className="py-2.5 px-4 font-medium text-right">План</th>
-                    <th className="py-2.5 px-4 font-medium text-right">%</th>
+                    <th className="py-2.5 px-4 font-medium text-right">Прогноз</th>
+                    <th className="py-2.5 px-4 font-medium text-right">% к темпу</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle">
@@ -802,6 +817,9 @@ export function PlanVsFact() {
                       <td className="py-3 px-4 text-right tabular-nums text-fg-muted">
                         {r.plan != null ? fmtVal(r.plan, r.metric) : '—'}
                       </td>
+                      <td className="py-3 px-4 text-right tabular-nums text-blue-600">
+                        {r.run_rate != null ? fmtVal(r.run_rate, r.metric) : '—'}
+                      </td>
                       <td className="py-3 px-4 text-right">
                         {r.pct != null ? (
                           <span className={cn(
@@ -810,10 +828,12 @@ export function PlanVsFact() {
                             r.pct >= 80  ? 'bg-amber-50 text-amber-700' :
                                            'bg-rose-50 text-rose-700',
                           )}>
-                            {r.pct >= 100 ? '🟢' : r.pct >= 80 ? '🟡' : '🔴'} {r.pct}%
+                            {r.pct >= 100 ? '🟢' : r.pct >= 80 ? '🟡' : '🔴'} {r.pct.toFixed(1)}%
                           </span>
                         ) : (
-                          <span className="text-fg-muted text-xs">—</span>
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-400">
+                            ⚪ —
+                          </span>
                         )}
                       </td>
                     </tr>

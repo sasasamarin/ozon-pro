@@ -188,11 +188,15 @@ class FactRowOut(BaseModel):
     label: str
     fact: float
     plan: Optional[float] = None
-    pct: Optional[float] = None       # факт / план × 100, None если плана нет
+    pro_rata: Optional[float] = None  # план × (прошло / всего)
+    pct: Optional[float] = None       # факт / pro_rata × 100
+    run_rate: Optional[float] = None  # факт / прошло × всего (прогноз на конец)
 
 
 class FactVsPlanRow(BaseModel):
     plan_id: Optional[str] = None
     period_from: str
     period_to: str
+    total_days: int
+    days_passed: int
     rows: list[FactRowOut]

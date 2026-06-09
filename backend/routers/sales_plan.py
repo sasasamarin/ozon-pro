@@ -13,6 +13,7 @@ POST   /api/plan/simulate                          — каскадный пер
 """
 from __future__ import annotations
 
+import calendar
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
@@ -77,19 +78,71 @@ _METRIC_LABELS: dict[str, str] = {
 }
 
 
-async def _mtd_fact(metric: str, from_dt: date, to_dt: date, db: AsyncSession) -> float:
-    """Агрегат транзакций за произвольный период."""
-    if metric == "orders":
-        agg = "COUNT(DISTINCT posting_number) FILTER (WHERE posting_number IS NOT NULL)"
-    else:
-        agg = "COALESCE(SUM(accruals_for_sale), 0)"
-    row = (await db.execute(text(f"""
-        SELECT {agg} AS val
+async def _all_facts(from_dt: date, to_dt: date, db: AsyncSession) -> dict[str, float]:
+    """Все 4 метрики фактических транзакций за период одним запросом."""
+    row = (await db.execute(text("""
+        SELECT
+            COUNT(DISTINCT posting_number)
+                FILTER (WHERE posting_number IS NOT NULL)           AS orders,
+            COALESCE(SUM(accruals_for_sale), 0)                     AS revenue,
+            COALESCE(SUM(accruals_for_sale), 0)
+                + COALESCE(SUM(sale_commission), 0)
+                + COALESCE(SUM(delivery_to_customer), 0)
+                + COALESCE(SUM(return_logistics), 0)                AS margin,
+            ABS(COALESCE(SUM(return_logistics), 0))                 AS returns
         FROM transactions
         WHERE time >= :ts_from
           AND time < CAST(:ts_to AS timestamp) + INTERVAL '1 day'
     """), {"ts_from": from_dt, "ts_to": to_dt})).mappings().one()
-    return float(row["val"] or 0)
+    return {
+        "orders":  float(row["orders"]  or 0),
+        "revenue": float(row["revenue"] or 0),
+        "margin":  float(row["margin"]  or 0),
+        "returns": float(row["returns"] or 0),
+    }
+
+
+_DISPLAY_METRICS: list[tuple[str, str]] = [
+    ("orders",  "Заказы"),
+    ("revenue", "Выручка"),
+    ("margin",  "Маржинальная прибыль"),
+    ("returns", "Возвраты"),
+]
+
+
+def _build_fact_rows(
+    fact_vals: dict[str, float],
+    plan_total: Optional[float],
+    plan_metric: Optional[str],
+    days_passed: int,
+    total_days: int,
+) -> list[FactRowOut]:
+    rows = []
+    for m_code, m_label in _DISPLAY_METRICS:
+        fact_val = fact_vals.get(m_code, 0.0)
+        m_plan = plan_total if (m_code == plan_metric and plan_total is not None) else None
+        pro_rata = (
+            round(m_plan * days_passed / total_days, 2)
+            if m_plan is not None and total_days > 0 else None
+        )
+        pct = (
+            round(fact_val / pro_rata * 100, 1)
+            if pro_rata and pro_rata > 0 else None
+        )
+        run_rate = (
+            round(fact_val / days_passed * total_days, 2)
+            if days_passed > 0 and total_days > 0 else None
+        )
+        rows.append(FactRowOut(
+            metric=m_code,
+            label=m_label,
+            fact=round(fact_val, 2),
+            plan=m_plan,
+            pro_rata=pro_rata,
+            pct=pct,
+            run_rate=run_rate,
+        ))
+    return rows
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -464,19 +517,20 @@ async def current_fact(
 ) -> FactVsPlanRow:
     """MTD-факт за текущий месяц без привязки к плану."""
     today = datetime.now(UTC).date()
-    period_start = today.replace(day=1)
-    fact_val = await _mtd_fact("revenue", period_start, today, db)
+    fact_start = today.replace(day=1)
+    total_days = calendar.monthrange(today.year, today.month)[1]
+    days_passed = today.day
+
+    fact_vals = await _all_facts(fact_start, today, db)
+    rows = _build_fact_rows(fact_vals, None, None, days_passed, total_days)
+
     return FactVsPlanRow(
         plan_id=None,
-        period_from=period_start.isoformat(),
+        period_from=fact_start.isoformat(),
         period_to=today.isoformat(),
-        rows=[FactRowOut(
-            metric="revenue",
-            label=_METRIC_LABELS["revenue"],
-            fact=round(fact_val, 2),
-            plan=None,
-            pct=None,
-        )],
+        total_days=total_days,
+        days_passed=days_passed,
+        rows=rows,
     )
 
 
@@ -489,33 +543,44 @@ async def plan_fact(
     plan = await _get_plan(plan_id, db)
     plan_period_start: date = plan["period_start"]
     plan_period_end: date = plan["period_end"]
-    metric: str = plan["metric_code"]
-    target: Optional[float] = float(plan["target_value"]) if plan["target_value"] else None
+    plan_metric: str = plan["metric_code"]
 
     today = datetime.now(UTC).date()
 
-    # Если период плана ещё не наступил — показываем MTD текущего месяца
+    # Если период плана ещё не наступил — MTD текущего месяца
     if plan_period_start > today:
         fact_start = today.replace(day=1)
         fact_end = today
+        total_days = calendar.monthrange(today.year, today.month)[1]
     else:
         fact_start = plan_period_start
-        fact_end = plan_period_end if plan_period_end < today else today
+        fact_end = min(plan_period_end, today)
+        total_days = (plan_period_end - plan_period_start).days + 1
 
-    fact_val = await _mtd_fact(metric, fact_start, fact_end, db)
-    pct = round(fact_val / target * 100, 1) if target and target > 0 else None
+    days_passed = (fact_end - fact_start).days + 1
+
+    fact_vals = await _all_facts(fact_start, fact_end, db)
+
+    # Сумма плана из sales_plan_daily за весь период
+    plan_total: Optional[float] = None
+    p_row = (await db.execute(text("""
+        SELECT COALESCE(SUM(spd.plan_value), 0) AS total
+        FROM sales_plan_daily spd
+        JOIN sales_plan_item spi ON spi.id = spd.plan_item_id
+        WHERE spi.plan_id = :plan_id
+    """), {"plan_id": plan_id})).mappings().one_or_none()
+    if p_row and float(p_row["total"] or 0) > 0:
+        plan_total = float(p_row["total"])
+
+    rows = _build_fact_rows(fact_vals, plan_total, plan_metric, days_passed, total_days)
 
     return FactVsPlanRow(
         plan_id=str(plan_id),
         period_from=fact_start.isoformat(),
         period_to=fact_end.isoformat(),
-        rows=[FactRowOut(
-            metric=metric,
-            label=_METRIC_LABELS.get(metric, metric),
-            fact=round(fact_val, 2),
-            plan=target,
-            pct=pct,
-        )],
+        total_days=total_days,
+        days_passed=days_passed,
+        rows=rows,
     )
 
 
