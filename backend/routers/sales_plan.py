@@ -176,6 +176,7 @@ async def create_plan(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SalesPlanDetail:
+    company_id = payload.company_id if payload.company_id is not None else current_user.company_id
     row = (await db.execute(
         text("""
             INSERT INTO sales_plan (
@@ -190,7 +191,7 @@ async def create_plan(
             RETURNING *
         """),
         {
-            "company_id": payload.company_id,
+            "company_id": company_id,
             "scope_type": payload.scope_type,
             "scope_ref": payload.scope_ref,
             "metric_code": payload.metric_code,
