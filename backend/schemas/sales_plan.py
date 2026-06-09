@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal, Optional
@@ -53,7 +54,7 @@ class SalesPlanRow(BaseModel):
 
 class SalesPlanDetail(BaseModel):
     id: int
-    company_id: int
+    company_id: uuid.UUID
     scope_type: str
     scope_ref: Optional[str]
     metric_code: str
