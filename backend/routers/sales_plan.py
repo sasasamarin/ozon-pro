@@ -324,6 +324,31 @@ async def list_plans(
         for r in rows
     ]
 
+# ── Факт vs план ─────────────────────────────────────────────────────────────
+
+@router.get("/sales/current-fact", response_model=FactVsPlanRow)
+async def current_fact(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FactVsPlanRow:
+    """MTD-факт за текущий месяц без привязки к плану."""
+    today = datetime.now(UTC).date()
+    fact_start = today.replace(day=1)
+    total_days = calendar.monthrange(today.year, today.month)[1]
+    days_passed = today.day
+
+    fact_vals = await _all_facts(fact_start, today, db)
+    rows = _build_fact_rows(fact_vals, None, None, days_passed, total_days)
+
+    return FactVsPlanRow(
+        plan_id=None,
+        period_from=fact_start.isoformat(),
+        period_to=today.isoformat(),
+        total_days=total_days,
+        days_passed=days_passed,
+        rows=rows,
+    )
+
 
 @router.get("/sales/{plan_id}", response_model=SalesPlanDetail)
 async def get_plan(
@@ -506,32 +531,6 @@ async def distribute_plan(
 
     await db.commit()
     return created
-
-
-# ── Факт vs план ─────────────────────────────────────────────────────────────
-
-@router.get("/sales/current-fact", response_model=FactVsPlanRow)
-async def current_fact(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> FactVsPlanRow:
-    """MTD-факт за текущий месяц без привязки к плану."""
-    today = datetime.now(UTC).date()
-    fact_start = today.replace(day=1)
-    total_days = calendar.monthrange(today.year, today.month)[1]
-    days_passed = today.day
-
-    fact_vals = await _all_facts(fact_start, today, db)
-    rows = _build_fact_rows(fact_vals, None, None, days_passed, total_days)
-
-    return FactVsPlanRow(
-        plan_id=None,
-        period_from=fact_start.isoformat(),
-        period_to=today.isoformat(),
-        total_days=total_days,
-        days_passed=days_passed,
-        rows=rows,
-    )
 
 
 @router.get("/sales/{plan_id}/fact", response_model=FactVsPlanRow)
