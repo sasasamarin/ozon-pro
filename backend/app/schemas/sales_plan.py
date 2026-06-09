@@ -59,6 +59,19 @@ class PlanItemCreate(BaseModel):
     plan_value: float
     is_locked: bool = False
 
+    @model_validator(mode='before')
+    @classmethod
+    def _normalize(cls, v):
+        if isinstance(v, dict):
+            if 'sku_id' in v and 'sku' not in v:
+                v['sku'] = v['sku_id']
+            if 'locked' in v and 'is_locked' not in v:
+                v['is_locked'] = v['locked']
+            # если передан список items — берём первый
+            if 'items' in v and isinstance(v['items'], list) and len(v['items']) > 0:
+                return cls._normalize(v['items'][0])
+        return v
+
 
 class PlanItemUpdate(BaseModel):
     plan_value: Optional[float] = None
