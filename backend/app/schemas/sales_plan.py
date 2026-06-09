@@ -130,16 +130,26 @@ class ForecastRequest(BaseModel):
         return data
 
 
-class ForecastResponse(BaseModel):
+class ChartPoint(BaseModel):
+    date: str
+    value: float
+
+
+class ForecastSkuItem(BaseModel):
+    sku_id: str
+    offer_id: str
+    name: str
     cabinet_id: str
-    metric_code: str
-    dates: list[str]
-    history: list[Optional[float]]
-    base_forecast: list[Optional[float]]
-    total_forecast: float
-    r2: float
-    data_points_count: int
-    badge: Literal["low", "medium", "high"]
+    fact: float
+    forecast: float
+    season_weights: list[float]
+    reliability: Literal["low", "medium", "high"]
+
+
+class ForecastResponse(BaseModel):
+    items: list[ForecastSkuItem]
+    history: list[ChartPoint]
+    forecast_series: list[ChartPoint]
 
 
 # ── Каскадный симулятор ──────────────────────────────────────────────────────

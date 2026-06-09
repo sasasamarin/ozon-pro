@@ -25,9 +25,11 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import User
 from app.schemas.sales_plan import (
+    ChartPoint,
     FactVsPlanRow,
     ForecastRequest,
     ForecastResponse,
+    ForecastSkuItem,
     PlanDailyOut,
     PlanItemCreate,
     PlanItemOut,
@@ -41,6 +43,28 @@ from schemas.sales_plan import SalesPlanCreate, SalesPlanDetail, SalesPlanRow
 
 router = APIRouter()
 UTC = timezone.utc
+
+# Агрегации по метрике для JOIN-запроса transactions→orders→order_items
+_SKU_AGG: dict[str, str] = {
+    "revenue": "COALESCE(SUM(t.accruals_for_sale), 0)",
+    "orders":  "COUNT(DISTINCT t.posting_number) FILTER (WHERE t.posting_number IS NOT NULL)",
+    "units":   "COUNT(*)",
+    "margin": (
+        "COALESCE(SUM(t.accruals_for_sale), 0)"
+        " + COALESCE(SUM(t.sale_commission), 0)"
+        " + COALESCE(SUM(t.delivery_to_customer), 0)"
+        " + COALESCE(SUM(t.return_logistics), 0)"
+    ),
+}
+
+
+def _week_weights(daily_vals: list[float]) -> list[float]:
+    """Суммирует дневные значения прогноза по неделям (группы по 7 дней)."""
+    weeks = [
+        round(sum(daily_vals[i:i + 7]), 4)
+        for i in range(0, len(daily_vals), 7)
+    ]
+    return weeks or [1.0, 1.0, 1.0, 1.0]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -183,14 +207,13 @@ async def create_plan(
 
 @router.get("/sales", response_model=list[SalesPlanRow])
 async def list_plans(
-    company_id: int = Query(...),
     period_start: Optional[date] = Query(None),
     period_end: Optional[date] = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[SalesPlanRow]:
     filters = "WHERE company_id = :company_id"
-    params: dict = {"company_id": company_id}
+    params: dict = {"company_id": current_user.company_id}
     if period_start:
         filters += " AND period_end >= :period_start"
         params["period_start"] = period_start
@@ -509,26 +532,77 @@ async def forecast_endpoint(
         if not rows:
             raise HTTPException(400, "Нет доступных кабинетов для компании")
         cabinet_id_str = str(rows[0][0])
+
+    cabinet_uuid = uuid.UUID(cabinet_id_str)
+
     result = await run_forecast(
         metric=payload.metric_code,
         analysis_start=payload.analysis_start,
         analysis_end=payload.analysis_end,
         forecast_start=payload.forecast_start,
         forecast_end=payload.forecast_end,
-        cabinet_id=uuid.UUID(cabinet_id_str),
+        cabinet_id=cabinet_uuid,
         db=db,
         skus=payload.skus if payload.skus else None,
     )
+
+    # Разделяем history и forecast_series по границе None-значений
+    n_analysis = sum(1 for v in result.history if v is not None)
+    history_chart = [
+        ChartPoint(date=result.dates[i], value=result.history[i])  # type: ignore[arg-type]
+        for i in range(n_analysis)
+    ]
+    forecast_chart = [
+        ChartPoint(date=result.dates[i], value=result.base_forecast[i])
+        for i in range(n_analysis, len(result.dates))
+    ]
+
+    # Недельные веса из дневного прогноза (для Step 3 фронта)
+    sw = _week_weights(result.base_forecast[n_analysis:])
+
+    # Факт по SKU за период анализа через JOIN transactions→orders→order_items
+    agg_expr = _SKU_AGG.get(payload.metric_code, _SKU_AGG["revenue"])
+    sku_rows = (await db.execute(text(f"""
+        SELECT
+            oi.offer_id,
+            MAX(oi.name) AS name,
+            {agg_expr} AS fact_value
+        FROM transactions t
+        JOIN orders o ON o.posting_number = t.posting_number
+                     AND o.ozon_account_id = t.ozon_account_id
+        JOIN order_items oi ON oi.order_id = o.id
+        WHERE t.ozon_account_id = :cabinet_id
+          AND t.time >= :date_from
+          AND t.time < CAST(:date_to AS timestamp) + INTERVAL '1 day'
+          AND oi.offer_id IS NOT NULL
+        GROUP BY oi.offer_id
+        ORDER BY fact_value DESC
+    """), {
+        "cabinet_id": cabinet_uuid,
+        "date_from": payload.analysis_start,
+        "date_to": payload.analysis_end,
+    })).mappings().all()
+
+    total_fact = sum(float(r["fact_value"] or 0) for r in sku_rows) or 1.0
+
+    items = [
+        ForecastSkuItem(
+            sku_id=r["offer_id"],
+            offer_id=r["offer_id"],
+            name=r["name"] or r["offer_id"],
+            cabinet_id=cabinet_id_str,
+            fact=round(float(r["fact_value"] or 0), 2),
+            forecast=round(result.total_forecast * float(r["fact_value"] or 0) / total_fact, 2),
+            season_weights=sw,
+            reliability=result.badge,
+        )
+        for r in sku_rows
+    ]
+
     return ForecastResponse(
-        cabinet_id=str(result.cabinet_id),
-        metric_code=result.metric_code,
-        dates=result.dates,
-        history=result.history,
-        base_forecast=result.base_forecast,
-        total_forecast=result.total_forecast,
-        r2=result.r2,
-        data_points_count=result.data_points_count,
-        badge=result.badge,
+        items=items,
+        history=history_chart,
+        forecast_series=forecast_chart,
     )
 
 
