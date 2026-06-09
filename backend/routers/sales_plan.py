@@ -364,7 +364,7 @@ async def distribute_plan(
             COALESCE(SUM(accruals_for_sale), 0)    AS revenue
         FROM transactions
         WHERE time >= :from_dt
-          AND time <  :to_dt + INTERVAL '1 day'
+          AND time <  CAST(:to_dt AS timestamp) + INTERVAL '1 day'
         GROUP BY 1
         ORDER BY 1
     """), {"from_dt": ly_start, "to_dt": ly_end})).mappings().all()
@@ -459,7 +459,7 @@ async def plan_fact(
         SELECT {agg_expr} AS val
         FROM transactions
         WHERE time >= :ts_from
-          AND time <  :ts_to + INTERVAL '1 day'
+          AND time <  CAST(:ts_to AS timestamp) + INTERVAL '1 day'
     """), {
         "ts_from": period_start,
         "ts_to": fact_end,
