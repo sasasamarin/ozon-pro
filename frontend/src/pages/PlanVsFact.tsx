@@ -364,14 +364,14 @@ export function PlanVsFact() {
   // Chart data
   const chartData = useMemo(() => {
     if (!forecast) return []
-    const history = Array.isArray(forecast.history) ? forecast.history : []
-    const forecastSeries = Array.isArray(forecast.forecast_series) ? forecast.forecast_series : []
-    const forecastItems = Array.isArray(forecast.items) ? forecast.items : []
-    const histMap = new Map(history.map((p) => [p.date, p.value]))
-    const fcstMap = new Map(forecastSeries.map((p) => [p.date, p.value]))
-    const dates = [...new Set([...histMap.keys(), ...fcstMap.keys()])].sort()
-    const fcstTotal = forecastSeries.reduce((s, p) => s + p.value, 0) || 1
-    const planTotal = forecastItems.reduce((s, it) => s + parseFloat(planItems[it.sku_id]?.plan || '0'), 0)
+    const history = (Array.isArray(forecast.history) ? forecast.history : []).filter(Boolean)
+    const forecastSeries = (Array.isArray(forecast.forecast_series) ? forecast.forecast_series : []).filter(Boolean)
+    const forecastItems = (Array.isArray(forecast.items) ? forecast.items : []).filter(Boolean)
+    const histMap = new Map(history.map((p) => [p?.date ?? '', p?.value ?? 0]))
+    const fcstMap = new Map(forecastSeries.map((p) => [p?.date ?? '', p?.value ?? 0]))
+    const dates = [...new Set([...histMap.keys(), ...fcstMap.keys()])].filter(Boolean).sort()
+    const fcstTotal = forecastSeries.reduce((s, p) => s + (p?.value ?? 0), 0) || 1
+    const planTotal = forecastItems.reduce((s, it) => s + parseFloat(planItems[it?.sku_id]?.plan || '0'), 0)
     const ratio = planTotal / fcstTotal
     return dates.map((date) => ({
       date: date.slice(5),
