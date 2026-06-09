@@ -69,12 +69,12 @@ interface FactRow {
   metric: string
   label: string
   fact: number
-  plan: number
-  pct: number
+  plan: number | null
+  pct: number | null
 }
 
 interface FactResp {
-  plan_id: string
+  plan_id: string | null
   period_from: string
   period_to: string
   rows: FactRow[]
@@ -248,12 +248,22 @@ export function PlanVsFact() {
 
   const activePlanId = savedPlanId ?? planList[0]?.id ?? null
 
-  // Fact data
-  const { data: fact, isLoading: factLoading } = useQuery<FactResp>({
+  // Fact data — с планом (если план есть)
+  const { data: planFact, isLoading: planFactLoading } = useQuery<FactResp>({
     queryKey: ['plan-fact', activePlanId],
     queryFn: async () => (await api.get(`/plan/sales/${activePlanId}/fact`)).data,
     enabled: tab === 'fact' && !!activePlanId,
   })
+
+  // Fact data — без плана: MTD текущего месяца
+  const { data: currentFact, isLoading: currentFactLoading } = useQuery<FactResp>({
+    queryKey: ['current-fact'],
+    queryFn: async () => (await api.get('/plan/sales/current-fact')).data,
+    enabled: tab === 'fact' && !activePlanId,
+  })
+
+  const fact = planFact ?? currentFact
+  const factLoading = planFactLoading || currentFactLoading
 
   // Forecast
   const forecastMut = useMutation({
@@ -759,24 +769,19 @@ export function PlanVsFact() {
       {/* ═══ FACT TAB ═══ */}
       {tab === 'fact' && (
         <>
-          {!activePlanId ? (
-            <Card className="py-14 flex flex-col items-center gap-3 text-fg-muted">
-              <Target className="w-8 h-8 text-fg-subtle" />
-              <p className="text-sm">Сначала поставьте план</p>
-              <Button size="sm" variant="ghost" onClick={() => setTab('plan')}>
-                Перейти к постановке →
-              </Button>
-            </Card>
-          ) : factLoading ? (
+          {factLoading ? (
             <Card className="py-14 flex justify-center">
               <Loader2 className="w-5 h-5 animate-spin text-fg-muted" />
             </Card>
           ) : fact ? (
             <Card className="overflow-hidden">
-              <div className="px-5 py-3 border-b border-border-subtle bg-bg-subtle/50">
+              <div className="px-5 py-3 border-b border-border-subtle bg-bg-subtle/50 flex items-center justify-between">
                 <p className="text-xs text-fg-muted">
                   Период: {fact.period_from} … {fact.period_to}
                 </p>
+                {!fact.plan_id && (
+                  <span className="text-xs text-fg-muted italic">план не задан</span>
+                )}
               </div>
               <table className="w-full text-sm">
                 <thead className="bg-bg-subtle/50 border-b border-border-subtle">
@@ -795,24 +800,33 @@ export function PlanVsFact() {
                         {fmtVal(r.fact, r.metric)}
                       </td>
                       <td className="py-3 px-4 text-right tabular-nums text-fg-muted">
-                        {fmtVal(r.plan, r.metric)}
+                        {r.plan != null ? fmtVal(r.plan, r.metric) : '—'}
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <span className={cn(
-                          'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
-                          r.pct >= 100 ? 'bg-emerald-50 text-emerald-700' :
-                          r.pct >= 80  ? 'bg-amber-50 text-amber-700' :
-                                         'bg-rose-50 text-rose-700',
-                        )}>
-                          {r.pct >= 100 ? '🟢' : r.pct >= 80 ? '🟡' : '🔴'} {r.pct}%
-                        </span>
+                        {r.pct != null ? (
+                          <span className={cn(
+                            'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
+                            r.pct >= 100 ? 'bg-emerald-50 text-emerald-700' :
+                            r.pct >= 80  ? 'bg-amber-50 text-amber-700' :
+                                           'bg-rose-50 text-rose-700',
+                          )}>
+                            {r.pct >= 100 ? '🟢' : r.pct >= 80 ? '🟡' : '🔴'} {r.pct}%
+                          </span>
+                        ) : (
+                          <span className="text-fg-muted text-xs">—</span>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </Card>
-          ) : null}
+          ) : (
+            <Card className="py-14 flex flex-col items-center gap-3 text-fg-muted">
+              <Target className="w-8 h-8 text-fg-subtle" />
+              <p className="text-sm">Нет данных за текущий месяц</p>
+            </Card>
+          )}
         </>
       )}
     </div>

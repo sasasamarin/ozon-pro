@@ -26,6 +26,7 @@ from app.db.session import get_db
 from app.models import User
 from app.schemas.sales_plan import (
     ChartPoint,
+    FactRowOut,
     FactVsPlanRow,
     ForecastRequest,
     ForecastResponse,
@@ -65,6 +66,30 @@ def _week_weights(daily_vals: list[float]) -> list[float]:
         for i in range(0, len(daily_vals), 7)
     ]
     return weeks or [1.0, 1.0, 1.0, 1.0]
+
+
+_METRIC_LABELS: dict[str, str] = {
+    "orders":          "Заказы",
+    "revenue":         "Выручка",
+    "units":           "Единицы",
+    "margin":          "Маржа",
+    "marginal_profit": "Маржинальная прибыль",
+}
+
+
+async def _mtd_fact(metric: str, from_dt: date, to_dt: date, db: AsyncSession) -> float:
+    """Агрегат транзакций за произвольный период."""
+    if metric == "orders":
+        agg = "COUNT(DISTINCT posting_number) FILTER (WHERE posting_number IS NOT NULL)"
+    else:
+        agg = "COALESCE(SUM(accruals_for_sale), 0)"
+    row = (await db.execute(text(f"""
+        SELECT {agg} AS val
+        FROM transactions
+        WHERE time >= :ts_from
+          AND time < CAST(:ts_to AS timestamp) + INTERVAL '1 day'
+    """), {"ts_from": from_dt, "ts_to": to_dt})).mappings().one()
+    return float(row["val"] or 0)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -432,6 +457,29 @@ async def distribute_plan(
 
 # ── Факт vs план ─────────────────────────────────────────────────────────────
 
+@router.get("/sales/current-fact", response_model=FactVsPlanRow)
+async def current_fact(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FactVsPlanRow:
+    """MTD-факт за текущий месяц без привязки к плану."""
+    today = datetime.now(UTC).date()
+    period_start = today.replace(day=1)
+    fact_val = await _mtd_fact("revenue", period_start, today, db)
+    return FactVsPlanRow(
+        plan_id=None,
+        period_from=period_start.isoformat(),
+        period_to=today.isoformat(),
+        rows=[FactRowOut(
+            metric="revenue",
+            label=_METRIC_LABELS["revenue"],
+            fact=round(fact_val, 2),
+            plan=None,
+            pct=None,
+        )],
+    )
+
+
 @router.get("/sales/{plan_id}/fact", response_model=FactVsPlanRow)
 async def plan_fact(
     plan_id: int,
@@ -439,76 +487,35 @@ async def plan_fact(
     db: AsyncSession = Depends(get_db),
 ) -> FactVsPlanRow:
     plan = await _get_plan(plan_id, db)
-    period_start: date = plan["period_start"]
-    period_end: date = plan["period_end"]
+    plan_period_start: date = plan["period_start"]
+    plan_period_end: date = plan["period_end"]
     metric: str = plan["metric_code"]
     target: Optional[float] = float(plan["target_value"]) if plan["target_value"] else None
 
     today = datetime.now(UTC).date()
-    is_closed = period_end < today
 
-    # Агрегат транзакций за период плана (MTD или полный если закрыт)
-    fact_end = period_end if is_closed else min(today, period_end)
-
-    if metric == "orders":
-        agg_expr = "COUNT(DISTINCT posting_number) FILTER (WHERE posting_number IS NOT NULL)"
+    # Если период плана ещё не наступил — показываем MTD текущего месяца
+    if plan_period_start > today:
+        fact_start = today.replace(day=1)
+        fact_end = today
     else:
-        agg_expr = "COALESCE(SUM(accruals_for_sale), 0)"
+        fact_start = plan_period_start
+        fact_end = plan_period_end if plan_period_end < today else today
 
-    tx_row = (await db.execute(text(f"""
-        SELECT {agg_expr} AS val
-        FROM transactions
-        WHERE time >= :ts_from
-          AND time <  CAST(:ts_to AS timestamp) + INTERVAL '1 day'
-    """), {
-        "ts_from": period_start,
-        "ts_to": fact_end,
-    })).mappings().one()
-    fact_tx = float(tx_row["val"] or 0)
-
-    # Если период закрыт — пробуем realization_daily (официальные данные Ozon)
-    source = "operational"
-    fact = fact_tx
-    delta_real_str: Optional[str] = None
-
-    if is_closed:
-        real_row = (await db.execute(text("""
-            SELECT COALESCE(SUM(qty_sold * weighted_sp), 0) AS val
-            FROM realization_daily
-            WHERE day >= :from_dt
-              AND day <= :to_dt
-        """), {
-            "from_dt": period_start,
-            "to_dt": period_end,
-        })).mappings().one_or_none()
-
-        if real_row and real_row["val"]:
-            fact_real = float(real_row["val"])
-            delta_real = fact_real - fact_tx
-            delta_real_str = f"{'+' if delta_real >= 0 else ''}{delta_real:,.2f} ₽"
-            fact = fact_real
-            source = "official"
-
-    # Расчёт показателей
-    total_days = (period_end - period_start).days + 1
-    days_passed = max(1, min(total_days, (today - period_start).days + 1))
-    days_remaining = max(0, total_days - days_passed)
-
-    pro_rata = round(target * days_passed / total_days, 2) if target else None
-    plan_pct = round(fact / target * 100, 1) if target and target > 0 else None
-    run_rate = round(fact / days_passed * total_days, 2) if days_passed > 0 else None
-    needed = round((target - fact) / days_remaining, 2) if target and days_remaining > 0 else None
+    fact_val = await _mtd_fact(metric, fact_start, fact_end, db)
+    pct = round(fact_val / target * 100, 1) if target and target > 0 else None
 
     return FactVsPlanRow(
-        metric=metric,
-        plan=target,
-        fact=round(fact, 2),
-        plan_pct=plan_pct,
-        pro_rata=pro_rata,
-        run_rate=run_rate,
-        needed_per_day=needed,
-        source=source,
-        delta_realization=delta_real_str,
+        plan_id=str(plan_id),
+        period_from=fact_start.isoformat(),
+        period_to=fact_end.isoformat(),
+        rows=[FactRowOut(
+            metric=metric,
+            label=_METRIC_LABELS.get(metric, metric),
+            fact=round(fact_val, 2),
+            plan=target,
+            pct=pct,
+        )],
     )
 
 

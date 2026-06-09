@@ -183,13 +183,16 @@ class SimulateResponse(BaseModel):
 
 # ── Факт vs план ─────────────────────────────────────────────────────────────
 
-class FactVsPlanRow(BaseModel):
+class FactRowOut(BaseModel):
     metric: str
-    plan: Optional[float]
-    fact: Optional[float]
-    plan_pct: Optional[float]         # факт / план %
-    pro_rata: Optional[float]         # план × (прошло дней / всего дней)
-    run_rate: Optional[float]         # факт / прошло × всего дней (прогноз на конец)
-    needed_per_day: Optional[float]   # (план − факт) / оставшиеся дни
-    source: str                       # 'operational' | 'official'
-    delta_realization: Optional[str]  # realization − transactions строкой (если оба есть)
+    label: str
+    fact: float
+    plan: Optional[float] = None
+    pct: Optional[float] = None       # факт / план × 100, None если плана нет
+
+
+class FactVsPlanRow(BaseModel):
+    plan_id: Optional[str] = None
+    period_from: str
+    period_to: str
+    rows: list[FactRowOut]
