@@ -556,7 +556,7 @@ export function PlanVsFact() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border-subtle">
-                          {forecast.items.map((it) => {
+                          {(Array.isArray(forecast.items) ? forecast.items : []).map((it) => {
                             const item = planItems[it.sku_id] ?? { plan: String(Math.round(it.forecast)), locked: false }
                             return (
                               <tr key={it.sku_id} className="hover:bg-bg-subtle/40">
@@ -788,7 +788,7 @@ export function PlanVsFact() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-subtle">
-                  {fact.rows.map((r) => (
+                  {(Array.isArray(fact.rows) ? fact.rows : []).map((r) => (
                     <tr key={r.metric} className="hover:bg-bg-subtle/40">
                       <td className="py-3 px-4 font-medium text-fg">{r.label}</td>
                       <td className="py-3 px-4 text-right tabular-nums text-fg">
