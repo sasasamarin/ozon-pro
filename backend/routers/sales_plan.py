@@ -155,7 +155,7 @@ async def _analysis_value_for_sku(
                       AND o.ozon_account_id = t.ozon_account_id
         JOIN order_items oi ON oi.order_id = o.id
         WHERE t.time >= :ts_from
-          AND t.time <  :ts_to + INTERVAL '1 day'
+          AND t.time <  CAST(:ts_to AS timestamp) + INTERVAL '1 day'
           AND oi.offer_id = :sku
     """), {
         "ts_from": analysis_start,
