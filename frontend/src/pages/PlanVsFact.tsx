@@ -270,7 +270,7 @@ export function PlanVsFact() {
       setForecast(data)
       const items: Record<string, { plan: string; locked: boolean }> = {}
       let total = 0
-      data.items.forEach((it) => {
+      ;(Array.isArray(data?.items) ? data.items : []).forEach((it) => {
         const v = Math.round(it.forecast)
         items[it.sku_id] = { plan: String(v), locked: false }
         total += v
@@ -290,7 +290,7 @@ export function PlanVsFact() {
         period_from: forecastFrom,
         period_to: forecastTo,
       })
-      const items = forecast!.items.map((it) => ({
+      const items = (Array.isArray(forecast?.items) ? forecast!.items : []).map((it) => ({
         sku_id: it.sku_id,
         plan_value: parseFloat(planItems[it.sku_id]?.plan || '0'),
         locked: planItems[it.sku_id]?.locked ?? false,
@@ -308,8 +308,9 @@ export function PlanVsFact() {
     if (!forecast) return
     const total = parseFloat(val)
     if (isNaN(total)) return
-    const unlocked = forecast.items.filter((it) => !planItems[it.sku_id]?.locked)
-    const lockedSum = forecast.items
+    const forecastItems = Array.isArray(forecast.items) ? forecast.items : []
+    const unlocked = forecastItems.filter((it) => !planItems[it.sku_id]?.locked)
+    const lockedSum = forecastItems
       .filter((it) => planItems[it.sku_id]?.locked)
       .reduce((s, it) => s + parseFloat(planItems[it.sku_id]?.plan || '0'), 0)
     const remaining = total - lockedSum
@@ -327,7 +328,7 @@ export function PlanVsFact() {
     if (!forecast) return
     const items: Record<string, { plan: string; locked: boolean }> = {}
     let total = 0
-    forecast.items.forEach((it) => {
+    ;(Array.isArray(forecast.items) ? forecast.items : []).forEach((it) => {
       const v = Math.round(it.forecast)
       items[it.sku_id] = { plan: String(v), locked: false }
       total += v
@@ -345,7 +346,7 @@ export function PlanVsFact() {
   // Totals
   const totals = useMemo(() => {
     if (!forecast) return { fact: 0, forecast: 0, plan: 0 }
-    return forecast.items.reduce((acc, it) => ({
+    return (Array.isArray(forecast.items) ? forecast.items : []).reduce((acc, it) => ({
       fact:     acc.fact     + it.fact,
       forecast: acc.forecast + it.forecast,
       plan:     acc.plan     + parseFloat(planItems[it.sku_id]?.plan || '0'),
@@ -354,7 +355,7 @@ export function PlanVsFact() {
 
   // Reliability (most common)
   const reliabilityKey = useMemo(() => {
-    if (!forecast?.items.length) return 'medium'
+    if (!Array.isArray(forecast?.items) || !forecast.items.length) return 'medium'
     const cnt: Record<string, number> = {}
     forecast.items.forEach((it) => { cnt[it.reliability] = (cnt[it.reliability] || 0) + 1 })
     return Object.entries(cnt).sort((a, b) => b[1] - a[1])[0][0]
@@ -363,11 +364,14 @@ export function PlanVsFact() {
   // Chart data
   const chartData = useMemo(() => {
     if (!forecast) return []
-    const histMap = new Map(forecast.history.map((p) => [p.date, p.value]))
-    const fcstMap = new Map(forecast.forecast_series.map((p) => [p.date, p.value]))
+    const history = Array.isArray(forecast.history) ? forecast.history : []
+    const forecastSeries = Array.isArray(forecast.forecast_series) ? forecast.forecast_series : []
+    const forecastItems = Array.isArray(forecast.items) ? forecast.items : []
+    const histMap = new Map(history.map((p) => [p.date, p.value]))
+    const fcstMap = new Map(forecastSeries.map((p) => [p.date, p.value]))
     const dates = [...new Set([...histMap.keys(), ...fcstMap.keys()])].sort()
-    const fcstTotal = forecast.forecast_series.reduce((s, p) => s + p.value, 0) || 1
-    const planTotal = forecast.items.reduce((s, it) => s + parseFloat(planItems[it.sku_id]?.plan || '0'), 0)
+    const fcstTotal = forecastSeries.reduce((s, p) => s + p.value, 0) || 1
+    const planTotal = forecastItems.reduce((s, it) => s + parseFloat(planItems[it.sku_id]?.plan || '0'), 0)
     const ratio = planTotal / fcstTotal
     return dates.map((date) => ({
       date: date.slice(5),
@@ -378,15 +382,16 @@ export function PlanVsFact() {
   }, [forecast, planItems])
 
   // Weekly distribution for Step 3
-  const weekCount = forecast?.items[0]?.season_weights.length ?? 4
+  const weekCount = (Array.isArray(forecast?.items?.[0]?.season_weights) ? forecast!.items[0].season_weights.length : null) ?? 4
   const wLabels = useMemo(() => weekLabels(forecastFrom, weekCount), [forecastFrom, weekCount])
 
   const weeklyRows = useMemo(() => {
     if (!forecast) return []
-    return forecast.items.map((it) => {
+    return (Array.isArray(forecast.items) ? forecast.items : []).map((it) => {
       const total = parseFloat(planItems[it.sku_id]?.plan || '0')
-      const sumW = it.season_weights.reduce((s, w) => s + w, 0) || 1
-      const weeks = it.season_weights.map((w) => Math.round((w / sumW) * total))
+      const weights = Array.isArray(it.season_weights) ? it.season_weights : []
+      const sumW = weights.reduce((s, w) => s + w, 0) || 1
+      const weeks = weights.map((w) => Math.round((w / sumW) * total))
       return { sku_id: it.sku_id, offer_id: it.offer_id, name: it.name, weeks }
     })
   }, [forecast, planItems])
