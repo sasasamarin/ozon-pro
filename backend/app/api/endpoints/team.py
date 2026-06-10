@@ -39,6 +39,10 @@ class MemberRow(BaseModel):
     role: str
     status: str
     accepted_at: str | None
+    # Доступ к кабинетам (NULL = ко всем). Список ozon_account_id.
+    accessible_cabinet_ids: list[str] | None = None
+    # Доступ к модулям (NULL = все). Список slug-ов
+    allowed_modules: list[str] | None = None
 
 
 class InvitationRow(BaseModel):
@@ -55,6 +59,13 @@ class InviteCreate(BaseModel):
     role: str = MemberRole.MANAGER.value
 
 
+class MemberAccessUpdate(BaseModel):
+    role: str | None = None
+    # Если None — поле не меняем. Если [] — обнуляем (= нет доступа никуда).
+    accessible_cabinet_ids: list[str] | None = None
+    allowed_modules: list[str] | None = None
+
+
 @router.get("/members", response_model=list[MemberRow])
 async def list_members(
     current_user: User = Depends(get_current_user),
@@ -65,16 +76,35 @@ async def list_members(
         .join(User, User.id == CompanyMember.user_id)
         .where(CompanyMember.company_id == current_user.company_id)
     )).all()
+
+    # Карта member → cabinet_ids через MemberAccountAccess
+    from app.models.team import MemberAccountAccess
+    member_ids = [cm.id for cm, _ in rows]
+    access_map: dict[str, list[str]] = {}
+    if member_ids:
+        acc_rows = (await db.execute(
+            select(MemberAccountAccess).where(
+                MemberAccountAccess.company_member_id.in_(member_ids),
+            )
+        )).scalars().all()
+        for a in acc_rows:
+            access_map.setdefault(str(a.company_member_id), []).append(
+                str(a.ozon_account_id)
+            )
+
     out: list[MemberRow] = []
     # сам owner — добавим даже если CompanyMember нет (исторически)
     has_owner_in_members = False
     for cm, u in rows:
         if u.id == current_user.id:
             has_owner_in_members = True
+        cab_ids = access_map.get(str(cm.id))
         out.append(MemberRow(
             id=str(cm.id), user_id=str(u.id), email=u.email,
             full_name=u.full_name, role=cm.role, status=cm.status,
             accepted_at=cm.accepted_at.isoformat() if cm.accepted_at else None,
+            accessible_cabinet_ids=cab_ids if cab_ids else None,
+            allowed_modules=getattr(cm, "allowed_modules", None),
         ))
     if not has_owner_in_members:
         out.insert(0, MemberRow(
@@ -288,6 +318,113 @@ async def accept_invitation(
         access_token=create_access_token(subject=str(user.id)),
         refresh_token=create_refresh_token(subject=str(user.id)),
     )
+
+
+@router.patch("/members/{member_id}/access", response_model=MemberRow)
+async def update_member_access(
+    member_id: str,
+    payload: MemberAccessUpdate,
+    current_user: User = Depends(get_current_user),
+    _role=Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Назначить сотруднику роль/кабинеты/модули.
+
+    accessible_cabinet_ids: None — не трогаем. [] — обнулить (доступ ко всем
+    кабинетам по умолчанию, т.к. пустая выборка = "не ограничено" в RBAC).
+    [id, id] — конкретные кабинеты.
+    """
+    import uuid as _u
+    from app.models.team import MemberAccountAccess
+    try:
+        mid = _u.UUID(member_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    member = (await db.execute(
+        select(CompanyMember).where(
+            CompanyMember.id == mid,
+            CompanyMember.company_id == current_user.company_id,
+        )
+    )).scalar_one_or_none()
+    if not member:
+        raise HTTPException(404, "Сотрудник не найден")
+
+    # Запрет менять роль OWNER (single owner per company)
+    if payload.role is not None and member.role == MemberRole.OWNER.value:
+        raise HTTPException(400, "Нельзя сменить роль владельцу компании")
+
+    if payload.role is not None:
+        member.role = payload.role
+
+    if payload.allowed_modules is not None:
+        # Пустой список = вообще ничего нельзя. None = все доступны.
+        member.allowed_modules = payload.allowed_modules if payload.allowed_modules else None
+
+    if payload.accessible_cabinet_ids is not None:
+        # Удаляем все текущие, перезаписываем
+        from sqlalchemy import delete as _delete
+        await db.execute(
+            _delete(MemberAccountAccess).where(
+                MemberAccountAccess.company_member_id == member.id
+            )
+        )
+        for cab_id in payload.accessible_cabinet_ids:
+            try:
+                cid = _u.UUID(cab_id)
+            except ValueError:
+                continue
+            db.add(MemberAccountAccess(
+                company_member_id=member.id,
+                ozon_account_id=cid,
+            ))
+
+    await db.commit()
+    await db.refresh(member)
+
+    # Возвращаем обновлённую строку
+    u = (await db.execute(
+        select(User).where(User.id == member.user_id)
+    )).scalar_one()
+    cab_rows = (await db.execute(
+        select(MemberAccountAccess.ozon_account_id).where(
+            MemberAccountAccess.company_member_id == member.id,
+        )
+    )).all()
+    return MemberRow(
+        id=str(member.id), user_id=str(u.id), email=u.email,
+        full_name=u.full_name, role=member.role, status=member.status,
+        accepted_at=member.accepted_at.isoformat() if member.accepted_at else None,
+        accessible_cabinet_ids=[str(r[0]) for r in cab_rows] if cab_rows else None,
+        allowed_modules=getattr(member, "allowed_modules", None),
+    )
+
+
+@router.delete("/members/{member_id}")
+async def remove_member(
+    member_id: str,
+    current_user: User = Depends(get_current_user),
+    _role=Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Удалить сотрудника из команды (нельзя удалить владельца)."""
+    import uuid as _u
+    try:
+        mid = _u.UUID(member_id)
+    except ValueError:
+        raise HTTPException(400, "Невалидный id")
+    member = (await db.execute(
+        select(CompanyMember).where(
+            CompanyMember.id == mid,
+            CompanyMember.company_id == current_user.company_id,
+        )
+    )).scalar_one_or_none()
+    if not member:
+        raise HTTPException(404, "Сотрудник не найден")
+    if member.role == MemberRole.OWNER.value:
+        raise HTTPException(400, "Нельзя удалить владельца компании")
+    await db.delete(member)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.delete("/invitations/{invitation_id}")

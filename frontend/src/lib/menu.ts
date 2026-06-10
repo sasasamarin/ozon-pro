@@ -56,6 +56,9 @@ export interface NavItem {
   placeholder?: PlaceholderContent
   /** If present, the sidebar renders this as an external <a target="_blank"> instead of an in-app route. */
   externalUrl?: string
+  /** Slug модуля для RBAC: если у юзера allowed_modules не включает этот slug — пункт скрыт.
+   *  Если не задан — наследуется от группы. */
+  module?: string
 }
 
 export interface NavGroup {
@@ -67,18 +70,22 @@ export interface NavGroup {
    */
   headerPath?: string
   items: NavItem[]
+  /** Slug модуля для RBAC. Применяется ко всей группе (если у пунктов не задан свой). */
+  module?: string
 }
 
 // === MAIN SIDEBAR ===
 
 export const NAV_GROUPS: NavGroup[] = [
   {
+    module: 'dashboard',
     items: [
       { path: '/dashboard', label: 'Дашборд', icon: LayoutDashboard },
     ],
   },
   {
     header: 'Аналитика',
+    module: 'analytics',
     items: [
       {
         path: '/analytics/summary',
@@ -131,6 +138,7 @@ export const NAV_GROUPS: NavGroup[] = [
         path: '/sales-plan',
         label: 'План продаж',
         icon: FlagTriangleRight,
+        module: 'sales-plan',
         placeholder: {
           description: 'Bottom-up план продаж + факт + KPI + игровой режим.',
           plannedFeatures: [
@@ -212,6 +220,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     header: 'Товары',
     headerPath: '/products',
+    module: 'products',
     items: [
       {
         path: '/products',
@@ -309,6 +318,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     header: 'Заказы',
     headerPath: '/orders',
+    module: 'orders',
     items: [
       {
         path: '/orders',
@@ -389,6 +399,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     header: 'Финансы',
+    module: 'finance',
     items: [
       {
         path: '/finance/p-and-l',
@@ -489,6 +500,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     header: 'Закупки',
+    module: 'procurement',
     items: [
       {
         path: '/procurement/supplies',
@@ -575,6 +587,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     header: 'Кредиты',
+    module: 'loans',
     items: [
       {
         path: '/loans',
@@ -635,6 +648,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     header: 'Маркеры и алерты',
+    module: 'alerts',
     items: [
       {
         path: '/alerts',
@@ -699,6 +713,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    module: 'ai',
     items: [
       {
         path: '/ai/chat',
@@ -728,11 +743,12 @@ export const NAV_GROUPS: NavGroup[] = [
 // === FOOTER (нижняя секция сайдбара) ===
 
 export const FOOTER_NAV: NavItem[] = [
-  { path: '/cabinets', label: 'Кабинеты', icon: Store },
+  { path: '/cabinets', label: 'Кабинеты', icon: Store, module: 'cabinets' },
   {
     path: '/team',
     label: 'Команда и роли',
     icon: Users,
+    module: 'team',
     placeholder: {
       description: 'Пригласи команду в Flowoi и раздай права.',
       plannedFeatures: [
@@ -748,6 +764,7 @@ export const FOOTER_NAV: NavItem[] = [
     path: '/integrations',
     label: 'Интеграции',
     icon: Plug,
+    module: 'integrations',
     placeholder: {
       description: 'Интеграции с банками, 1С, маркетплейсами кроме Ozon.',
       plannedFeatures: [
@@ -759,7 +776,7 @@ export const FOOTER_NAV: NavItem[] = [
       ],
     },
   },
-  { path: '/settings', label: 'Настройки', icon: SettingsIcon },
+  { path: '/settings', label: 'Настройки', icon: SettingsIcon, module: 'settings' },
   {
     path: '/support',
     label: 'Поддержка',

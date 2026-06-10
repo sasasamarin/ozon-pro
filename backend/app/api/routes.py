@@ -2,9 +2,14 @@
 Главный API роутер.
 
 Объединяет все endpoints (auth, products, orders, dashboard, etc.)
-"""
-from fastapi import APIRouter
 
+RBAC v2: к роутам прицеплен `Depends(require_module(slug))`, который
+кидает 403, если у пользователя slug-а нет в `allowed_modules`.
+OWNER/ADMIN — всегда видят всё.
+"""
+from fastapi import APIRouter, Depends
+
+from app.api.deps_rbac import require_module
 from app.api.endpoints import (
     account_balance,
     auth,
@@ -70,140 +75,246 @@ from app.api.endpoints import (
 
 api_router = APIRouter()
 
-# Подключаем разделы
+
+def _mod(slug: str):
+    """shortcut: list of dependencies, что вешаем на роуты модуля."""
+    return [Depends(require_module(slug))]
+
+
+# === Auth/team/cabinets — без модульного гейта (или с собственным) ===
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(
-    ozon_accounts.router, prefix="/ozon-accounts", tags=["ozon-accounts"]
+    ozon_accounts.router, prefix="/ozon-accounts", tags=["ozon-accounts"],
+    dependencies=_mod("cabinets"),
 )
-api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
-api_router.include_router(
-    dashboard_v2.router, prefix="/dashboard/v2", tags=["dashboard"]
+api_router.include_router(team.router, prefix="/team", tags=["team"],
+    dependencies=_mod("team"),
 )
-api_router.include_router(products.router, prefix="/products", tags=["products"])
-api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
-api_router.include_router(
-    transactions.router, prefix="/finance/transactions", tags=["finance"]
-)
-api_router.include_router(
-    funnel.router, prefix="/analytics/funnel", tags=["analytics"]
+
+# === Dashboard ===
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"],
+    dependencies=_mod("dashboard"),
 )
 api_router.include_router(
-    funnel_v2.router, prefix="/analytics/funnel/v2", tags=["analytics"]
+    dashboard_v2.router, prefix="/dashboard/v2", tags=["dashboard"],
+    dependencies=_mod("dashboard"),
 )
 api_router.include_router(
-    seasonality.router, prefix="/seasonality", tags=["seasonality"]
+    dashboard_builder.router, prefix="/dashboard/builder", tags=["dashboard"],
+    dependencies=_mod("dashboard"),
+)
+
+# === Products ===
+api_router.include_router(products.router, prefix="/products", tags=["products"],
+    dependencies=_mod("products"),
 )
 api_router.include_router(
-    ai_chat.router, prefix="/ai", tags=["ai"]
-)
-# AI Phase 1 — новые endpoints поверх ai_chat_sessions/messages (OpenAI function calling)
-api_router.include_router(
-    ai_chat_v2.router, prefix="/ai", tags=["ai"]
+    product_economics.router, prefix="/products/economics", tags=["products"],
+    dependencies=_mod("products"),
 )
 api_router.include_router(
-    storage_warning.router, prefix="/storage-warning", tags=["analytics"]
+    calculator.router, prefix="/products/calculator", tags=["products"],
+    dependencies=_mod("products"),
 )
 api_router.include_router(
-    competitor.router, prefix="/competitor", tags=["analytics"]
+    categories.router, prefix="/products/categories", tags=["products"],
+    dependencies=_mod("products"),
 )
 api_router.include_router(
-    competitor_prices.router, prefix="/competitor-prices", tags=["analytics"]
+    product_stats.router, prefix="/products/stats", tags=["products"],
+    dependencies=_mod("products"),
 )
 api_router.include_router(
-    margin.router, prefix="/margin", tags=["finance"]
+    competitor_prices.router, prefix="/competitor-prices", tags=["products"],
+    dependencies=_mod("products"),
+)
+
+# === Orders / returns ===
+api_router.include_router(orders.router, prefix="/orders", tags=["orders"],
+    dependencies=_mod("orders"),
+)
+api_router.include_router(returns.router, prefix="/returns", tags=["orders"],
+    dependencies=_mod("orders"),
+)
+
+# === Finance ===
+api_router.include_router(
+    transactions.router, prefix="/finance/transactions", tags=["finance"],
+    dependencies=_mod("finance"),
+)
+api_router.include_router(margin.router, prefix="/margin", tags=["finance"],
+    dependencies=_mod("finance"),
+)
+api_router.include_router(taxes.router, prefix="/taxes", tags=["finance"],
+    dependencies=_mod("finance"),
+)
+api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"],
+    dependencies=_mod("finance"),
 )
 api_router.include_router(
-    taxes.router, prefix="/taxes", tags=["finance"]
+    unit_economy.router, prefix="/finance/unit-economy", tags=["finance"],
+    dependencies=_mod("finance"),
 )
-# AI Bridge — endpoints для внешнего ozon-pro-ai (Render). Защищены SERVICE_TOKEN.
+api_router.include_router(
+    cashflow.router, prefix="/finance/cashflow", tags=["finance"],
+    dependencies=_mod("finance"),
+)
+api_router.include_router(expenses.router, prefix="/finance/expenses", tags=["finance"],
+    dependencies=_mod("finance"),
+)
+api_router.include_router(
+    account_balance.router, prefix="/finance/account-balance", tags=["finance"],
+    dependencies=_mod("finance"),
+)
+api_router.include_router(
+    reconciliation.router, prefix="/reconciliation", tags=["finance"],
+    dependencies=_mod("finance"),
+)
+api_router.include_router(costs.router, prefix="/costs", tags=["finance"],
+    dependencies=_mod("finance"),
+)
+
+# === Loans ===
+api_router.include_router(credit.router, prefix="/credit", tags=["loans"],
+    dependencies=_mod("loans"),
+)
+api_router.include_router(loans.router, prefix="/loans", tags=["loans"],
+    dependencies=_mod("loans"),
+)
+api_router.include_router(loans_schedule.router, prefix="/loans", tags=["loans"],
+    dependencies=_mod("loans"),
+)
+api_router.include_router(loans_cashflow_impact.router, prefix="/loans", tags=["loans"],
+    dependencies=_mod("loans"),
+)
+api_router.include_router(loans_refinance.router, prefix="/loans", tags=["loans"],
+    dependencies=_mod("loans"),
+)
+
+# === Analytics ===
+api_router.include_router(
+    funnel.router, prefix="/analytics/funnel", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    funnel_v2.router, prefix="/analytics/funnel/v2", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    seasonality.router, prefix="/seasonality", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    storage_warning.router, prefix="/storage-warning", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    competitor.router, prefix="/competitor", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    day_explanation.router, prefix="/analytics/day-explanation", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    inventory_balance.router, prefix="/inventory", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    metrics_matrix.router, prefix="/analytics/metrics-matrix", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    whatif.router, prefix="/whatif", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(summary.router, prefix="/analytics/summary", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    reverse_funnel.router, prefix="/analytics/reverse-funnel", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+api_router.include_router(
+    warehouse_stocks.router, prefix="/warehouse-stocks", tags=["analytics"],
+    dependencies=_mod("analytics"),
+)
+
+# === Sales plan ===
+api_router.include_router(
+    plan_vs_fact.router, prefix="/analytics/plan-vs-fact", tags=["sales-plan"],
+    dependencies=_mod("sales-plan"),
+)
+api_router.include_router(
+    sales_plans.router, prefix="/plans", tags=["sales-plan"],
+    dependencies=_mod("sales-plan"),
+)
+api_router.include_router(
+    plan_purchase.router, prefix="/analytics/plan-purchase", tags=["procurement"],
+    dependencies=_mod("procurement"),
+)
+
+# === Procurement ===
+api_router.include_router(
+    supply_params.router, prefix="/supply-params", tags=["procurement"],
+    dependencies=_mod("procurement"),
+)
+api_router.include_router(
+    recommendations.router, prefix="/recommendations", tags=["procurement"],
+    dependencies=_mod("procurement"),
+)
+api_router.include_router(
+    supplier_orders.router, prefix="/procurement/orders", tags=["procurement"],
+    dependencies=_mod("procurement"),
+)
+api_router.include_router(supplies.router, prefix="/supplies", tags=["procurement"],
+    dependencies=_mod("procurement"),
+)
+api_router.include_router(
+    procurement_calendar.router, prefix="/procurement/calendar", tags=["procurement"],
+    dependencies=_mod("procurement"),
+)
+api_router.include_router(
+    procurement_quality.router, prefix="/procurement/quality", tags=["procurement"],
+    dependencies=_mod("procurement"),
+)
+
+# === AI ===
+api_router.include_router(
+    ai_chat.router, prefix="/ai", tags=["ai"],
+    dependencies=_mod("ai"),
+)
+api_router.include_router(
+    ai_chat_v2.router, prefix="/ai", tags=["ai"],
+    dependencies=_mod("ai"),
+)
+api_router.include_router(
+    ai_context.router, prefix="/ai", tags=["ai"],
+    dependencies=_mod("ai"),
+)
+# AI Bridge — для внешнего ozon-pro-ai (Render). Защищён SERVICE_TOKEN, модуль не вешаем.
 api_router.include_router(
     ai_bridge.router, prefix="", tags=["ai-bridge"]
 )
-api_router.include_router(
-    day_explanation.router, prefix="/analytics/day-explanation", tags=["analytics"]
+
+# === Alerts / settings / system ===
+api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"],
+    dependencies=_mod("alerts"),
+)
+api_router.include_router(markers.router, prefix="/markers", tags=["alerts"],
+    dependencies=_mod("alerts"),
 )
 api_router.include_router(
-    reconciliation.router, prefix="/reconciliation", tags=["reconciliation"]
+    communications.router, prefix="/communications", tags=["alerts"],
+    dependencies=_mod("alerts"),
 )
 api_router.include_router(
-    company_settings.router, prefix="/company/settings", tags=["settings"]
-)
-api_router.include_router(
-    product_economics.router, prefix="/products/economics", tags=["products"]
+    company_settings.router, prefix="/company/settings", tags=["settings"],
+    dependencies=_mod("settings"),
 )
 api_router.include_router(
     system_health.router, prefix="/system", tags=["system"]
 )
-api_router.include_router(
-    inventory_balance.router, prefix="/inventory", tags=["inventory"]
+api_router.include_router(email_logs.router, prefix="/email", tags=["settings"],
+    dependencies=_mod("settings"),
 )
-api_router.include_router(
-    metrics_matrix.router, prefix="/analytics/metrics-matrix", tags=["analytics"]
-)
-api_router.include_router(
-    ai_context.router, prefix="/ai", tags=["ai"]
-)
-api_router.include_router(
-    whatif.router, prefix="/whatif", tags=["whatif"]
-)
-api_router.include_router(
-    calculator.router, prefix="/products/calculator", tags=["products"]
-)
-api_router.include_router(pnl.router, prefix="/finance/pnl", tags=["finance"])
-api_router.include_router(
-    unit_economy.router, prefix="/finance/unit-economy", tags=["finance"]
-)
-api_router.include_router(
-    cashflow.router, prefix="/finance/cashflow", tags=["finance"]
-)
-api_router.include_router(returns.router, prefix="/returns", tags=["returns"])
-api_router.include_router(
-    warehouse_stocks.router, prefix="/warehouse-stocks", tags=["warehouses"]
-)
-api_router.include_router(summary.router, prefix="/analytics/summary", tags=["analytics"])
-api_router.include_router(
-    categories.router, prefix="/products/categories", tags=["products"]
-)
-api_router.include_router(costs.router, prefix="/costs", tags=["costs"])
-api_router.include_router(
-    supply_params.router, prefix="/supply-params", tags=["procurement"]
-)
-api_router.include_router(
-    recommendations.router, prefix="/recommendations", tags=["recommendations"]
-)
-api_router.include_router(expenses.router, prefix="/finance/expenses", tags=["finance"])
-api_router.include_router(
-    supplier_orders.router, prefix="/procurement/orders", tags=["procurement"]
-)
-api_router.include_router(
-    communications.router, prefix="/communications", tags=["communications"]
-)
-api_router.include_router(markers.router, prefix="/markers", tags=["markers"])
-api_router.include_router(team.router, prefix="/team", tags=["team"])
-api_router.include_router(
-    plan_vs_fact.router, prefix="/analytics/plan-vs-fact", tags=["analytics"]
-)
-api_router.include_router(
-    account_balance.router, prefix="/finance/account-balance", tags=["finance"]
-)
-api_router.include_router(
-    plan_purchase.router, prefix="/analytics/plan-purchase", tags=["analytics"]
-)
-api_router.include_router(
-    sales_plans.router, prefix="/plans", tags=["plans"]
-)
-api_router.include_router(credit.router, prefix="/credit", tags=["credit"])
-api_router.include_router(loans.router, prefix="/loans", tags=["loans"])
-api_router.include_router(loans_schedule.router, prefix="/loans", tags=["loans"])
-api_router.include_router(loans_cashflow_impact.router, prefix="/loans", tags=["loans"])
-api_router.include_router(loans_refinance.router, prefix="/loans", tags=["loans"])
-api_router.include_router(procurement_calendar.router, prefix="/procurement/calendar", tags=["procurement"])
-api_router.include_router(procurement_quality.router, prefix="/procurement/quality", tags=["procurement"])
-api_router.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
-api_router.include_router(supplies.router, prefix="/supplies", tags=["supplies"])
-api_router.include_router(product_stats.router, prefix="/products/stats", tags=["analytics"])
-api_router.include_router(dashboard_builder.router, prefix="/dashboard/builder", tags=["dashboard"])
-api_router.include_router(
-    reverse_funnel.router, prefix="/analytics/reverse-funnel", tags=["analytics"],
-)
-api_router.include_router(email_logs.router, prefix="/email", tags=["email"])

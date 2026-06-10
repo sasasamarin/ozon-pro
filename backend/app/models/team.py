@@ -19,7 +19,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import BaseModel
@@ -64,6 +64,8 @@ class CompanyMember(BaseModel):
     status: Mapped[str] = mapped_column(
         String(20), default=MemberStatus.ACTIVE.value, nullable=False
     )
+    # Доступ к модулям (NULL = все). Список slug-ов: ['dashboard', 'products', ...]
+    allowed_modules: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

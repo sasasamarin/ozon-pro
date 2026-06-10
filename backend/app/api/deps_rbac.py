@@ -87,3 +87,34 @@ require_admin = require_role(ROLES_OWNER_ADMIN)
 require_write = require_role(ROLES_WRITE)
 require_finance = require_role(ROLES_FINANCE)
 require_operational = require_role(ROLES_OPERATIONAL)
+
+
+def require_module(slug: str):
+    """Зависимость FastAPI: проверяет что у юзера есть доступ к модулю.
+
+    OWNER/ADMIN видят всё. Остальные — только если slug в CompanyMember.allowed_modules
+    или allowed_modules = NULL (без ограничений).
+    """
+    async def _check(
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> None:
+        cm = (await db.execute(
+            select(CompanyMember).where(
+                CompanyMember.user_id == current_user.id,
+                CompanyMember.company_id == current_user.company_id,
+                CompanyMember.status == MemberStatus.ACTIVE.value,
+            )
+        )).scalar_one_or_none()
+        if not cm:
+            return  # legacy owner
+        if cm.role in (MemberRole.OWNER.value, MemberRole.ADMIN.value):
+            return
+        allowed = getattr(cm, "allowed_modules", None)
+        if allowed is None:
+            return
+        if slug in allowed:
+            return
+        raise HTTPException(403, detail=f"Доступ к модулю «{slug}» закрыт для вашей роли.")
+
+    return _check

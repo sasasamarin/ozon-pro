@@ -4,6 +4,7 @@ import { Zap, Lock, X, ExternalLink, ChevronDown } from 'lucide-react'
 import { Logo } from './ui/Logo'
 import { cn } from '@/lib/utils'
 import { NAV_GROUPS, FOOTER_NAV, type NavItem, type NavGroup } from '@/lib/menu'
+import { useCurrentUser, hasModule } from '@/lib/auth'
 
 // TODO: replace with real user tier when account context exposes it
 const HAS_PREMIUM_PLUS = false
@@ -100,16 +101,35 @@ function loadOpenGroups(): Record<string, boolean> {
 export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
   const { pathname } = useLocation()
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(loadOpenGroups)
+  const { data: currentUser } = useCurrentUser()
+
+  // Фильтрация по allowed_modules. OWNER/ADMIN видят всё (см. hasModule).
+  const visibleGroups = useMemo<NavGroup[]>(() => {
+    return NAV_GROUPS
+      .map((g) => {
+        const items = g.items.filter((it) => {
+          const slug = it.module ?? g.module
+          if (!slug) return true
+          return hasModule(currentUser, slug)
+        })
+        return { ...g, items }
+      })
+      .filter((g) => g.items.length > 0)
+  }, [currentUser])
+
+  const visibleFooter = useMemo<NavItem[]>(() => {
+    return FOOTER_NAV.filter((it) => !it.module || hasModule(currentUser, it.module))
+  }, [currentUser])
 
   // Группа с текущим маршрутом всегда раскрыта (не сохраняем — только текущий expansion)
   const effectiveOpen = useMemo(() => {
     const out: Record<string, boolean> = { ...openGroups }
-    NAV_GROUPS.forEach((g, gi) => {
+    visibleGroups.forEach((g, gi) => {
       const k = groupKey(g, gi)
       if (groupContainsActive(g, pathname)) out[k] = true
     })
     return out
-  }, [openGroups, pathname])
+  }, [openGroups, pathname, visibleGroups])
 
   const toggleGroup = (k: string) => {
     setOpenGroups((prev) => {
@@ -158,7 +178,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
         {/* Scrollable nav */}
         <nav className="flex-1 overflow-y-auto py-3 px-2">
           <ul className="flex flex-col gap-0.5">
-            {NAV_GROUPS.map((group, gi) => {
+            {visibleGroups.map((group, gi) => {
               const k = groupKey(group, gi)
               const isOpen = !group.header || effectiveOpen[k]
               return (
@@ -205,7 +225,7 @@ export function Sidebar({ mobileOpen, onMobileClose }: SidebarProps) {
         {/* Footer items */}
         <div className="border-t border-border-subtle px-2 py-3 shrink-0">
           <ul className="flex flex-col gap-0.5">
-            {FOOTER_NAV.map((item) => (
+            {visibleFooter.map((item) => (
               <li key={item.path}>
                 <SidebarItem item={item} onNavigate={onMobileClose} />
               </li>

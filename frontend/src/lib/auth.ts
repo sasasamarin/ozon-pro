@@ -9,6 +9,10 @@ export interface CurrentUser {
   company_name: string | null
   role: string
   is_admin: boolean
+  /** Список ozon_account_id, к которым у пользователя есть доступ. NULL = ко всем. */
+  accessible_cabinet_ids?: string[] | null
+  /** Список slug-модулей. NULL = все модули доступны. */
+  allowed_modules?: string[] | null
 }
 
 export interface LoginPayload {
@@ -115,4 +119,48 @@ export function roleLabel(role?: string): string {
     case ROLE_VIEWER: return 'Наблюдатель'
     default: return role || '—'
   }
+}
+
+
+// === Каталог модулей (для управления доступом) ===
+// Slug должен совпадать с backend-проверкой в deps_rbac.require_module().
+export interface ModuleDef {
+  slug: string
+  label: string
+  group?: string
+}
+
+export const ALL_MODULES: ModuleDef[] = [
+  { slug: 'dashboard',     label: 'Дашборд',                group: 'Главное' },
+  { slug: 'analytics',     label: 'Аналитика',              group: 'Главное' },
+  { slug: 'sales-plan',    label: 'План продаж',            group: 'Главное' },
+  { slug: 'products',      label: 'Товары',                 group: 'Операции' },
+  { slug: 'orders',        label: 'Заказы',                 group: 'Операции' },
+  { slug: 'finance',       label: 'Финансы и P&L',          group: 'Финансы' },
+  { slug: 'procurement',   label: 'Закупки',                group: 'Операции' },
+  { slug: 'loans',         label: 'Кредиты',                group: 'Финансы' },
+  { slug: 'alerts',        label: 'Маркеры и алерты',       group: 'Главное' },
+  { slug: 'ai',            label: 'AI-чат и Telegram',      group: 'Главное' },
+  { slug: 'cabinets',      label: 'Кабинеты Ozon',          group: 'Настройки' },
+  { slug: 'team',          label: 'Команда',                group: 'Настройки' },
+  { slug: 'integrations',  label: 'Интеграции',             group: 'Настройки' },
+  { slug: 'settings',      label: 'Профиль и настройки',    group: 'Настройки' },
+]
+
+/** Доступен ли пользователю конкретный модуль. */
+export function hasModule(user: CurrentUser | undefined | null, slug: string): boolean {
+  if (!user) return false
+  // OWNER/ADMIN — всегда всё
+  if (user.role === ROLE_OWNER || user.role === ROLE_ADMIN) return true
+  // NULL/undefined = без ограничения
+  if (!user.allowed_modules) return true
+  return user.allowed_modules.includes(slug)
+}
+
+/** Есть ли у пользователя доступ к конкретному ozon_account_id. */
+export function hasCabinetAccess(user: CurrentUser | undefined | null, cabinetId: string): boolean {
+  if (!user) return false
+  if (user.role === ROLE_OWNER || user.role === ROLE_ADMIN) return true
+  if (!user.accessible_cabinet_ids) return true
+  return user.accessible_cabinet_ids.includes(cabinetId)
 }

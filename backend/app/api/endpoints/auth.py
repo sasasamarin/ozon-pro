@@ -186,7 +186,7 @@ class MeUpdateRequest(BaseModel):
 async def _build_me_response(user: User, db: AsyncSession) -> MeResponse:
     # Роль из CompanyMember (новый RBAC). Если строки нет — юзер сам создал
     # компанию, считаем OWNER (legacy совместимость).
-    from app.models.team import CompanyMember, MemberRole, MemberStatus
+    from app.models.team import CompanyMember, MemberAccountAccess, MemberRole, MemberStatus
     cm = (await db.execute(
         select(CompanyMember).where(
             CompanyMember.user_id == user.id,
@@ -195,6 +195,19 @@ async def _build_me_response(user: User, db: AsyncSession) -> MeResponse:
         )
     )).scalar_one_or_none()
     role_name = cm.role if cm else MemberRole.OWNER.value
+
+    # Доступ к кабинетам и модулям
+    accessible_cabs: list[str] | None = None
+    allowed_modules = None
+    if cm:
+        cab_rows = (await db.execute(
+            select(MemberAccountAccess.ozon_account_id).where(
+                MemberAccountAccess.company_member_id == cm.id,
+            )
+        )).all()
+        if cab_rows:
+            accessible_cabs = [str(r[0]) for r in cab_rows]
+        allowed_modules = getattr(cm, "allowed_modules", None)
 
     company = (
         await db.execute(select(Company).where(Company.id == user.company_id))
@@ -207,6 +220,8 @@ async def _build_me_response(user: User, db: AsyncSession) -> MeResponse:
         company_name=company.name if company else None,
         role=role_name,
         is_admin=user.is_admin,
+        accessible_cabinet_ids=accessible_cabs,
+        allowed_modules=allowed_modules,
     )
 
 
