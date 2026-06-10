@@ -19,6 +19,7 @@ from sqlalchemy import String as sa_str
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Product, User
 from app.models.marketplace import Cancellation, Return
@@ -67,7 +68,11 @@ class ReturnsStatsResponse(BaseModel):
 
 
 async def _account_ids(
-    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    cabinet_ids: list[uuid.UUID] | None,
+    accessible: list[uuid.UUID] | None = None,
 ) -> tuple[list[uuid.UUID], dict[str, str]]:
     q = select(OzonAccount.id, OzonAccount.name).where(
         OzonAccount.company_id == company_id,
@@ -75,6 +80,8 @@ async def _account_ids(
     )
     if cabinet_ids:
         q = q.where(OzonAccount.id.in_(cabinet_ids))
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     rows = (await db.execute(q)).all()
     return [r[0] for r in rows], {str(r[0]): r[1] for r in rows}
 
@@ -91,8 +98,10 @@ async def list_returns(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ReturnsListResponse:
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     accs, cabinet_names = await _account_ids(
-        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids,
+        accessible=accessible,
     )
     if not accs:
         return ReturnsListResponse(page=page, page_size=page_size, total=0, total_amount=0, items=[])
@@ -302,8 +311,10 @@ async def returns_stats(
     from datetime import timedelta
     period_from = datetime.now(UTC) - timedelta(days=days)
 
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     accs, _ = await _account_ids(
-        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids,
+        accessible=accessible,
     )
     if not accs:
         return ReturnsStatsResponse(

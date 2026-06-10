@@ -19,6 +19,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Product, User
 from app.models.cost import (
@@ -273,10 +274,14 @@ async def create_order(
     except ValueError:
         raise HTTPException(400, "Невалидный product_id")
 
-    prod = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    prod_stmt = (
         select(Product).join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
-    )).scalar_one_or_none()
+    )
+    if accessible is not None:
+        prod_stmt = prod_stmt.where(OzonAccount.id.in_(accessible))
+    prod = (await db.execute(prod_stmt)).scalar_one_or_none()
     if not prod:
         raise HTTPException(404, "Товар не найден")
 

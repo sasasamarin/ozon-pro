@@ -27,6 +27,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids, verify_cabinet_access
 from app.db.session import get_db
 from app.models import OzonAccount, User
 
@@ -90,8 +91,15 @@ async def storage_warning(
         ))).scalar_one_or_none()
         if not ok:
             raise HTTPException(404, "Кабинет не ваш")
+        await verify_cabinet_access(db, current_user, cabinet_id)
         cab_filter = "AND oa.id = :cab"
         params["cab"] = str(cabinet_id)
+    else:
+        # RBAC: если у юзера ограниченный MAA — режем SQL по доступным cabinet_id
+        accessible = await get_accessible_cabinet_ids(db, current_user)
+        if accessible is not None:
+            cab_filter = "AND oa.id = ANY(:cabs)"
+            params["cabs"] = [str(c) for c in accessible]
 
     # ОДИН большой SQL — всё одной агрегацией.
     # Stock-блок копирует паттерн из products.py: FBO_WH (per-warehouse)

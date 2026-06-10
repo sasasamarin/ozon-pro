@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids, verify_cabinet_access
 from app.db.session import get_db
 from app.models import OzonAccount, Product, User
 from app.services.seasonality import events as events_module
@@ -101,11 +102,16 @@ async def _resolve_cabinet(
         ))).scalar_one_or_none()
         if not ok:
             raise HTTPException(404, "Кабинет не найден или не ваш")
+        await verify_cabinet_access(db, current_user, cabinet_id)
         return ok
-    first = (await db.execute(select(OzonAccount.id).where(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    first_q = select(OzonAccount.id).where(
         OzonAccount.company_id == current_user.company_id,
         OzonAccount.deleted_at.is_(None),
-    ).limit(1))).scalar_one_or_none()
+    )
+    if accessible is not None:
+        first_q = first_q.where(OzonAccount.id.in_(accessible))
+    first = (await db.execute(first_q.limit(1))).scalar_one_or_none()
     if not first:
         raise HTTPException(404, "Нет активных кабинетов")
     return first
@@ -123,6 +129,10 @@ async def _verify_product(
     ))).scalar_one_or_none()
     if acc != current_user.company_id:
         raise HTTPException(403, "Товар чужого кабинета")
+    # RBAC: если у юзера ограниченный MAA — проверяем доступ к кабинету товара
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    if accessible is not None and p.ozon_account_id not in accessible:
+        raise HTTPException(403, "Нет доступа к этому кабинету")
     return p.id, p.ozon_account_id
 
 

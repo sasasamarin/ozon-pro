@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Product, User
 from app.models.cost import (
@@ -311,12 +312,14 @@ async def upload_costs_csv(
         raise HTTPException(500, "У компании нет владельца")
 
     # Products map (offer_id_lower → Product)
-    accs_q = await db.execute(
-        select(OzonAccount.id).where(
-            OzonAccount.company_id == current_user.company_id,
-            OzonAccount.deleted_at.is_(None),
-        )
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs_select = select(OzonAccount.id).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        accs_select = accs_select.where(OzonAccount.id.in_(accessible))
+    accs_q = await db.execute(accs_select)
     accs = [r[0] for r in accs_q.all()]
     products = (await db.execute(
         select(Product).where(

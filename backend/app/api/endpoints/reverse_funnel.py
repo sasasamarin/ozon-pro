@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import verify_cabinet_access
 from app.db.session import get_db
 from app.models import User
 from app.services.reverse_funnel import scenario_to_dict, solve_for_target
@@ -47,12 +48,16 @@ async def solve_reverse_funnel(
     prod = (await db.execute(text("""
         SELECT p.id, p.name, p.offer_id, p.cost_price::float cost,
                p.marketing_price::float, p.current_price::float,
-               p.sales_percent_fbo::float comm_pct
+               p.sales_percent_fbo::float comm_pct,
+               p.ozon_account_id::text cab_id
         FROM products p JOIN ozon_accounts a ON a.id = p.ozon_account_id
         WHERE p.id = :pid AND a.company_id = :cid
     """), {"pid": str(body.product_id), "cid": str(current_user.company_id)})).first()
     if not prod:
         raise HTTPException(404, "product not found")
+
+    # Cabinet isolation: проверяем что кабинет товара доступен юзеру
+    await verify_cabinet_access(db, current_user, prod.cab_id)
 
     cost = prod.cost or 0.0
     seller_price = prod.marketing_price or prod.current_price or 0.0

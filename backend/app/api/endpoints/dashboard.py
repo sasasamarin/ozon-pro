@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import Order, OrderItem, OzonAccount, Product, Transaction, User
 from app.models.cost import CostConfidence, ProductCostHistory
@@ -99,7 +100,11 @@ _EXPENSE_BUCKETS = [
 
 
 async def _account_ids(
-    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    cabinet_ids: list[uuid.UUID] | None,
+    accessible: list[uuid.UUID] | None = None,
 ) -> list[uuid.UUID]:
     q = select(OzonAccount.id).where(
         OzonAccount.company_id == company_id,
@@ -107,6 +112,8 @@ async def _account_ids(
     )
     if cabinet_ids:
         q = q.where(OzonAccount.id.in_(cabinet_ids))
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     return [r[0] for r in (await db.execute(q)).all()]
 
 
@@ -403,7 +410,13 @@ async def get_dashboard(
     period_from = now - timedelta(days=days)
     prev_from = period_from - timedelta(days=days)
 
-    accounts = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accounts = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
 
     revenue, orders_count = await _revenue_and_orders(
         db, account_ids=accounts, period_from=period_from, period_to=period_to

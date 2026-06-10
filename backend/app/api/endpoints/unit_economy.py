@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import MonthlyUnitEconomy, OzonAccount, User
 from app.services.unit_economy_parser import (
@@ -163,12 +164,14 @@ async def upload_coverage(
     from sqlalchemy import select, text as _txt
 
     # Список кабинетов
-    cab_rows = (await db.execute(
-        select(OzonAccount.id, OzonAccount.name).where(
-            OzonAccount.company_id == current_user.company_id,
-            OzonAccount.deleted_at.is_(None),
-        ).order_by(OzonAccount.name)
-    )).all()
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    cab_q = select(OzonAccount.id, OzonAccount.name).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
+    ).order_by(OzonAccount.name)
+    if accessible is not None:
+        cab_q = cab_q.where(OzonAccount.id.in_(accessible))
+    cab_rows = (await db.execute(cab_q)).all()
     cabinets = [{"id": str(r.id), "name": r.name} for r in cab_rows]
 
     # Список последних N месяцев (включая текущий)

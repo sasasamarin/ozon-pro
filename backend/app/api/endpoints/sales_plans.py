@@ -34,6 +34,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import User
 from app.models.sales_plan import PlanKPI, SalesPlan, SalesPlanDaily, SalesPlanItem
@@ -583,11 +584,13 @@ async def list_plans(
 
     # Карта кабинетов для подстановки названий в template_cabinet_ids
     from app.models import OzonAccount
-    cabs_rows = (await db.execute(
-        select(OzonAccount.id, OzonAccount.name).where(
-            OzonAccount.company_id == current_user.company_id,
-        )
-    )).all()
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    cabs_q = select(OzonAccount.id, OzonAccount.name).where(
+        OzonAccount.company_id == current_user.company_id,
+    )
+    if accessible is not None:
+        cabs_q = cabs_q.where(OzonAccount.id.in_(accessible))
+    cabs_rows = (await db.execute(cabs_q)).all()
     cab_name = {str(r.id): r.name for r in cabs_rows}
 
     rows = []

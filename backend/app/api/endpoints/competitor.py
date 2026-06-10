@@ -26,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import verify_cabinet_access
 from app.db.session import get_db
 from app.models import User
 
@@ -111,6 +112,9 @@ async def competitor_signal(
     """), {"pid": str(product_id), "cid": str(current_user.company_id)})).first()
     if not p:
         raise HTTPException(404, "Товар не найден")
+
+    # Cabinet isolation: проверяем что кабинет товара доступен юзеру
+    await verify_cabinet_access(db, current_user, p.cab_id)
 
     df = date.today() - timedelta(days=days)
     dt = date.today()

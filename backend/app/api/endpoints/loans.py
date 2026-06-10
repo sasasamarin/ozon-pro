@@ -25,6 +25,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import verify_cabinet_access
 from app.api.deps_rbac import require_finance
 from app.db.session import get_db
 from app.models import Loan, LoanPayment, OzonAccount, User
@@ -226,6 +227,7 @@ async def create_loan(
         )).scalar_one_or_none()
         if not owns_cabinet:
             raise HTTPException(404, "Кабинет не найден или не принадлежит компании")
+        await verify_cabinet_access(db, current_user, payload.cabinet_id)
 
     loan = Loan(
         company_id=current_user.company_id,

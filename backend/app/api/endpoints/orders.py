@@ -23,6 +23,7 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import Order, OrderItem, OzonAccount, User
 
@@ -76,11 +77,14 @@ async def list_orders(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> OrdersListResponse:
-    # Кабинеты компании юзера, отфильтрованные по cabinet_ids
+    # Кабинеты компании юзера, отфильтрованные по cabinet_ids (+ RBAC)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     accounts_q = select(OzonAccount.id, OzonAccount.name).where(
         OzonAccount.company_id == current_user.company_id,
         OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        accounts_q = accounts_q.where(OzonAccount.id.in_(accessible))
     if cabinet_ids:
         accounts_q = accounts_q.where(OzonAccount.id.in_(cabinet_ids))
     accounts_rows = (await db.execute(accounts_q)).all()
@@ -224,10 +228,13 @@ async def orders_daily(
     prev_to = date_from - timedelta(days=1)
     prev_from = prev_to - timedelta(days=days)
 
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     accs_q = select(OzonAccount.id).where(
         OzonAccount.company_id == current_user.company_id,
         OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        accs_q = accs_q.where(OzonAccount.id.in_(accessible))
     if cabinet_ids:
         accs_q = accs_q.where(OzonAccount.id.in_(cabinet_ids))
     accs = [r[0] for r in (await db.execute(accs_q)).all()]

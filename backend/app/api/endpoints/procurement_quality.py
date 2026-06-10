@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import User
 
@@ -64,8 +65,29 @@ async def procurement_quality(
     uid = str(current_user.id)
     cid = str(current_user.company_id)
 
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    extra_filter = ""
+    params: dict = {"uid": uid, "cid": cid, "df": df}
+    if accessible is not None:
+        if not accessible:
+            return QualityResp(
+                period_from=df.isoformat(),
+                period_to=date.today().isoformat(),
+                suppliers=[],
+                problem_products=[],
+                summary={
+                    "total_supplied": 0,
+                    "total_returned": 0,
+                    "overall_return_rate_pct": 0,
+                    "suppliers_count": 0,
+                    "note": "Нет доступных кабинетов.",
+                },
+            )
+        extra_filter = " AND oa.id = ANY(:accessible_ids)"
+        params["accessible_ids"] = [str(c) for c in accessible]
+
     # 1) Агрегация по поставщикам
-    sup_rows = (await db.execute(text("""
+    sup_rows = (await db.execute(text(f"""
         WITH supplied AS (
             SELECT
                 so.supplier_id::text,
@@ -89,7 +111,7 @@ async def procurement_quality(
             SELECT r.product_id, SUM(r.quantity) AS units_ret
             FROM returns r
             JOIN ozon_accounts oa ON oa.id = r.ozon_account_id
-            WHERE oa.company_id = :cid AND r.return_date >= :df
+            WHERE oa.company_id = :cid AND r.return_date >= :df{extra_filter}
             GROUP BY r.product_id
         )
         SELECT
@@ -106,7 +128,7 @@ async def procurement_quality(
         LEFT JOIN returns_agg ra ON ra.product_id = s.product_id
         GROUP BY s.supplier_id, sup.name
         ORDER BY units_supplied DESC
-    """), {"uid": uid, "cid": cid, "df": df})).all()
+    """), params)).all()
 
     suppliers = []
     total_supplied = total_returned = 0
@@ -129,7 +151,7 @@ async def procurement_quality(
         ))
 
     # 2) Проблемные SKU (топ по % возвратов)
-    prob_rows = (await db.execute(text("""
+    prob_rows = (await db.execute(text(f"""
         WITH supplied AS (
             SELECT so.product_id,
                    SUM(so.qty) AS units,
@@ -144,7 +166,7 @@ async def procurement_quality(
                    MODE() WITHIN GROUP (ORDER BY r.return_reason) AS top_reason
             FROM returns r
             JOIN ozon_accounts oa ON oa.id = r.ozon_account_id
-            WHERE oa.company_id = :cid AND r.return_date >= :df
+            WHERE oa.company_id = :cid AND r.return_date >= :df{extra_filter}
             GROUP BY r.product_id
         )
         SELECT s.product_id::text,
@@ -159,7 +181,7 @@ async def procurement_quality(
         WHERE s.units > 0
         ORDER BY (COALESCE(ra.units_ret, 0) * 1.0 / NULLIF(s.units, 0)) DESC NULLS LAST
         LIMIT 20
-    """), {"uid": uid, "cid": cid, "df": df})).all()
+    """), params)).all()
 
     problem_products = [
         ProblemProductRow(

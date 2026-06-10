@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids, verify_cabinet_access
 from app.db.session import get_db
 from app.models import (
     OzonAccount,
@@ -309,7 +310,8 @@ async def lookup_products(
     db: AsyncSession = Depends(get_db),
 ) -> list[ProductLookup]:
     """Дропдаун: ВСЕ SKU компании одним списком (без фильтра по кабинету)."""
-    rows = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    lookup_stmt = (
         select(Product.id, Product.offer_id, Product.ozon_sku, Product.name, OzonAccount.name.label("cabinet"))
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(
@@ -317,7 +319,10 @@ async def lookup_products(
             Product.deleted_at.is_(None),
         )
         .order_by(Product.offer_id)
-    )).all()
+    )
+    if accessible is not None:
+        lookup_stmt = lookup_stmt.where(OzonAccount.id.in_(accessible))
+    rows = (await db.execute(lookup_stmt)).all()
     return [
         ProductLookup(
             id=str(r.id), offer_id=r.offer_id or "", ozon_sku=r.ozon_sku or 0,
@@ -406,6 +411,7 @@ async def create_supply(
         )).scalar_one_or_none()
         if not ok:
             raise HTTPException(404, "Кабинет не найден или не принадлежит компании")
+        await verify_cabinet_access(db, current_user, payload.cabinet_id)
 
     supply = Supply(
         company_id=current_user.company_id,
@@ -493,6 +499,7 @@ async def update_supply(
         )).scalar_one_or_none()
         if not ok:
             raise HTTPException(404, "Кабинет не найден")
+        await verify_cabinet_access(db, current_user, payload.cabinet_id)
     supply.cabinet_id = payload.cabinet_id
     supply.name = payload.name
     supply.tag = payload.tag

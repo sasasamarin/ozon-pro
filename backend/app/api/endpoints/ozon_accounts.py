@@ -83,13 +83,21 @@ async def list_ozon_accounts(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[OzonAccountResponse]:
-    """Список всех магазинов текущей компании."""
-    result = await db.execute(
-        select(OzonAccount).where(
-            OzonAccount.company_id == current_user.company_id,
-            OzonAccount.deleted_at.is_(None),
-        )
+    """Список магазинов компании, к которым у пользователя есть доступ.
+
+    Сотрудник с ограниченным `MemberAccountAccess` увидит только разрешённые
+    кабинеты — это автоматически фильтрует ВЕСЬ frontend (Topbar picker,
+    chips на «План продаж», и т.д.), потому что фронт берёт список отсюда.
+    """
+    from app.api.deps_cabinets import get_accessible_cabinet_ids
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    stmt = select(OzonAccount).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        stmt = stmt.where(OzonAccount.id.in_(accessible))
+    result = await db.execute(stmt)
     accounts = result.scalars().all()
 
     return [_account_to_response(acc) for acc in accounts]
@@ -200,6 +208,8 @@ async def get_ozon_account(
     db: AsyncSession = Depends(get_db),
 ) -> OzonAccountResponse:
     """Один магазин по ID — для страницы /cabinets/:id."""
+    from app.api.deps_cabinets import verify_cabinet_access
+    await verify_cabinet_access(db, current_user, account_id)
     result = await db.execute(
         select(OzonAccount).where(
             OzonAccount.id == account_id,

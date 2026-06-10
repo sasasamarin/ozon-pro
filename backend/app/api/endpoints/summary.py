@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import Order, OrderItem, OzonAccount, Product, Transaction, User
 
@@ -62,12 +63,14 @@ async def get_summary(
         period_to = datetime.now(UTC)
         period_from = period_to - timedelta(days=days)
 
-    accs = (await db.execute(
-        select(OzonAccount).where(
-            OzonAccount.company_id == current_user.company_id,
-            OzonAccount.deleted_at.is_(None),
-        )
-    )).scalars().all()
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs_q = select(OzonAccount).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
+    )
+    if accessible is not None:
+        accs_q = accs_q.where(OzonAccount.id.in_(accessible))
+    accs = (await db.execute(accs_q)).scalars().all()
 
     rows: list[CabinetSummaryRow] = []
     for acc in accs:

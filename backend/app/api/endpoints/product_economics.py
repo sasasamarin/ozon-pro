@@ -27,6 +27,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.api.product_filter import build_product_filter_sql, category_descendants
 from app.db.session import get_db
 from app.models import Company, OzonAccount, Product, User
@@ -183,10 +184,13 @@ async def get_economics(
     vat_rate = float(company.vat_rate_pct) if company.vat_rate_pct else None
 
     # Список разрешённых кабинетов
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     cab_q = select(OzonAccount.id, OzonAccount.name).where(
         OzonAccount.company_id == current_user.company_id,
         OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        cab_q = cab_q.where(OzonAccount.id.in_(accessible))
     if cabinet_ids:
         cab_q = cab_q.where(OzonAccount.id.in_(cabinet_ids))
     cab_rows = (await db.execute(cab_q)).all()

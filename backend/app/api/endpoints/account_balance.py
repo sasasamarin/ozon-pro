@@ -15,6 +15,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Transaction, User
 
@@ -51,10 +52,13 @@ async def get_balance(
     period_to = now
     period_from = now - timedelta(days=days)
 
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     accs_q = select(OzonAccount.id).where(
         OzonAccount.company_id == current_user.company_id,
         OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        accs_q = accs_q.where(OzonAccount.id.in_(accessible))
     if cabinet_ids:
         accs_q = accs_q.where(OzonAccount.id.in_(cabinet_ids))
     accs = [r[0] for r in (await db.execute(accs_q)).all()]

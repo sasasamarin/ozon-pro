@@ -29,6 +29,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import AnalyticsDaily, OzonAccount, Product, User
 
@@ -106,7 +107,11 @@ def _build_kpi(row) -> FunnelKPI:
 
 
 async def _account_ids(
-    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    cabinet_ids: list[uuid.UUID] | None,
+    accessible: list[uuid.UUID] | None = None,
 ) -> list[uuid.UUID]:
     q = select(OzonAccount.id).where(
         OzonAccount.company_id == company_id,
@@ -114,6 +119,8 @@ async def _account_ids(
     )
     if cabinet_ids:
         q = q.where(OzonAccount.id.in_(cabinet_ids))
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     return [r[0] for r in (await db.execute(q)).all()]
 
 
@@ -166,7 +173,11 @@ async def get_funnel(
     period_from = today - timedelta(days=days)
     period_to = today
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db, company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids, accessible=accessible,
+    )
     if not accs:
         empty = FunnelKPI(
             impressions=0, to_cart=0, orders=0, delivered=0,
@@ -244,7 +255,11 @@ async def funnel_top_products(
     today = datetime.now(__import__('datetime').timezone.utc).date()
     period_from = today - timedelta(days=days)
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db, company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids, accessible=accessible,
+    )
     if not accs:
         return []
 
@@ -336,10 +351,14 @@ async def funnel_single_product(
     today = datetime.now(__import__('datetime').timezone.utc).date()
     period_from = today - timedelta(days=days)
 
-    prod = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    prod_stmt = (
         select(Product).join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
-    )).scalar_one_or_none()
+    )
+    if accessible is not None:
+        prod_stmt = prod_stmt.where(OzonAccount.id.in_(accessible))
+    prod = (await db.execute(prod_stmt)).scalar_one_or_none()
     if not prod:
         from fastapi import HTTPException
         raise HTTPException(404, "Товар не найден")

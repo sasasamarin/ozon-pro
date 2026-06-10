@@ -14,6 +14,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import verify_cabinet_access
 from app.db.session import get_db
 from app.models import Company, Product, User
 from app.services.whatif_engine import (
@@ -35,12 +36,16 @@ async def get_betas(
     prod = (await db.execute(text("""
         SELECT p.id, p.name, p.offer_id, p.ozon_sku, a.name AS cabinet_name,
                p.cost_price::float, p.marketing_price::float, p.current_price::float,
-               p.sales_percent_fbo::float
+               p.sales_percent_fbo::float,
+               p.ozon_account_id::text cab_id
         FROM products p JOIN ozon_accounts a ON a.id = p.ozon_account_id
         WHERE p.id = :pid AND a.company_id = :cid
     """), {"pid": str(product_id), "cid": str(current_user.company_id)})).first()
     if not prod:
         raise HTTPException(404, "product not found in your cabinets")
+
+    # Cabinet isolation: проверяем что кабинет товара доступен юзеру
+    await verify_cabinet_access(db, current_user, prod.cab_id)
 
     betas = await compute_betas(db, product_id=product_id, days=days)
 
@@ -106,12 +111,16 @@ async def post_simulate(
 ) -> dict:
     prod = (await db.execute(text("""
         SELECT p.id, p.name, p.cost_price::float, p.marketing_price::float,
-               p.current_price::float, p.sales_percent_fbo::float
+               p.current_price::float, p.sales_percent_fbo::float,
+               p.ozon_account_id::text cab_id
         FROM products p JOIN ozon_accounts a ON a.id = p.ozon_account_id
         WHERE p.id = :pid AND a.company_id = :cid
     """), {"pid": str(body.product_id), "cid": str(current_user.company_id)})).first()
     if not prod:
         raise HTTPException(404, "product not found")
+
+    # Cabinet isolation: проверяем что кабинет товара доступен юзеру
+    await verify_cabinet_access(db, current_user, prod.cab_id)
 
     cost = prod.cost_price or 0.0
     seller_price = prod.marketing_price or prod.current_price or 0.0

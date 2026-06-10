@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Product, User
 from app.services.recommendations import (
@@ -96,10 +97,21 @@ async def list_recommendations(
     db: AsyncSession = Depends(get_db),
 ) -> list[ProductRecommendation]:
     """Рекомендации по всем товарам компании с поправкой на фильтр кабинетов."""
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    # Пересекаем запрошенные cabinet_ids с accessible (если ограничен).
+    effective_cabinet_ids: list[uuid.UUID] | None = cabinet_ids
+    if accessible is not None:
+        if cabinet_ids:
+            accessible_set = set(accessible)
+            effective_cabinet_ids = [c for c in cabinet_ids if c in accessible_set]
+            if not effective_cabinet_ids:
+                return []
+        else:
+            effective_cabinet_ids = list(accessible)
     rows = await compute_list_recommendations(
         db,
         company_id=current_user.company_id,
-        cabinet_ids=cabinet_ids,
+        cabinet_ids=effective_cabinet_ids,
     )
     return [ProductRecommendation(**row) for row in rows]
 
@@ -117,7 +129,8 @@ async def get_recommendation(
         raise HTTPException(status_code=400, detail="Невалидный product_id")
 
     # Проверяем что товар принадлежит компании юзера
-    result = await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    prod_stmt = (
         select(Product)
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(
@@ -126,6 +139,9 @@ async def get_recommendation(
             Product.deleted_at.is_(None),
         )
     )
+    if accessible is not None:
+        prod_stmt = prod_stmt.where(OzonAccount.id.in_(accessible))
+    result = await db.execute(prod_stmt)
     product = result.scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=404, detail="Товар не найден")

@@ -24,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import DashboardLayout, OzonAccount, User
 from app.services.product_metrics import METRICS_BY_KEY, aggregate_bucket
@@ -333,21 +334,24 @@ async def get_series(
         date_from = date_to - timedelta(days=days)
 
     # Список кабинетов
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     if cabinet_ids:
-        ok = (await db.execute(
-            select(OzonAccount.id).where(
-                OzonAccount.id.in_(cabinet_ids),
-                OzonAccount.company_id == current_user.company_id,
-            )
-        )).scalars().all()
+        cabs_q = select(OzonAccount.id).where(
+            OzonAccount.id.in_(cabinet_ids),
+            OzonAccount.company_id == current_user.company_id,
+        )
+        if accessible is not None:
+            cabs_q = cabs_q.where(OzonAccount.id.in_(accessible))
+        ok = (await db.execute(cabs_q)).scalars().all()
         cabs = list(ok)
     else:
-        cabs = (await db.execute(
-            select(OzonAccount.id).where(
-                OzonAccount.company_id == current_user.company_id,
-                OzonAccount.deleted_at.is_(None),
-            )
-        )).scalars().all()
+        cabs_q = select(OzonAccount.id).where(
+            OzonAccount.company_id == current_user.company_id,
+            OzonAccount.deleted_at.is_(None),
+        )
+        if accessible is not None:
+            cabs_q = cabs_q.where(OzonAccount.id.in_(accessible))
+        cabs = (await db.execute(cabs_q)).scalars().all()
 
     if not cabs:
         return SeriesResponse(interval=interval, points=[])

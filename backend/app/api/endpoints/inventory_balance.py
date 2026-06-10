@@ -20,6 +20,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import User
 
@@ -67,11 +68,23 @@ async def get_inventory_balance(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BalanceResp:
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    if accessible is not None and not accessible:
+        empty_totals = GroupAgg(
+            label="Всего", units=0,
+            capital_at_cost=0, capital_at_selling=0, potential_margin=0,
+        )
+        return BalanceResp(rows=[], totals=empty_totals, by_cabinet=[], by_category=[])
+
     params: dict = {"cid": str(current_user.company_id)}
     where_cab = ""
     if cabinet_ids:
         where_cab = "AND a.id = ANY(:cab_ids)"
         params["cab_ids"] = [str(x) for x in cabinet_ids]
+    where_access = ""
+    if accessible is not None:
+        where_access = "AND a.id = ANY(:accessible_ids)"
+        params["accessible_ids"] = [str(x) for x in accessible]
     where_cat = ""
     if category_id is not None:
         where_cat = "AND p.category_id = :cat"
@@ -117,7 +130,7 @@ async def get_inventory_balance(
       LEFT JOIN wh_sum wh ON wh.product_id = p.id
       LEFT JOIN agg_sum ag ON ag.product_id = p.id
       WHERE a.company_id = :cid AND a.deleted_at IS NULL AND p.deleted_at IS NULL
-        {where_cab} {where_cat} {where_arch}
+        {where_cab} {where_access} {where_cat} {where_arch}
       ORDER BY (COALESCE(wh.total,0) + COALESCE(ag.total,0)) * COALESCE(p.cost_price, 0) DESC
     """), params)).all()
 

@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import AnalyticsDaily, OzonAccount, Product, Transaction, User
 
@@ -97,12 +98,14 @@ async def calculate_purchase_plan(
     base_from = today - timedelta(days=payload.baseline_window_days)
 
     # === account scope
-    accs = [r[0] for r in (await db.execute(
-        select(OzonAccount.id).where(
-            OzonAccount.company_id == current_user.company_id,
-            OzonAccount.deleted_at.is_(None),
-        )
-    )).all()]
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs_q = select(OzonAccount.id).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
+    )
+    if accessible is not None:
+        accs_q = accs_q.where(OzonAccount.id.in_(accessible))
+    accs = [r[0] for r in (await db.execute(accs_q)).all()]
     if not accs:
         raise HTTPException(400, "Нет подключённых кабинетов")
 
@@ -341,10 +344,13 @@ async def plan_progress(
     days_remaining = max(0, period_days - days_passed)
     expected_pct = (days_passed / period_days * 100) if period_days else 0
 
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     accs_q = select(OzonAccount.id).where(
         OzonAccount.company_id == current_user.company_id,
         OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        accs_q = accs_q.where(OzonAccount.id.in_(accessible))
     accs = (await db.execute(accs_q)).scalars().all()
     if not accs:
         raise HTTPException(404, "Нет активных кабинетов")

@@ -23,6 +23,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, User
 
@@ -62,15 +63,24 @@ async def list_reconciliations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ReconcileRow]:
-    rows = (await db.execute(text("""
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    extra_filter = ""
+    params: dict = {"cid": str(current_user.company_id)}
+    if accessible is not None:
+        if not accessible:
+            return []
+        extra_filter = " AND a.id = ANY(:accessible_ids)"
+        params["accessible_ids"] = [str(c) for c in accessible]
+
+    rows = (await db.execute(text(f"""
         SELECT r.ozon_account_id, a.name AS cabinet_name, r.year, r.month,
                r.total_revenue::float, r.total_payout_real::float, r.total_payout_model::float,
                r.diff_pct::float, r.created_at
         FROM realization_reconciliation r
         JOIN ozon_accounts a ON a.id = r.ozon_account_id
-        WHERE a.company_id = :cid
+        WHERE a.company_id = :cid{extra_filter}
         ORDER BY r.year DESC, r.month DESC, a.name
-    """), {"cid": str(current_user.company_id)})).all()
+    """), params)).all()
     out = []
     for r in rows:
         diff = float(r.diff_pct) if r.diff_pct is not None else None
@@ -95,12 +105,21 @@ async def get_reconciliation_detail(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """Детальная разбивка по SKU + кабинетам за этот месяц."""
-    rows = (await db.execute(text("""
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    extra_filter = ""
+    params: dict = {"cid": str(current_user.company_id), "y": year, "m": month}
+    if accessible is not None:
+        if not accessible:
+            return []
+        extra_filter = " AND a.id = ANY(:accessible_ids)"
+        params["accessible_ids"] = [str(c) for c in accessible]
+
+    rows = (await db.execute(text(f"""
         SELECT a.name AS cabinet_name, r.sku_breakdown
         FROM realization_reconciliation r
         JOIN ozon_accounts a ON a.id = r.ozon_account_id
-        WHERE a.company_id = :cid AND r.year = :y AND r.month = :m
-    """), {"cid": str(current_user.company_id), "y": year, "m": month})).all()
+        WHERE a.company_id = :cid AND r.year = :y AND r.month = :m{extra_filter}
+    """), params)).all()
     out: list[dict] = []
     for r in rows:
         cabinet = r.cabinet_name
@@ -126,16 +145,29 @@ async def reconciliation_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ReconcileStatus:
-    """Статус для UI-баннера: 🟢 свежая сверка ОК | 🔴 расхождение."""
+    """Статус для UI-баннера: свежая сверка ОК | расхождение."""
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    extra_filter = ""
+    params: dict = {"cid": str(current_user.company_id)}
+    if accessible is not None:
+        if not accessible:
+            return ReconcileStatus(
+                status="no_data", title="Сверка не запускалась",
+                description="Нет доступных кабинетов.",
+                last_reconciled_at=None, worst_diff_pct=None, rows_count=0,
+            )
+        extra_filter = " AND a.id = ANY(:accessible_ids)"
+        params["accessible_ids"] = [str(c) for c in accessible]
+
     # Самая свежая сверка для каждого кабинета
-    rows = (await db.execute(text("""
+    rows = (await db.execute(text(f"""
         SELECT DISTINCT ON (r.ozon_account_id)
                r.ozon_account_id, r.diff_pct::float, r.created_at, r.year, r.month
         FROM realization_reconciliation r
         JOIN ozon_accounts a ON a.id = r.ozon_account_id
-        WHERE a.company_id = :cid
+        WHERE a.company_id = :cid{extra_filter}
         ORDER BY r.ozon_account_id, r.year DESC, r.month DESC, r.created_at DESC
-    """), {"cid": str(current_user.company_id)})).all()
+    """), params)).all()
 
     if not rows:
         return ReconcileStatus(

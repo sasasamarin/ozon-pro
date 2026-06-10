@@ -14,6 +14,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Product, User
 from app.models.marketplace import Question, Review
@@ -54,12 +55,17 @@ class QuestionRow(BaseModel):
     status: str | None
 
 
-async def _accs(db: AsyncSession, company_id: uuid.UUID) -> dict[uuid.UUID, str]:
-    rows = (await db.execute(
-        select(OzonAccount.id, OzonAccount.name).where(
-            OzonAccount.company_id == company_id, OzonAccount.deleted_at.is_(None)
-        )
-    )).all()
+async def _accs(
+    db: AsyncSession,
+    company_id: uuid.UUID,
+    accessible: list[uuid.UUID] | None = None,
+) -> dict[uuid.UUID, str]:
+    q = select(OzonAccount.id, OzonAccount.name).where(
+        OzonAccount.company_id == company_id, OzonAccount.deleted_at.is_(None)
+    )
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
+    rows = (await db.execute(q)).all()
     return {r[0]: r[1] for r in rows}
 
 
@@ -79,7 +85,8 @@ async def list_reviews(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ReviewRow]:
-    accs = await _accs(db, current_user.company_id)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _accs(db, current_user.company_id, accessible=accessible)
     if not accs:
         return []
     if date_from and date_to:
@@ -129,7 +136,8 @@ async def list_questions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[QuestionRow]:
-    accs = await _accs(db, current_user.company_id)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _accs(db, current_user.company_id, accessible=accessible)
     if not accs:
         return []
     if date_from and date_to:

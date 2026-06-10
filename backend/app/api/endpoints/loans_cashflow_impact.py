@@ -17,6 +17,7 @@ from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import User, OzonAccount, Transaction
 from app.models.loan import Loan, LoanPayment
@@ -70,12 +71,14 @@ async def cashflow_impact(
     hist_from = datetime(today.year - 1, today.month, 1, tzinfo=UTC)
     hist_to = hist_from + timedelta(days=horizon_months * 31 + 31)
 
-    accs = [r[0] for r in (await db.execute(
-        select(OzonAccount.id).where(
-            OzonAccount.company_id == current_user.company_id,
-            OzonAccount.deleted_at.is_(None),
-        )
-    )).all()]
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs_q = select(OzonAccount.id).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
+    )
+    if accessible is not None:
+        accs_q = accs_q.where(OzonAccount.id.in_(accessible))
+    accs = [r[0] for r in (await db.execute(accs_q)).all()]
 
     hist_by_month: dict[str, float] = defaultdict(float)
     if accs:

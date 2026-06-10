@@ -31,6 +31,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids, verify_cabinet_access
 from app.db.session import get_db
 from app.models import DayMarker, MetricTemplate, OzonAccount, Product, User
 from app.services.product_metrics import (
@@ -148,11 +149,19 @@ def _generate_buckets(date_from: date_cls, date_to: date_cls, interval: str) -> 
     return buckets
 
 
-async def _fetch_product_owned(db: AsyncSession, product_id: uuid.UUID, company_id: uuid.UUID) -> Product:
-    p = (await db.execute(
-        select(Product).join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
+async def _fetch_product_owned(
+    db: AsyncSession,
+    product_id: uuid.UUID,
+    company_id: uuid.UUID,
+    user: User | None = None,
+) -> Product:
+    q = select(Product).join(OzonAccount, OzonAccount.id == Product.ozon_account_id) \
         .where(Product.id == product_id, OzonAccount.company_id == company_id)
-    )).scalar_one_or_none()
+    if user is not None:
+        accessible = await get_accessible_cabinet_ids(db, user)
+        if accessible is not None:
+            q = q.where(OzonAccount.id.in_(accessible))
+    p = (await db.execute(q)).scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Товар не найден")
     return p
@@ -383,7 +392,7 @@ async def get_matrix(
     if not date_from:
         date_from = date_to - timedelta(days=days)
 
-    product = await _fetch_product_owned(db, product_id, current_user.company_id)
+    product = await _fetch_product_owned(db, product_id, current_user.company_id, current_user)
 
     # Какие метрики возвращаем (если не задано — все)
     keys = metrics_keys or [m.key for m in METRICS]
@@ -573,6 +582,12 @@ async def create_marker(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MarkerRow:
+    if payload.cabinet_id:
+        await verify_cabinet_access(db, current_user, payload.cabinet_id)
+    if payload.product_id:
+        await _fetch_product_owned(
+            db, payload.product_id, current_user.company_id, current_user,
+        )
     m = DayMarker(
         company_id=current_user.company_id, user_id=current_user.id,
         product_id=payload.product_id, cabinet_id=payload.cabinet_id,

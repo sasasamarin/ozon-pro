@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.core.logging import log
 from app.core.security import decrypt_secret
 from app.db.session import get_db
@@ -100,10 +101,13 @@ async def competitor_prices_list(
     Свежие данные напрямую от Ozon — кэш не нужен (быстрый endpoint).
     """
     # Найти все active кабинеты company
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     q = select(OzonAccount).where(
         OzonAccount.company_id == current_user.company_id,
         OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     if cabinet_id:
         q = q.where(OzonAccount.id == cabinet_id)
     accs = (await db.execute(q)).scalars().all()

@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import Company, User
 from app.services.tax import calc_tax
@@ -59,8 +60,25 @@ async def taxes(
 
     df = date.today() - timedelta(days=days)
 
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    extra_filter = ""
+    params: dict = {"cid": str(current_user.company_id), "df": df}
+    if accessible is not None:
+        if not accessible:
+            return TaxResp(
+                period_from=df.isoformat(), period_to=date.today().isoformat(),
+                regime=regime, regime_label=regime,
+                rate_pct=rate, vat_rate_pct=vat_rate,
+                revenue=0.0, expenses=0.0, gross_profit=0.0,
+                tax_amount=0.0, vat_amount=0.0, net_profit_after_tax=0.0,
+                monthly_breakdown=[],
+                note="Нет доступных кабинетов.",
+            )
+        extra_filter = " AND oa.id = ANY(:accessible_ids)"
+        params["accessible_ids"] = [str(c) for c in accessible]
+
     # Revenue + расходы (как в pnl.py — operational контур)
-    r = (await db.execute(text("""
+    r = (await db.execute(text(f"""
         SELECT
             COALESCE(SUM(t.accruals_for_sale) FILTER (WHERE t.operation_type='OperationAgentDeliveredToCustomer'), 0)::float AS revenue,
             COALESCE(SUM(ABS(t.sale_commission)), 0)::float AS commissions,
@@ -72,8 +90,8 @@ async def taxes(
             COALESCE(SUM(ABS(t.return_logistics)), 0)::float AS return_logistics
         FROM transactions t
         JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
-        WHERE oa.company_id = :cid AND t.operation_date >= :df
-    """), {"cid": str(current_user.company_id), "df": df})).first()
+        WHERE oa.company_id = :cid AND t.operation_date >= :df{extra_filter}
+    """), params)).first()
 
     revenue = float(r.revenue or 0)
     expenses = sum(float(getattr(r, c) or 0) for c in (
@@ -88,14 +106,14 @@ async def taxes(
     )
 
     # Помесячная разбивка
-    monthly = (await db.execute(text("""
+    monthly = (await db.execute(text(f"""
         SELECT date_trunc('month', t.operation_date)::date AS month,
                COALESCE(SUM(t.accruals_for_sale) FILTER (WHERE t.operation_type='OperationAgentDeliveredToCustomer'), 0)::float AS rev
         FROM transactions t
         JOIN ozon_accounts oa ON oa.id = t.ozon_account_id
-        WHERE oa.company_id = :cid AND t.operation_date >= :df
+        WHERE oa.company_id = :cid AND t.operation_date >= :df{extra_filter}
         GROUP BY 1 ORDER BY 1
-    """), {"cid": str(current_user.company_id), "df": df})).all()
+    """), params)).all()
 
     monthly_breakdown = []
     for row in monthly:

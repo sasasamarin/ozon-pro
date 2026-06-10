@@ -24,6 +24,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import verify_cabinet_access
 from app.db.session import get_db
 from app.models import User
 from app.models.alert import (
@@ -236,6 +237,12 @@ async def create_rule(
     if payload.marker_type not in valid_types:
         raise HTTPException(400, f"Неизвестный тип. Доступны: {sorted(valid_types)}")
 
+    rule_cabinet_id: uuid.UUID | None = None
+    if payload.ozon_account_id:
+        rule_cabinet_id = await verify_cabinet_access(
+            db, current_user, payload.ozon_account_id,
+        )
+
     rule = AlertRule(
         user_id=current_user.id,
         marker_type=payload.marker_type,
@@ -243,7 +250,7 @@ async def create_rule(
         quiet_hours_json=payload.quiet_hours_json,
         channels_json=payload.channels_json,
         is_active=payload.is_active,
-        ozon_account_id=uuid.UUID(payload.ozon_account_id) if payload.ozon_account_id else None,
+        ozon_account_id=rule_cabinet_id,
     )
     db.add(rule)
     await db.commit()

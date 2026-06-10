@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids, verify_cabinet_access
 from app.db.session import get_db
 from app.models import User
 from app.services.finance_consts import (
@@ -62,11 +63,28 @@ async def margin_list(
     """Маржинальность всех активных SKU компании за период."""
     df = date.today() - timedelta(days=days)
 
+    if cabinet_id:
+        await verify_cabinet_access(db, current_user, cabinet_id)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+
     where = ["p.is_archived = false", "oa.company_id = :cid"]
     params: dict = {"cid": str(current_user.company_id), "df": df}
     if cabinet_id:
         where.append("oa.id = :cab")
         params["cab"] = str(cabinet_id)
+    if accessible is not None:
+        if not accessible:
+            return MarginResponse(period_days=days, items=[], summary={
+                "total_revenue_rub": 0.0,
+                "total_gross_margin_rub": 0.0,
+                "gross_margin_pct": None,
+                "skus_total": 0,
+                "skus_with_cost": 0,
+                "skus_without_cost": 0,
+                "note": "Нет доступных кабинетов.",
+            })
+        where.append("oa.id = ANY(:accessible_ids)")
+        params["accessible_ids"] = [str(c) for c in accessible]
 
     # delivered units + revenue per product
     rows = (await db.execute(text(f"""

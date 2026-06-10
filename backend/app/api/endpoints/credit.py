@@ -14,6 +14,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, User
 from app.models.financing import OzonFinancing, OzonFinancingMovement
@@ -63,12 +64,14 @@ async def list_credits(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CreditSummary:
-    accs = (await db.execute(
-        select(OzonAccount.id, OzonAccount.name).where(
-            OzonAccount.company_id == current_user.company_id,
-            OzonAccount.deleted_at.is_(None),
-        )
-    )).all()
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs_q = select(OzonAccount.id, OzonAccount.name).where(
+        OzonAccount.company_id == current_user.company_id,
+        OzonAccount.deleted_at.is_(None),
+    )
+    if accessible is not None:
+        accs_q = accs_q.where(OzonAccount.id.in_(accessible))
+    accs = (await db.execute(accs_q)).all()
     if not accs:
         return CreditSummary(total_active_debt=0, total_pnl_interest=0, items=[])
 
@@ -134,13 +137,17 @@ async def list_movements(
     except ValueError:
         raise HTTPException(400, "Невалидный id")
 
-    fin = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    fin_stmt = (
         select(OzonFinancing).join(OzonAccount, OzonAccount.id == OzonFinancing.ozon_account_id)
         .where(
             OzonFinancing.id == fid,
             OzonAccount.company_id == current_user.company_id,
         )
-    )).scalar_one_or_none()
+    )
+    if accessible is not None:
+        fin_stmt = fin_stmt.where(OzonAccount.id.in_(accessible))
+    fin = (await db.execute(fin_stmt)).scalar_one_or_none()
     if not fin:
         raise HTTPException(404, "Не найдено")
 

@@ -17,6 +17,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids, verify_cabinet_access
 from app.db.session import get_db
 from app.models import Order, OrderItem, OzonAccount, Product, Transaction, User
 from app.models.kpi import KPITarget
@@ -143,7 +144,11 @@ async def _fact_for_metric(
 
 
 async def _account_ids(
-    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    cabinet_ids: list[uuid.UUID] | None,
+    accessible: list[uuid.UUID] | None = None,
 ) -> list[uuid.UUID]:
     q = select(OzonAccount.id).where(
         OzonAccount.company_id == company_id,
@@ -151,6 +156,8 @@ async def _account_ids(
     )
     if cabinet_ids:
         q = q.where(OzonAccount.id.in_(cabinet_ids))
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     return [r[0] for r in (await db.execute(q)).all()]
 
 
@@ -169,7 +176,13 @@ async def get_pvf(
         next_m = (period_from + timedelta(days=32)).replace(day=1)
         period_to = next_m - timedelta(days=1)
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
 
     # Цели за период
     targets = (await db.execute(
@@ -270,6 +283,7 @@ async def create_target(
             cab_id = uuid.UUID(payload.cabinet_id)
         except ValueError:
             raise HTTPException(400, "Невалидный cabinet_id")
+        await verify_cabinet_access(db, current_user, cab_id)
 
     # Upsert
     existing = (await db.execute(

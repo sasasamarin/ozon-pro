@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import date as date_cls, datetime, timedelta, timezone
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import AnalyticsDaily, OzonAccount, Product, Stock, User
 from app.services.stock import get_stock
@@ -157,6 +158,7 @@ async def list_products(
     """))).all()
     cp_map: dict[uuid.UUID, float] = {row.pid: float(row.avg_cp) for row in cp_rows if row.avg_cp is not None}
 
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     query = (
         select(
             Product,
@@ -172,6 +174,8 @@ async def list_products(
         )
         .order_by(Product.name)
     )
+    if accessible is not None:
+        query = query.where(OzonAccount.id.in_(accessible))
 
     # Multi-select имеет приоритет; legacy cabinet_id обрабатываем для совместимости
     if cabinet_ids:
@@ -244,11 +248,15 @@ async def product_stock_details(
     except ValueError:
         raise HTTPException(status_code=400, detail="Невалидный product_id")
     # принадлежность компании
-    ok = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    ok_stmt = (
         select(Product.id)
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
-    )).scalar_one_or_none()
+    )
+    if accessible is not None:
+        ok_stmt = ok_stmt.where(OzonAccount.id.in_(accessible))
+    ok = (await db.execute(ok_stmt)).scalar_one_or_none()
     if not ok:
         raise HTTPException(status_code=404, detail="Товар не найден")
     return (await get_stock(db, pid)).to_dict()
@@ -271,7 +279,8 @@ async def list_categories(
     db: AsyncSession = Depends(get_db),
 ) -> list[CategoryItem]:
     """Реальные категории из товаров — для фильтров."""
-    rows = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    cats_stmt = (
         select(
             Product.category_id, Product.category_name, func.count(Product.id).label("cnt"),
         )
@@ -283,7 +292,10 @@ async def list_categories(
         )
         .group_by(Product.category_id, Product.category_name)
         .order_by(func.count(Product.id).desc())
-    )).all()
+    )
+    if accessible is not None:
+        cats_stmt = cats_stmt.where(OzonAccount.id.in_(accessible))
+    rows = (await db.execute(cats_stmt)).all()
     return [
         CategoryItem(category_id=r.category_id, category_name=r.category_name, product_count=r.cnt)
         for r in rows
@@ -296,14 +308,18 @@ async def list_tags(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Все теги юзера (из products.tags). Не справочник — реальные использованные."""
-    rows = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    tags_stmt = (
         select(Product.tags)
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(
             OzonAccount.company_id == current_user.company_id,
             Product.deleted_at.is_(None),
         )
-    )).all()
+    )
+    if accessible is not None:
+        tags_stmt = tags_stmt.where(OzonAccount.id.in_(accessible))
+    rows = (await db.execute(tags_stmt)).all()
     counts: dict[str, int] = {}
     for r in rows:
         tags = r[0] or []
@@ -346,11 +362,15 @@ async def patch_bulk_meta(
     if not pids:
         raise HTTPException(400, "Нужно хотя бы 1 product_id")
 
-    products = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    prods_stmt = (
         select(Product)
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(Product.id.in_(pids), OzonAccount.company_id == current_user.company_id)
-    )).scalars().all()
+    )
+    if accessible is not None:
+        prods_stmt = prods_stmt.where(OzonAccount.id.in_(accessible))
+    products = (await db.execute(prods_stmt)).scalars().all()
     updated = 0
     for prod in products:
         if payload.add_tags or payload.remove_tags:
@@ -394,11 +414,15 @@ async def patch_product_meta(
     except ValueError:
         raise HTTPException(400, "Невалидный product_id")
 
-    prod = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    prod_stmt = (
         select(Product)
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
-    )).scalar_one_or_none()
+    )
+    if accessible is not None:
+        prod_stmt = prod_stmt.where(OzonAccount.id.in_(accessible))
+    prod = (await db.execute(prod_stmt)).scalar_one_or_none()
     if not prod:
         raise HTTPException(404, "Товар не найден")
 
@@ -444,7 +468,8 @@ async def product_stocks(
         raise HTTPException(status_code=400, detail="Невалидный product_id")
 
     # Проверяем что товар принадлежит компании юзера
-    pcheck = await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    pcheck_stmt = (
         select(Product)
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(
@@ -452,6 +477,9 @@ async def product_stocks(
             OzonAccount.company_id == current_user.company_id,
         )
     )
+    if accessible is not None:
+        pcheck_stmt = pcheck_stmt.where(OzonAccount.id.in_(accessible))
+    pcheck = await db.execute(pcheck_stmt)
     if not pcheck.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Товар не найден")
 
@@ -537,11 +565,15 @@ async def product_stock_sales(
         raise HTTPException(status_code=400, detail="Невалидный product_id")
 
     # Проверка принадлежности и имя
-    pcheck = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    pcheck_stmt = (
         select(Product)
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(Product.id == pid, OzonAccount.company_id == current_user.company_id)
-    )).scalar_one_or_none()
+    )
+    if accessible is not None:
+        pcheck_stmt = pcheck_stmt.where(OzonAccount.id.in_(accessible))
+    pcheck = (await db.execute(pcheck_stmt)).scalar_one_or_none()
     if not pcheck:
         raise HTTPException(status_code=404, detail="Товар не найден")
 

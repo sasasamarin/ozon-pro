@@ -24,6 +24,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Transaction, User
 from app.models.loan import Loan, LoanPayment
@@ -64,7 +65,11 @@ class CashflowResponse(BaseModel):
 
 
 async def _account_ids(
-    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    cabinet_ids: list[uuid.UUID] | None,
+    accessible: list[uuid.UUID] | None = None,
 ) -> list[uuid.UUID]:
     q = select(OzonAccount.id).where(
         OzonAccount.company_id == company_id,
@@ -72,6 +77,8 @@ async def _account_ids(
     )
     if cabinet_ids:
         q = q.where(OzonAccount.id.in_(cabinet_ids))
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     return [r[0] for r in (await db.execute(q)).all()]
 
 
@@ -91,7 +98,13 @@ async def get_cashflow(
     period_to = now
     period_from = now - timedelta(days=days)
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
     if not accs:
         return CashflowResponse(
             period_from=period_from.date().isoformat(),

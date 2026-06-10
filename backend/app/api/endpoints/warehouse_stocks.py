@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import Order, OrderItem, OzonAccount, Product, Stock, User
 from app.services.warehouse_cluster import parse_warehouse_name
@@ -63,12 +64,17 @@ class ClustersSummaryResponse(BaseModel):
 
 
 async def _account_ids(
-    db: AsyncSession, *, company_id: uuid.UUID
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    accessible: list[uuid.UUID] | None = None,
 ) -> list[uuid.UUID]:
     q = select(OzonAccount.id).where(
         OzonAccount.company_id == company_id,
         OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     return [r[0] for r in (await db.execute(q)).all()]
 
 
@@ -130,11 +136,15 @@ async def product_warehouse_stocks(
     except ValueError:
         raise HTTPException(400, "Невалидный product_id")
 
-    prod = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    prod_stmt = (
         select(Product).join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(Product.id == pid, OzonAccount.company_id == current_user.company_id,
                Product.deleted_at.is_(None))
-    )).scalar_one_or_none()
+    )
+    if accessible is not None:
+        prod_stmt = prod_stmt.where(OzonAccount.id.in_(accessible))
+    prod = (await db.execute(prod_stmt)).scalar_one_or_none()
     if not prod:
         raise HTTPException(404, "Товар не найден")
 
@@ -160,7 +170,9 @@ async def product_warehouse_stocks(
     )).scalars().all()
 
     # velocity per cluster_from для этого товара
-    accs = await _account_ids(db, company_id=current_user.company_id)
+    accs = await _account_ids(
+        db, company_id=current_user.company_id, accessible=accessible,
+    )
     vel_map = await _velocity_per_cluster(
         db, account_ids=accs, product_ids=[pid], days=30
     )
@@ -206,17 +218,24 @@ async def clusters_summary(
     db: AsyncSession = Depends(get_db),
 ) -> ClustersSummaryResponse:
     """Сводка по кластерам: сколько SKU в стокауте/риске/норме + velocity."""
-    accs = await _account_ids(db, company_id=current_user.company_id)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db, company_id=current_user.company_id, accessible=accessible,
+    )
     if not accs:
         return ClustersSummaryResponse(clusters=[])
 
-    # latest per-warehouse stocks для каждого продукта
+    # latest per-warehouse stocks для каждого продукта (только товары accs)
     latest_subq = (
         select(
             Stock.product_id,
             func.max(Stock.time).label("latest"),
         )
-        .where(Stock.warehouse_type == "FBO_WH")
+        .join(Product, Product.id == Stock.product_id)
+        .where(
+            Stock.warehouse_type == "FBO_WH",
+            Product.ozon_account_id.in_(accs),
+        )
         .group_by(Stock.product_id)
         .subquery()
     )

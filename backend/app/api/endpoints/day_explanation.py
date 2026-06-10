@@ -24,6 +24,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import (
     AdStatistics,
@@ -124,10 +125,13 @@ async def explain_day(
     db: AsyncSession = Depends(get_db),
 ) -> DayExplanation:
     # ─── Базовые границы кабинетов компании юзера ──────────────────────────
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     cab_q = select(OzonAccount.id).where(
         OzonAccount.company_id == current_user.company_id,
         OzonAccount.deleted_at.is_(None),
     )
+    if accessible is not None:
+        cab_q = cab_q.where(OzonAccount.id.in_(accessible))
     if cabinet_ids:
         cab_q = cab_q.where(OzonAccount.id.in_(cabinet_ids))
     cab_rows = (await db.execute(cab_q)).all()

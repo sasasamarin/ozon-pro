@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Product, User
 from app.models.procurement import ForecastStrategy, ProductSupplyParams
@@ -73,7 +74,8 @@ async def list_supply_params(
     db: AsyncSession = Depends(get_db),
 ) -> list[SupplyParamsRow]:
     """Возвращает все товары компании с их supply-params (или дефолтами)."""
-    rows = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    rows_stmt = (
         select(Product, OzonAccount.name.label("cabinet_name"))
         .join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(
@@ -82,7 +84,10 @@ async def list_supply_params(
             Product.deleted_at.is_(None),
         )
         .order_by(Product.name)
-    )).all()
+    )
+    if accessible is not None:
+        rows_stmt = rows_stmt.where(OzonAccount.id.in_(accessible))
+    rows = (await db.execute(rows_stmt)).all()
 
     params_rows = (await db.execute(
         select(ProductSupplyParams).where(
@@ -129,11 +134,15 @@ async def upsert_supply_params(
     except ValueError:
         raise HTTPException(400, "Невалидный product_id")
 
-    prod = (await db.execute(
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    prod_stmt = (
         select(Product).join(OzonAccount, OzonAccount.id == Product.ozon_account_id)
         .where(Product.id == pid, OzonAccount.company_id == current_user.company_id,
                Product.deleted_at.is_(None))
-    )).scalar_one_or_none()
+    )
+    if accessible is not None:
+        prod_stmt = prod_stmt.where(OzonAccount.id.in_(accessible))
+    prod = (await db.execute(prod_stmt)).scalar_one_or_none()
     if not prod:
         raise HTTPException(404, "Товар не найден")
 

@@ -28,6 +28,7 @@ from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import OzonAccount, Transaction, User
 
@@ -104,7 +105,11 @@ def _build_filters(
 
 
 async def _company_account_ids(
-    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    cabinet_ids: list[uuid.UUID] | None,
+    accessible: list[uuid.UUID] | None = None,
 ) -> tuple[list[uuid.UUID], dict[str, str]]:
     """Возвращает (account_ids, {id: name}) с учётом cabinet_ids-фильтра."""
     q = select(OzonAccount.id, OzonAccount.name).where(
@@ -113,6 +118,8 @@ async def _company_account_ids(
     )
     if cabinet_ids:
         q = q.where(OzonAccount.id.in_(cabinet_ids))
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     rows = (await db.execute(q)).all()
     return [r[0] for r in rows], {str(r[0]): r[1] for r in rows}
 
@@ -127,8 +134,10 @@ async def list_operation_types(
     db: AsyncSession = Depends(get_db),
 ) -> list[OperationTypeOption]:
     """Уникальные operation_type в БД для UI-dropdown'a."""
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     account_ids, _ = await _company_account_ids(
-        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids,
+        accessible=accessible,
     )
     if not account_ids:
         return []
@@ -167,8 +176,10 @@ async def list_transactions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> TransactionsListResponse:
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     account_ids, cabinet_names = await _company_account_ids(
-        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids,
+        accessible=accessible,
     )
     if not account_ids:
         return TransactionsListResponse(
@@ -250,8 +261,10 @@ async def export_transactions_csv(
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     """Streaming CSV (без пагинации). Удобно для бухгалтерии."""
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     account_ids, cabinet_names = await _company_account_ids(
-        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids,
+        accessible=accessible,
     )
     if not account_ids:
         return StreamingResponse(iter([""]), media_type="text/csv")
@@ -366,8 +379,10 @@ async def transactions_monthly(
     db: AsyncSession = Depends(get_db),
 ) -> MonthlySummaryResp:
     """Помесячная сводка ВСЕХ транзакций (вход / списания / итог)."""
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     account_ids, _ = await _company_account_ids(
-        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids,
+        accessible=accessible,
     )
     if not account_ids:
         return MonthlySummaryResp(months=[], total_inflow=0, total_outflow=0, total_net=0)
@@ -420,8 +435,10 @@ async def transactions_daily(
     except ValueError:
         return []
 
+    accessible = await get_accessible_cabinet_ids(db, current_user)
     account_ids, _ = await _company_account_ids(
-        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids
+        db, company_id=current_user.company_id, cabinet_ids=cabinet_ids,
+        accessible=accessible,
     )
     if not account_ids:
         return []

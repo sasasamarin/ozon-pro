@@ -12,6 +12,7 @@ from sqlalchemy import desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import (
     AdCampaign,
@@ -139,7 +140,11 @@ AD_OP_TYPES = [
 
 
 async def _account_ids(
-    db: AsyncSession, *, company_id: uuid.UUID, cabinet_ids: list[uuid.UUID] | None
+    db: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    cabinet_ids: list[uuid.UUID] | None,
+    accessible: list[uuid.UUID] | None = None,
 ) -> list[uuid.UUID]:
     q = select(OzonAccount.id).where(
         OzonAccount.company_id == company_id,
@@ -147,6 +152,8 @@ async def _account_ids(
     )
     if cabinet_ids:
         q = q.where(OzonAccount.id.in_(cabinet_ids))
+    if accessible is not None:
+        q = q.where(OzonAccount.id.in_(accessible))
     return [r[0] for r in (await db.execute(q)).all()]
 
 
@@ -330,7 +337,13 @@ async def get_funnel_v2(
     if not date_from:
         date_from = date_to - timedelta(days=days)
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
 
     pids = _parse_product_ids(product_id, product_ids)
     prod_name: str | None = None
@@ -403,7 +416,13 @@ async def get_funnel_daily(
     if not date_from:
         date_from = date_to - timedelta(days=days)
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
     if not accs:
         return []
 
@@ -539,7 +558,13 @@ async def best_worst_days(
     }
     from_label, to_label = label_map.get(metric, label_map["order"])
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
     if not accs:
         return {"best": [], "worst": [], "metric": metric, "from_label": from_label, "to_label": to_label}
 
@@ -746,7 +771,13 @@ async def funnel_correlations(
     if not date_from:
         date_from = date_to - timedelta(days=days)
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
     if not accs:
         return CorrelationsResp(
             period_from=date_from.isoformat(), period_to=date_to.isoformat(),
@@ -1069,7 +1100,13 @@ async def ad_by_type(
     if not date_from:
         date_from = date_to - timedelta(days=days)
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
     if not accs:
         return AdByTypeResp(
             period_from=date_from.isoformat(), period_to=date_to.isoformat(),
@@ -1300,7 +1337,13 @@ async def funnel_sankey(
     if not date_from:
         date_from = date_to - timedelta(days=days)
 
-    accs = await _account_ids(db, company_id=current_user.company_id, cabinet_ids=cabinet_ids)
+    accessible = await get_accessible_cabinet_ids(db, current_user)
+    accs = await _account_ids(
+        db,
+        company_id=current_user.company_id,
+        cabinet_ids=cabinet_ids,
+        accessible=accessible,
+    )
     # 5 основных узлов + 4 drop-узла («Ушли»). Без drop-узлов recharts равняет
     # узел источника к величине единственного outflow, и Показы визуально =
     # Клики (юзер: «Показы 5945 = Клики 5945, невозможно при CTR 9.92%»).
