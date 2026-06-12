@@ -8,6 +8,7 @@ POST   /api/plan/sales/{plan_id}/items             — добавить SKU
 PUT    /api/plan/sales/{plan_id}/items/{item_id}   — изменить позицию
 POST   /api/plan/sales/{plan_id}/distribute        — распределить по дням
 GET    /api/plan/sales/{plan_id}/fact              — факт vs план
+GET    /api/plan/sales/{plan_id}/bridge            — waterfall разложение ΔВыручки
 POST   /api/plan/forecast                          — прогноз метрики
 POST   /api/plan/simulate                          — каскадный пересчёт
 """
@@ -26,6 +27,8 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import User
 from app.schemas.sales_plan import (
+    BridgeItem,
+    BridgeResponse,
     ChartPoint,
     FactRowOut,
     FactVsPlanRow,
@@ -580,6 +583,87 @@ async def plan_fact(
         total_days=total_days,
         days_passed=days_passed,
         rows=rows,
+    )
+
+
+@router.get("/sales/{plan_id}/bridge", response_model=BridgeResponse)
+async def plan_bridge(
+    plan_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BridgeResponse:
+    """Разложение ΔВыручки: эффект объёма + цены + выкупа + возвратов."""
+    plan = await _get_plan(plan_id, db)
+    plan_period_start: date = plan["period_start"]
+    plan_period_end: date = plan["period_end"]
+
+    today = datetime.now(UTC).date()
+    if plan_period_start > today:
+        fact_start = today.replace(day=1)
+        fact_end = today
+    else:
+        fact_start = plan_period_start
+        fact_end = min(plan_period_end, today)
+
+    # База: сумма plan_value из daily-таблицы за весь период
+    p_row = (await db.execute(text("""
+        SELECT COALESCE(SUM(spd.plan_value), 0) AS total
+        FROM sales_plan_daily spd
+        JOIN sales_plan_item spi ON spi.id = spd.plan_item_id
+        WHERE spi.plan_id = :plan_id
+    """), {"plan_id": plan_id})).mappings().one_or_none()
+    base = float(p_row["total"] or 0) if p_row else 0.0
+
+    # Факт транзакций
+    fact_row = (await db.execute(text("""
+        SELECT
+            COALESCE(SUM(accruals_for_sale), 0)                                       AS revenue,
+            COUNT(DISTINCT posting_number) FILTER (WHERE posting_number IS NOT NULL)  AS orders,
+            ABS(COALESCE(SUM(return_logistics), 0))                                   AS returns
+        FROM transactions
+        WHERE time >= :ts_from
+          AND time < CAST(:ts_to AS timestamp) + INTERVAL '1 day'
+    """), {"ts_from": fact_start, "ts_to": fact_end})).mappings().one()
+
+    fact_revenue = float(fact_row["revenue"] or 0)
+    fact_orders  = float(fact_row["orders"]  or 0)
+    returns_sum  = float(fact_row["returns"] or 0)
+
+    # План заказов из target_value (только если metric_code = 'orders')
+    plan_metric = plan["metric_code"]
+    plan_target = float(plan["target_value"] or 0) if plan["target_value"] else 0.0
+    plan_orders = plan_target if plan_metric == "orders" else 0.0
+
+    avg_plan = base / plan_orders    if plan_orders > 0 else 0.0
+    avg_fact = fact_revenue / fact_orders if fact_orders > 0 else 0.0
+
+    volume_effect     = (fact_orders - plan_orders) * avg_plan
+    price_effect      = (avg_fact - avg_plan) * fact_orders
+    redemption_effect = 0.0  # заглушка — estimated=True
+    returns_effect    = -returns_sum
+
+    delta = fact_revenue - base
+    check_delta = (volume_effect + price_effect + redemption_effect + returns_effect) - delta
+
+    def _color(v: float) -> str:
+        return "positive" if v > 0 else ("negative" if v < 0 else "neutral")
+
+    def _pct(v: float) -> float:
+        return round(v / abs(delta) * 100, 1) if abs(delta) > 0.01 else 0.0
+
+    items = [
+        BridgeItem(label="Эффект объёма",   value=round(volume_effect, 2),     pct=_pct(volume_effect),     estimated=False, color=_color(volume_effect)),
+        BridgeItem(label="Эффект цены",      value=round(price_effect, 2),      pct=_pct(price_effect),      estimated=False, color=_color(price_effect)),
+        BridgeItem(label="Эффект выкупа",    value=round(redemption_effect, 2), pct=_pct(redemption_effect), estimated=True,  color=_color(redemption_effect)),
+        BridgeItem(label="Эффект возвратов", value=round(returns_effect, 2),    pct=_pct(returns_effect),    estimated=False, color=_color(returns_effect)),
+    ]
+
+    return BridgeResponse(
+        base=round(base, 2),
+        actual=round(fact_revenue, 2),
+        delta=round(delta, 2),
+        items=items,
+        check_delta=round(check_delta, 2),
     )
 
 

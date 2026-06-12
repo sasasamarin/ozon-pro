@@ -7,6 +7,7 @@ import {
 import {
   LineChart, Line, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
+  BarChart, Bar, Cell,
 } from 'recharts'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -82,6 +83,22 @@ interface FactResp {
   total_days: number
   days_passed: number
   rows: FactRow[]
+}
+
+interface BridgeItem {
+  label: string
+  value: number
+  pct: number
+  estimated: boolean
+  color: 'positive' | 'negative' | 'neutral'
+}
+
+interface BridgeResp {
+  base: number
+  actual: number
+  delta: number
+  items: BridgeItem[]
+  check_delta: number
 }
 
 // ── Fact date formatter ───────────────────────────────────────────────
@@ -221,6 +238,141 @@ function CabinetSelect({
   )
 }
 
+// ── Bridge waterfall ──────────────────────────────────────────────────
+
+type WEntry = {
+  name: string
+  start: number
+  value: number
+  raw: number
+  fill: string
+  estimated: boolean
+}
+
+function BridgeWaterfall({ bridge }: { bridge: BridgeResp }) {
+  const data = useMemo<WEntry[]>(() => {
+    const entries: WEntry[] = []
+    entries.push({ name: 'План', start: 0, value: bridge.base, raw: bridge.base, fill: '#94a3b8', estimated: false })
+    let cursor = bridge.base
+    bridge.items.forEach((item) => {
+      const bottom = item.value >= 0 ? cursor : cursor + item.value
+      entries.push({
+        name: item.label,
+        start: bottom,
+        value: Math.abs(item.value),
+        raw: item.value,
+        fill: item.color === 'positive' ? '#10b981' : item.color === 'negative' ? '#ef4444' : '#94a3b8',
+        estimated: item.estimated,
+      })
+      cursor += item.value
+    })
+    entries.push({ name: 'Факт', start: 0, value: bridge.actual, raw: bridge.actual, fill: '#3b82f6', estimated: false })
+    return entries
+  }, [bridge])
+
+  return (
+    <Card className="p-5 flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-fg">Разложение отклонения выручки</p>
+        {Math.abs(bridge.check_delta) > 100 && (
+          <span className="text-xs text-amber-600">невязка {formatCurrency(bridge.check_delta)}</span>
+        )}
+      </div>
+
+      <div className="h-[240px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 16, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle, #e5e7eb)" />
+            <XAxis
+              dataKey="name"
+              tick={{ fontSize: 10, fill: 'var(--fg-muted, #6b7280)' }}
+              tickLine={false}
+            />
+            <YAxis
+              tick={{ fontSize: 10, fill: 'var(--fg-muted, #6b7280)' }}
+              tickLine={false}
+              tickFormatter={(v: number) => `${Math.round(v / 1000)}к`}
+            />
+            <Tooltip
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null
+                const e = payload[0].payload as WEntry
+                return (
+                  <div style={{
+                    background: 'var(--surface, #fff)',
+                    border: '1px solid var(--border, #e5e7eb)',
+                    borderRadius: 6,
+                    padding: '6px 10px',
+                    fontSize: 12,
+                  }}>
+                    <p style={{ fontWeight: 500, marginBottom: 2 }}>{e.name}</p>
+                    <p>{formatCurrency(e.raw)}</p>
+                    {e.estimated && <p style={{ color: '#d97706', fontSize: 11, marginTop: 2 }}>оценочно</p>}
+                  </div>
+                )
+              }}
+            />
+            <Bar dataKey="start" stackId="w" fill="transparent" isAnimationActive={false} />
+            <Bar dataKey="value" stackId="w" isAnimationActive={false} radius={[3, 3, 0, 0]}>
+              {data.map((e, i) => (
+                <Cell key={i} fill={e.fill} fillOpacity={e.estimated ? 0.4 : 1} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <table className="w-full text-sm">
+        <thead className="border-b border-border-subtle">
+          <tr className="text-left text-xs text-fg-muted uppercase tracking-wider">
+            <th className="pb-2 font-medium">Эффект</th>
+            <th className="pb-2 px-4 font-medium text-right">Сумма</th>
+            <th className="pb-2 font-medium text-right">% от Δ</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border-subtle">
+          {bridge.items.map((item) => (
+            <tr key={item.label} className="hover:bg-bg-subtle/40">
+              <td className="py-2">
+                <span className="flex items-center gap-2">
+                  {item.label}
+                  {item.estimated && (
+                    <span className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded px-1 py-0.5">
+                      оценочно
+                    </span>
+                  )}
+                </span>
+              </td>
+              <td className={cn(
+                'py-2 px-4 text-right tabular-nums font-medium',
+                item.color === 'positive' ? 'text-emerald-700' :
+                item.color === 'negative' ? 'text-rose-700' : 'text-fg-muted',
+              )}>
+                {item.value >= 0 ? '+' : ''}{formatCurrency(item.value)}
+              </td>
+              <td className="py-2 text-right tabular-nums text-fg-muted">
+                {item.pct >= 0 ? '+' : ''}{item.pct.toFixed(1)}%
+              </td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot className="border-t-2 border-border">
+          <tr className="font-semibold text-sm">
+            <td className="pt-2.5 text-fg-muted">Δ выручка</td>
+            <td className={cn(
+              'pt-2.5 px-4 text-right tabular-nums',
+              bridge.delta >= 0 ? 'text-emerald-700' : 'text-rose-700',
+            )}>
+              {bridge.delta >= 0 ? '+' : ''}{formatCurrency(bridge.delta)}
+            </td>
+            <td className="pt-2.5 text-right tabular-nums text-fg-muted">100%</td>
+          </tr>
+        </tfoot>
+      </table>
+    </Card>
+  )
+}
+
 // ── Main ──────────────────────────────────────────────────────────────
 
 export function PlanVsFact() {
@@ -275,6 +427,13 @@ export function PlanVsFact() {
 
   const fact = planFact ?? currentFact
   const factLoading = planFactLoading || currentFactLoading
+
+  // Bridge waterfall
+  const { data: bridge } = useQuery<BridgeResp>({
+    queryKey: ['plan-bridge', activePlanId],
+    queryFn: async () => (await api.get(`/plan/sales/${activePlanId}/bridge`)).data,
+    enabled: tab === 'fact' && !!activePlanId,
+  })
 
   // Forecast
   const forecastMut = useMutation({
@@ -847,6 +1006,8 @@ export function PlanVsFact() {
               <p className="text-sm">Нет данных за текущий месяц</p>
             </Card>
           )}
+
+          {bridge && <BridgeWaterfall bridge={bridge} />}
         </>
       )}
     </div>

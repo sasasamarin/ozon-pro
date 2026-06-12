@@ -200,3 +200,21 @@ class FactVsPlanRow(BaseModel):
     total_days: int
     days_passed: int
     rows: list[FactRowOut]
+
+
+# ── Bridge waterfall ──────────────────────────────────────────────────────────
+
+class BridgeItem(BaseModel):
+    label: str
+    value: float
+    pct: float
+    estimated: bool
+    color: str  # 'positive' | 'negative' | 'neutral'
+
+
+class BridgeResponse(BaseModel):
+    base: float
+    actual: float
+    delta: float
+    items: list[BridgeItem]
+    check_delta: float
