@@ -720,7 +720,7 @@ async def add_kpi(
 
     row = (await db.execute(text("""
         INSERT INTO plan_kpi (plan_id, manager_id, metric_code, target_value, bonus_rule)
-        VALUES (:plan_id, :manager_id, :metric_code, :target_value, :bonus_rule::jsonb)
+        VALUES (:plan_id, :manager_id, :metric_code, :target_value, CAST(:bonus_rule AS jsonb))
         RETURNING *
     """), {
         "plan_id":     plan_id,
