@@ -110,6 +110,26 @@ class PlanKpiOut(BaseModel):
     bonus_rule: Optional[dict]
 
 
+class KpiCreate(BaseModel):
+    manager_id: Optional[str] = None
+    metric_code: str
+    target_value: float
+    bonus_rule: Optional[dict] = None
+
+
+class KpiItemOut(BaseModel):
+    id: int
+    manager_id: Optional[str] = None
+    manager_name: Optional[str] = None
+    metric_code: str
+    target_value: Optional[float] = None
+    fact_value: float
+    pct: Optional[float] = None
+    forecast_value: Optional[float] = None
+    estimated_bonus: Optional[float] = None
+    bonus_rule: Optional[dict] = None
+
+
 # ── Прогноз ─────────────────────────────────────────────────────────────────
 
 class ForecastRequest(BaseModel):

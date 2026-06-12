@@ -1,13 +1,13 @@
 import { useState, useMemo, useCallback } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Lock, LockOpen, Download, RotateCcw, ChevronRight,
-  Loader2, Target, CheckCircle2,
+  Loader2, Target, CheckCircle2, Plus, Users2, X,
 } from 'lucide-react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
-  BarChart, Bar, Cell,
+  BarChart, Bar, Cell, LabelList,
 } from 'recharts'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -20,7 +20,7 @@ import type { OzonAccountSummary } from '@/stores/cabinet'
 // ── Types ─────────────────────────────────────────────────────────────
 
 type Metric = 'orders' | 'revenue' | 'marginal_profit'
-type Tab = 'plan' | 'fact'
+type Tab = 'plan' | 'fact' | 'kpi'
 type Step = 1 | 2 | 3
 
 const METRIC_LABELS: Record<Metric, string> = {
@@ -99,6 +99,46 @@ interface BridgeResp {
   delta: number
   items: BridgeItem[]
   check_delta: number
+}
+
+interface TeamMember {
+  id: string
+  user_id: string
+  email: string
+  full_name: string | null
+  role: string
+  status: string
+}
+
+type BonusRule =
+  | { type: 'pct_profit'; pct: number }
+  | { type: 'threshold'; thresholds: { pct: number; bonus: number }[] }
+
+interface KpiItem {
+  id: number
+  manager_id: string | null
+  manager_name: string | null
+  metric_code: string
+  target_value: number | null
+  fact_value: number
+  pct: number | null
+  forecast_value: number | null
+  estimated_bonus: number | null
+  bonus_rule: BonusRule | null
+}
+
+const KPI_METRIC_OPTS = [
+  { value: 'orders',  label: 'Заказы' },
+  { value: 'revenue', label: 'Выручка' },
+  { value: 'margin',  label: 'Маржинальная прибыль' },
+]
+
+const KPI_METRIC_LABEL: Record<string, string> = {
+  orders:          'Заказы',
+  revenue:         'Выручка',
+  margin:          'Маржинальная прибыль',
+  marginal_profit: 'Маржинальная прибыль',
+  returns:         'Возвраты',
 }
 
 // ── Fact date formatter ───────────────────────────────────────────────
@@ -234,6 +274,225 @@ function CabinetSelect({
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+// ── KPI Modal ─────────────────────────────────────────────────────────
+
+type BonusModel = 'A' | 'B'
+
+function KpiModal({
+  planId,
+  members,
+  onClose,
+  onSaved,
+}: {
+  planId: string
+  members: TeamMember[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [managerId, setManagerId]   = useState('')
+  const [metricCode, setMetricCode] = useState('orders')
+  const [targetValue, setTargetValue] = useState('')
+  const [bonusModel, setBonusModel] = useState<BonusModel>('B')
+  const [bonusPct, setBonusPct]     = useState('5')
+  const [thresholds, setThresholds] = useState([
+    { pct: '80', bonus: '5000' },
+    { pct: '100', bonus: '15000' },
+  ])
+
+  const addKpi = useMutation({
+    mutationFn: async () => {
+      const bonus_rule: BonusRule =
+        bonusModel === 'A'
+          ? { type: 'pct_profit', pct: parseFloat(bonusPct) || 0 }
+          : {
+              type: 'threshold',
+              thresholds: thresholds
+                .map((t) => ({ pct: parseFloat(t.pct) || 0, bonus: parseFloat(t.bonus) || 0 }))
+                .filter((t) => t.pct > 0),
+            }
+      return (await api.post(`/plan/sales/${planId}/kpi`, {
+        manager_id:   managerId || null,
+        metric_code:  metricCode,
+        target_value: parseFloat(targetValue) || 0,
+        bonus_rule,
+      })).data
+    },
+    onSuccess: () => onSaved(),
+  })
+
+  const addThreshold = () =>
+    setThresholds((p) => [...p, { pct: '', bonus: '' }])
+
+  const removeThreshold = (i: number) =>
+    setThresholds((p) => p.filter((_, idx) => idx !== i))
+
+  const updateThreshold = (i: number, field: 'pct' | 'bonus', val: string) =>
+    setThresholds((p) => p.map((t, idx) => (idx === i ? { ...t, [field]: val } : t)))
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <Card
+        className="max-w-lg w-full p-5 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-fg">Назначить KPI</h2>
+          <button onClick={onClose} className="text-fg-muted hover:text-fg">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="space-y-4 text-sm">
+          {/* Менеджер */}
+          <div>
+            <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">
+              Менеджер
+            </label>
+            <select
+              value={managerId}
+              onChange={(e) => setManagerId(e.target.value)}
+              className="h-9 px-3 rounded-md border border-border bg-surface text-sm w-full"
+            >
+              <option value="">— Без менеджера —</option>
+              {members.map((m) => (
+                <option key={m.user_id} value={m.user_id}>
+                  {m.full_name || m.email}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Метрика */}
+          <div>
+            <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">
+              Метрика
+            </label>
+            <select
+              value={metricCode}
+              onChange={(e) => setMetricCode(e.target.value)}
+              className="h-9 px-3 rounded-md border border-border bg-surface text-sm w-full"
+            >
+              {KPI_METRIC_OPTS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Цель */}
+          <div>
+            <label className="block text-[11px] font-medium text-fg-muted uppercase mb-1">
+              Цель
+            </label>
+            <Input
+              type="number"
+              value={targetValue}
+              onChange={(e) => setTargetValue(e.target.value)}
+              placeholder={isMoney(metricCode) ? 'напр. 500 000' : 'напр. 200'}
+              className="w-full"
+            />
+          </div>
+
+          {/* Модель мотивации */}
+          <div className="border border-border-subtle rounded-md p-3 space-y-3">
+            <p className="text-[11px] font-medium text-fg-muted uppercase">Модель мотивации</p>
+            <div className="flex gap-2">
+              {(['A', 'B'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setBonusModel(m)}
+                  className={cn(
+                    'flex-1 px-3 py-2 rounded border text-sm font-medium',
+                    bonusModel === m
+                      ? 'border-fg bg-fg text-bg'
+                      : 'border-border-subtle text-fg-muted hover:bg-bg-subtle',
+                  )}
+                >
+                  {m === 'A' ? 'A: % от метрики' : 'B: Пороговая'}
+                </button>
+              ))}
+            </div>
+
+            {bonusModel === 'A' && (
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  value={bonusPct}
+                  onChange={(e) => setBonusPct(e.target.value)}
+                  className="w-24"
+                  placeholder="5"
+                />
+                <span className="text-fg-muted text-sm">% от значения метрики</span>
+              </div>
+            )}
+
+            {bonusModel === 'B' && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-[11px] font-medium text-fg-muted uppercase">
+                  <span>% выполнения ≥</span>
+                  <span>Бонус, ₽</span>
+                  <span />
+                </div>
+                {thresholds.map((t, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                    <Input
+                      type="number"
+                      value={t.pct}
+                      onChange={(e) => updateThreshold(i, 'pct', e.target.value)}
+                      placeholder="80"
+                    />
+                    <Input
+                      type="number"
+                      value={t.bonus}
+                      onChange={(e) => updateThreshold(i, 'bonus', e.target.value)}
+                      placeholder="5000"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeThreshold(i)}
+                      className="text-fg-muted hover:text-rose-600 px-1"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={addThreshold}
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  + Добавить порог
+                </button>
+              </div>
+            )}
+          </div>
+
+          {addKpi.isError && (
+            <div className="text-sm text-rose-700 bg-rose-50 px-3 py-2 rounded">
+              Ошибка при сохранении. Проверьте данные.
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-2 mt-5 justify-end">
+          <Button variant="ghost" onClick={onClose}>Отмена</Button>
+          <Button
+            onClick={() => addKpi.mutate()}
+            disabled={addKpi.isPending || !targetValue}
+          >
+            {addKpi.isPending
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : 'Сохранить'}
+          </Button>
+        </div>
+      </Card>
     </div>
   )
 }
@@ -395,6 +654,11 @@ export function PlanVsFact() {
   // Saved plan
   const [savedPlanId, setSavedPlanId] = useState<string | null>(null)
 
+  // KPI modal
+  const [kpiModalOpen, setKpiModalOpen] = useState(false)
+
+  const qc = useQueryClient()
+
   // Cabinets
   const { data: cabinets = [] } = useQuery<OzonAccountSummary[]>({
     queryKey: ['ozon-accounts'],
@@ -402,14 +666,29 @@ export function PlanVsFact() {
     staleTime: 60_000,
   })
 
-  // Plan list (for Fact tab)
+  // Plan list (for Fact + KPI tabs)
   const { data: planList = [] } = useQuery<PlanListItem[]>({
     queryKey: ['plan-sales-list'],
     queryFn: async () => (await api.get('/plan/sales')).data,
-    enabled: tab === 'fact',
+    enabled: tab === 'fact' || tab === 'kpi',
   })
 
   const activePlanId = savedPlanId ?? planList[0]?.id ?? null
+
+  // Team members (for KPI modal)
+  const { data: teamMembers = [] } = useQuery<TeamMember[]>({
+    queryKey: ['team-members'],
+    queryFn: async () => (await api.get('/team/members')).data,
+    enabled: tab === 'kpi',
+    staleTime: 60_000,
+  })
+
+  // KPI list
+  const { data: kpiList = [], refetch: refetchKpi } = useQuery<KpiItem[]>({
+    queryKey: ['plan-kpi', activePlanId],
+    queryFn: async () => (await api.get(`/plan/sales/${activePlanId}/kpi`)).data,
+    enabled: tab === 'kpi' && !!activePlanId,
+  })
 
   // Fact data — с планом (если план есть)
   const { data: planFact, isLoading: planFactLoading } = useQuery<FactResp>({
@@ -589,7 +868,7 @@ export function PlanVsFact() {
 
       {/* Tab switcher */}
       <div className="flex gap-2">
-        {(['plan', 'fact'] as const).map((t) => (
+        {(['plan', 'fact', 'kpi'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -600,7 +879,7 @@ export function PlanVsFact() {
                 : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
             )}
           >
-            {t === 'plan' ? 'Постановка плана' : 'Факт'}
+            {t === 'plan' ? 'Постановка плана' : t === 'fact' ? 'Факт' : 'KPI команды'}
           </button>
         ))}
       </div>
@@ -1008,6 +1287,177 @@ export function PlanVsFact() {
           )}
 
           {bridge && <BridgeWaterfall bridge={bridge} />}
+        </>
+      )}
+
+      {/* ═══ KPI TAB ═══ */}
+      {tab === 'kpi' && (
+        <>
+          {!activePlanId ? (
+            <Card className="py-14 flex flex-col items-center gap-3 text-fg-muted">
+              <Users2 className="w-8 h-8 text-fg-subtle" />
+              <p className="text-sm">Сначала поставьте план</p>
+              <Button size="sm" variant="ghost" onClick={() => setTab('plan')}>
+                Перейти к постановке плана →
+              </Button>
+            </Card>
+          ) : (
+            <>
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-fg-muted">KPI команды по текущему плану</p>
+                <Button size="sm" onClick={() => setKpiModalOpen(true)}>
+                  <Plus className="w-4 h-4" /> Назначить KPI
+                </Button>
+              </div>
+
+              {/* KPI table */}
+              {kpiList.length > 0 ? (
+                <Card className="overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-bg-subtle/50 border-b border-border-subtle">
+                        <tr className="text-left text-xs text-fg-muted uppercase tracking-wider">
+                          <th className="py-2.5 px-4 font-medium">Менеджер</th>
+                          <th className="py-2.5 px-4 font-medium">Метрика</th>
+                          <th className="py-2.5 px-4 font-medium text-right">Цель</th>
+                          <th className="py-2.5 px-4 font-medium text-right">Факт</th>
+                          <th className="py-2.5 px-4 font-medium text-right">%</th>
+                          <th className="py-2.5 px-4 font-medium text-right">Прогноз</th>
+                          <th className="py-2.5 px-4 font-medium text-right">Бонус</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border-subtle">
+                        {kpiList.map((kpi) => (
+                          <tr key={kpi.id} className="hover:bg-bg-subtle/40">
+                            <td className="py-3 px-4 font-medium text-fg">
+                              {kpi.manager_name ?? (
+                                <span className="text-fg-subtle italic text-xs">Без менеджера</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-fg-muted">
+                              {KPI_METRIC_LABEL[kpi.metric_code] ?? kpi.metric_code}
+                            </td>
+                            <td className="py-3 px-4 text-right tabular-nums text-fg-muted">
+                              {kpi.target_value != null ? fmtVal(kpi.target_value, kpi.metric_code) : '—'}
+                            </td>
+                            <td className="py-3 px-4 text-right tabular-nums text-fg">
+                              {fmtVal(kpi.fact_value, kpi.metric_code)}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              {kpi.pct != null ? (
+                                <span className={cn(
+                                  'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium',
+                                  kpi.pct >= 100 ? 'bg-emerald-50 text-emerald-700' :
+                                  kpi.pct >= 80  ? 'bg-amber-50 text-amber-700' :
+                                                   'bg-rose-50 text-rose-700',
+                                )}>
+                                  {kpi.pct >= 100 ? '🟢' : kpi.pct >= 80 ? '🟡' : '🔴'}{' '}
+                                  {kpi.pct.toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className="text-fg-subtle text-xs">—</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-right tabular-nums text-blue-600">
+                              {kpi.forecast_value != null
+                                ? fmtVal(kpi.forecast_value, kpi.metric_code)
+                                : '—'}
+                            </td>
+                            <td className="py-3 px-4 text-right tabular-nums font-medium text-emerald-700">
+                              {kpi.estimated_bonus != null
+                                ? formatCurrency(kpi.estimated_bonus)
+                                : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              ) : (
+                <Card className="py-10 flex flex-col items-center gap-2 text-fg-muted">
+                  <p className="text-sm">KPI ещё не назначены</p>
+                  <Button size="sm" variant="ghost" onClick={() => setKpiModalOpen(true)}>
+                    Назначить первый KPI →
+                  </Button>
+                </Card>
+              )}
+
+              {/* Rating (≥2 строки с pct) */}
+              {kpiList.filter((k) => k.pct != null).length >= 2 && (() => {
+                const ratingData = [...kpiList]
+                  .filter((k) => k.pct != null)
+                  .sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0))
+                  .map((k, i) => ({
+                    name: k.manager_name
+                      ? `${i + 1}. ${k.manager_name}`
+                      : `${i + 1}. ${KPI_METRIC_LABEL[k.metric_code] ?? k.metric_code}`,
+                    pct: k.pct!,
+                  }))
+                const chartH = Math.max(120, ratingData.length * 44)
+                return (
+                  <Card className="p-5 flex flex-col gap-3">
+                    <p className="text-sm font-medium text-fg">Рейтинг выполнения</p>
+                    <div style={{ height: chartH }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          layout="vertical"
+                          data={ratingData}
+                          margin={{ top: 4, right: 64, left: 8, bottom: 4 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle, #e5e7eb)" horizontal={false} />
+                          <XAxis
+                            type="number"
+                            domain={[0, Math.max(100, ...ratingData.map((r) => r.pct))]}
+                            tickFormatter={(v: number) => `${v}%`}
+                            tick={{ fontSize: 10, fill: 'var(--fg-muted, #6b7280)' }}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            type="category"
+                            dataKey="name"
+                            tick={{ fontSize: 11, fill: 'var(--fg-muted, #6b7280)' }}
+                            width={160}
+                            tickLine={false}
+                          />
+                          <Bar dataKey="pct" isAnimationActive={false} radius={[0, 3, 3, 0]}>
+                            {ratingData.map((entry, idx) => (
+                              <Cell
+                                key={idx}
+                                fill={
+                                  entry.pct >= 100 ? '#10b981' :
+                                  entry.pct >= 80  ? '#f59e0b' : '#ef4444'
+                                }
+                              />
+                            ))}
+                            <LabelList
+                              dataKey="pct"
+                              position="right"
+                              formatter={(v: number) => `${v.toFixed(1)}%`}
+                              style={{ fontSize: 11, fill: 'var(--fg-muted, #6b7280)' }}
+                            />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </Card>
+                )
+              })()}
+            </>
+          )}
+
+          {kpiModalOpen && activePlanId && (
+            <KpiModal
+              planId={String(activePlanId)}
+              members={teamMembers}
+              onClose={() => setKpiModalOpen(false)}
+              onSaved={() => {
+                setKpiModalOpen(false)
+                qc.invalidateQueries({ queryKey: ['plan-kpi', activePlanId] })
+              }}
+            />
+          )}
         </>
       )}
     </div>

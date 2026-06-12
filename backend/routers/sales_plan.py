@@ -9,15 +9,18 @@ PUT    /api/plan/sales/{plan_id}/items/{item_id}   — изменить пози
 POST   /api/plan/sales/{plan_id}/distribute        — распределить по дням
 GET    /api/plan/sales/{plan_id}/fact              — факт vs план
 GET    /api/plan/sales/{plan_id}/bridge            — waterfall разложение ΔВыручки
+POST   /api/plan/sales/{plan_id}/kpi               — назначить KPI менеджеру
+GET    /api/plan/sales/{plan_id}/kpi               — список KPI с фактом и бонусом
 POST   /api/plan/forecast                          — прогноз метрики
 POST   /api/plan/simulate                          — каскадный пересчёт
 """
 from __future__ import annotations
 
 import calendar
+import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
@@ -35,6 +38,8 @@ from app.schemas.sales_plan import (
     ForecastRequest,
     ForecastResponse,
     ForecastSkuItem,
+    KpiCreate,
+    KpiItemOut,
     PlanDailyOut,
     PlanItemCreate,
     PlanItemOut,
@@ -665,6 +670,152 @@ async def plan_bridge(
         items=items,
         check_delta=round(check_delta, 2),
     )
+
+
+def _calc_bonus(
+    rule: Optional[dict],
+    pct_achieved: Optional[float],
+    fact_val: float,
+) -> Optional[float]:
+    """Расчёт прогноза бонуса по bonus_rule."""
+    if not rule or pct_achieved is None:
+        return None
+    rule_type = rule.get("type")
+    if rule_type == "pct_profit":
+        return round(fact_val * float(rule.get("pct", 0)) / 100, 2)
+    if rule_type == "threshold":
+        for t in sorted(rule.get("thresholds", []), key=lambda x: float(x["pct"]), reverse=True):
+            if pct_achieved >= float(t["pct"]):
+                return float(t["bonus"])
+        return 0.0
+    return None
+
+
+def _kpi_period(plan: Any) -> tuple[date, date, int, int]:
+    """Возвращает (fact_start, fact_end, total_days, days_passed)."""
+    today = datetime.now(UTC).date()
+    period_start: date = plan["period_start"]
+    period_end: date   = plan["period_end"]
+    if period_start > today:
+        fact_start = today.replace(day=1)
+        fact_end   = today
+        total_days = calendar.monthrange(today.year, today.month)[1]
+    else:
+        fact_start = period_start
+        fact_end   = min(period_end, today)
+        total_days = (period_end - period_start).days + 1
+    days_passed = (fact_end - fact_start).days + 1
+    return fact_start, fact_end, total_days, days_passed
+
+
+@router.post("/sales/{plan_id}/kpi", response_model=KpiItemOut, status_code=201)
+async def add_kpi(
+    plan_id: int,
+    payload: KpiCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> KpiItemOut:
+    """Назначить KPI менеджеру для плана."""
+    plan = await _get_plan(plan_id, db)
+
+    row = (await db.execute(text("""
+        INSERT INTO plan_kpi (plan_id, manager_id, metric_code, target_value, bonus_rule)
+        VALUES (:plan_id, :manager_id, :metric_code, :target_value, :bonus_rule::jsonb)
+        RETURNING *
+    """), {
+        "plan_id":     plan_id,
+        "manager_id":  payload.manager_id,
+        "metric_code": payload.metric_code,
+        "target_value": payload.target_value,
+        "bonus_rule":  json.dumps(payload.bonus_rule) if payload.bonus_rule else None,
+    })).mappings().one()
+    await db.commit()
+
+    # Имя менеджера
+    manager_name: Optional[str] = None
+    if payload.manager_id:
+        u_row = (await db.execute(
+            text("SELECT full_name, email FROM users WHERE id::text = :mid"),
+            {"mid": payload.manager_id},
+        )).mappings().one_or_none()
+        if u_row:
+            manager_name = u_row["full_name"] or u_row["email"]
+
+    fact_start, fact_end, total_days, days_passed = _kpi_period(plan)
+    fact_vals = await _all_facts(fact_start, fact_end, db)
+
+    fact_value = fact_vals.get(payload.metric_code, 0.0)
+    target     = float(row["target_value"] or 0)
+    pct        = round(fact_value / target * 100, 1) if target > 0 else None
+    forecast_v = round(fact_value / days_passed * total_days, 2) if days_passed > 0 else None
+    bonus      = _calc_bonus(payload.bonus_rule, pct, fact_value)
+
+    return KpiItemOut(
+        id=row["id"],
+        manager_id=row["manager_id"],
+        manager_name=manager_name,
+        metric_code=row["metric_code"],
+        target_value=target if target > 0 else None,
+        fact_value=round(fact_value, 2),
+        pct=pct,
+        forecast_value=forecast_v,
+        estimated_bonus=bonus,
+        bonus_rule=payload.bonus_rule,
+    )
+
+
+@router.get("/sales/{plan_id}/kpi", response_model=list[KpiItemOut])
+async def list_kpi(
+    plan_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[KpiItemOut]:
+    """Список KPI плана с фактом и прогнозом бонуса."""
+    plan = await _get_plan(plan_id, db)
+
+    kpi_rows = (await db.execute(text("""
+        SELECT
+            pk.id,
+            pk.manager_id,
+            COALESCE(u.full_name, u.email) AS manager_name,
+            pk.metric_code,
+            pk.target_value,
+            pk.bonus_rule
+        FROM plan_kpi pk
+        LEFT JOIN users u ON u.id::text = pk.manager_id
+        WHERE pk.plan_id = :plan_id
+        ORDER BY pk.id
+    """), {"plan_id": plan_id})).mappings().all()
+
+    if not kpi_rows:
+        return []
+
+    fact_start, fact_end, total_days, days_passed = _kpi_period(plan)
+    fact_vals = await _all_facts(fact_start, fact_end, db)
+
+    result: list[KpiItemOut] = []
+    for row in kpi_rows:
+        metric     = row["metric_code"]
+        fact_value = fact_vals.get(metric, 0.0)
+        target     = float(row["target_value"] or 0)
+        pct        = round(fact_value / target * 100, 1) if target > 0 else None
+        forecast_v = round(fact_value / days_passed * total_days, 2) if days_passed > 0 else None
+        rule       = row["bonus_rule"]  # asyncpg returns dict for jsonb
+        bonus      = _calc_bonus(rule, pct, fact_value)
+
+        result.append(KpiItemOut(
+            id=row["id"],
+            manager_id=row["manager_id"],
+            manager_name=row["manager_name"],
+            metric_code=metric,
+            target_value=target if target > 0 else None,
+            fact_value=round(fact_value, 2),
+            pct=pct,
+            forecast_value=forecast_v,
+            estimated_bonus=bonus,
+            bonus_rule=rule,
+        ))
+    return result
 
 
 # ── Прогноз ──────────────────────────────────────────────────────────────────
