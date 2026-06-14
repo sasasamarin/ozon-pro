@@ -18,14 +18,20 @@ import { formatCurrency, formatNumber, cn } from '@/lib/utils'
 import { useCabinetStore } from '@/stores/cabinet'
 
 interface KPI {
-  // «Заказано» (как в кабинете Ozon)
+  // «Заказано» (как в кабинете Ozon) — цена продавца, все статусы
   ordered_revenue: number
   ordered_count: number
   ordered_change_pct: number | null
-  // «Продажи / Доставлено» (то что было revenue)
+  // «Выручка продавца» = accruals (что Ozon начислил). База прибыли = P&L
+  seller_revenue: number
+  seller_revenue_change_pct: number | null
+  // «Доставлено» по цене продавца (status=delivered), справочно
+  delivered_revenue: number
+  // legacy alias revenue = seller_revenue
   revenue: number
   revenue_change_pct: number | null
   delivered_count: number
+  sources?: Record<string, string>
   // Разбивка
   in_transit_revenue: number
   cancelled_revenue: number
@@ -300,15 +306,15 @@ export function Dashboard() {
             {/* ОСНОВНЫЕ KPI: фактические продажи + прибыль */}
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
               <KpiCard
-                metricKey="revenue"
-                label="Продажи (доставлено)"
-                value={formatCurrency(kpi?.revenue ?? 0)}
-                change={kpi?.revenue_change_pct}
-                subtitle={kpi?.delivered_count ? `${formatNumber(kpi.delivered_count)} выкуплено` : undefined}
+                metricKey="seller_revenue"
+                label="Выручка продавца"
+                value={formatCurrency(kpi?.seller_revenue ?? 0)}
+                change={kpi?.seller_revenue_change_pct}
+                subtitle={`Ozon начислил · доставлено ${formatCurrency(kpi?.delivered_revenue ?? 0)}`}
                 spark={kpi?.sparkline || []}
                 icon={TrendingUp}
                 iconBg="from-emerald-50 to-white text-emerald-600"
-                clickTo={`/finance/transactions?date_from=${data?.period_from || ''}&date_to=${data?.period_to || ''}`}
+                clickTo="/finance/pnl"
               />
               <KpiCard
                 metricKey="gross_profit"

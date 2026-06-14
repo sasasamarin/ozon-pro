@@ -247,9 +247,12 @@ async def orders_daily(
         )
 
     async def _series(d_from, d_to) -> list[OrdersDailyPoint]:
+        # revenue здесь = «Заказано» (цена продавца, все статусы) по РЕАЛЬНОЙ дате
+        # заказа Ozon (order_created_at), а не created_at = времени вставки строки.
+        # Так сумма ряда совпадает с KPI «Заказано» на дашборде (единая ось даты).
         rows = (await db.execute(
             select(
-                func.date_trunc("day", Order.created_at).label("d"),
+                func.date_trunc("day", Order.order_created_at).label("d"),
                 func.count(func.distinct(Order.id)).label("orders"),
                 func.coalesce(func.sum(OrderItem.quantity), 0).label("units"),
                 func.coalesce(func.sum(OrderItem.total_price), 0).label("revenue"),
@@ -258,11 +261,11 @@ async def orders_daily(
             .join(OrderItem, OrderItem.order_id == Order.id)
             .where(
                 Order.ozon_account_id.in_(accs),
-                Order.created_at >= datetime.combine(d_from, datetime.min.time(), tzinfo=UTC),
-                Order.created_at < datetime.combine(d_to + timedelta(days=1), datetime.min.time(), tzinfo=UTC),
+                Order.order_created_at >= datetime.combine(d_from, datetime.min.time(), tzinfo=UTC),
+                Order.order_created_at < datetime.combine(d_to + timedelta(days=1), datetime.min.time(), tzinfo=UTC),
             )
-            .group_by(func.date_trunc("day", Order.created_at))
-            .order_by(func.date_trunc("day", Order.created_at))
+            .group_by(func.date_trunc("day", Order.order_created_at))
+            .order_by(func.date_trunc("day", Order.order_created_at))
         )).all()
         out: list[OrdersDailyPoint] = []
         for d, orders, units, revenue in rows:

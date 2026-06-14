@@ -29,10 +29,13 @@ UTC = timezone.utc
 class CategoryRow(BaseModel):
     category_name: str
     sku_count: int
+    # revenue = цена продавца по доставленным заказам (ordered_value, delivered).
+    # Per-категорию seller_revenue (accruals) недостижим: транзакции копятся на
+    # posting, не на SKU. Численно сходится с delivered_revenue на дашборде.
     revenue: float
     delivered_units: int
     cogs: float
-    gross_profit: float
+    gross_profit: float        # = revenue − cogs (без комиссий Ozon, в отличие от P&L)
     gross_margin_pct: float | None
     revenue_share_pct: float
 
@@ -42,6 +45,9 @@ class CategoriesResponse(BaseModel):
     period_to: str
     total_revenue: float
     rows: list[CategoryRow]
+    # source-флаг (CLAUDE.md): revenue = ordered_value доставленных, цена продавца
+    revenue_basis: str = "ordered_value_delivered"
+    sources: dict[str, str] = {"revenue": "db_aggregate"}
 
 
 @router.get("/", response_model=CategoriesResponse)
@@ -172,6 +178,9 @@ class CategoryTreeResponse(BaseModel):
     nodes_in_db: int           # сколько вообще категорий в дереве (sanity check)
     tree: list[CategoryTreeNode]  # корневые узлы (level=0)
     last_sync: str | None = None
+    # source-флаг: revenue = ordered_value доставленных, цена продавца (не accruals)
+    revenue_basis: str = "ordered_value_delivered"
+    sources: dict[str, str] = {"revenue": "db_aggregate"}
 
 
 @router.get("/tree", response_model=CategoryTreeResponse)

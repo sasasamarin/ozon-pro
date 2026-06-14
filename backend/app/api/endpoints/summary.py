@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -18,6 +18,7 @@ from app.api.deps import get_current_user
 from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import Order, OrderItem, OzonAccount, Product, Transaction, User
+from app.services.revenue_views import ordered_value_for, seller_revenue_for
 
 router = APIRouter()
 UTC = timezone.utc
@@ -33,12 +34,17 @@ class CabinetSummaryRow(BaseModel):
     cabinet_name: str
     premium_tier: str
     sku_count: int
-    revenue: float
+    # Два показателя «выручки» рядом (Принципы Flowoi §2):
+    # seller_revenue = accruals (что Ozon начислил) — база прибыли/маржи = P&L.
+    # ordered_value = «Заказано» по цене продавца, все статусы (зеркало Ozon).
+    seller_revenue: float
+    ordered_value: float
+    revenue: float            # legacy alias = seller_revenue
     orders: int
     aov: float
     cogs: float
     ozon_expenses: float
-    marginal_profit: float
+    marginal_profit: float    # = seller_revenue − cogs − ozon_expenses (как P&L)
     margin_pct: float | None
 
 
@@ -46,6 +52,7 @@ class SummaryResponse(BaseModel):
     period_from: str
     period_to: str
     rows: list[CabinetSummaryRow]
+    sources: dict[str, str] = {"seller_revenue": "db_aggregate", "ordered_value": "db_aggregate"}
 
 
 @router.get("/", response_model=SummaryResponse)
@@ -82,20 +89,23 @@ async def get_summary(
         )
         sku_count = int(sku_row.scalar() or 0)
 
-        # Revenue + orders
-        rev_row = (await db.execute(
-            select(
-                func.coalesce(func.sum(Order.total_amount), 0).label("revenue"),
-                func.count(Order.id).label("orders"),
-            ).where(
+        # Выручка продавца (accruals) — единый источник, та же цифра, что в P&L.
+        sr = await seller_revenue_for(db, account_ids=[acc.id], dt_from=period_from, dt_to=period_to)
+        seller_revenue = sr.value
+        # «Заказано» (все статусы, цена продавца) — зеркало кабинета Ozon.
+        ov = await ordered_value_for(db, account_ids=[acc.id], dt_from=period_from, dt_to=period_to, status_filter="all")
+        ordered_value = ov.value
+        # Кол-во доставленных заказов (для AOV/маржи на фактических продажах).
+        ord_row = (await db.execute(
+            select(func.count(Order.id)).where(
                 Order.ozon_account_id == acc.id,
                 Order.order_created_at >= period_from,
                 Order.order_created_at < period_to,
                 Order.status == "delivered",
             )
-        )).one()
-        revenue = float(rev_row.revenue or 0)
-        orders = int(rev_row.orders or 0)
+        )).scalar()
+        orders = int(ord_row or 0)
+        revenue = seller_revenue   # top-line = seller_revenue (база прибыли = P&L)
 
         # COGS
         cogs_row = await db.execute(
@@ -139,6 +149,8 @@ async def get_summary(
             cabinet_name=acc.name,
             premium_tier=acc.premium_tier,
             sku_count=sku_count,
+            seller_revenue=round(seller_revenue, 2),
+            ordered_value=round(ordered_value, 2),
             revenue=round(revenue, 2),
             orders=orders,
             aov=round(aov, 2),

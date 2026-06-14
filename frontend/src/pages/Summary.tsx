@@ -12,6 +12,8 @@ interface Row {
   cabinet_name: string
   premium_tier: string
   sku_count: number
+  seller_revenue: number
+  ordered_value: number
   revenue: number
   orders: number
   aov: number
@@ -58,7 +60,7 @@ export function Summary() {
 
       <div className="grid grid-cols-2 gap-3">
         <Card className="p-4">
-          <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">Суммарная выручка</p>
+          <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">Выручка продавца (как P&L)</p>
           <p className="text-[22px] font-semibold text-emerald-700 mt-1 tabular-nums">{formatCurrency(totalRevenue)}</p>
         </Card>
         <Card className="p-4">
@@ -77,7 +79,8 @@ export function Summary() {
                 <tr className="text-left text-xs text-fg-muted uppercase tracking-wider">
                   <th className="py-2.5 px-4 font-medium">кабинет</th>
                   <th className="py-2.5 px-4 font-medium text-right">SKU</th>
-                  <th className="py-2.5 px-4 font-medium text-right">выручка</th>
+                  <th className="py-2.5 px-4 font-medium text-right">заказано</th>
+                  <th className="py-2.5 px-4 font-medium text-right">выручка продавца</th>
                   <th className="py-2.5 px-4 font-medium text-right">заказы</th>
                   <th className="py-2.5 px-4 font-medium text-right">AOV</th>
                   <th className="py-2.5 px-4 font-medium text-right">COGS</th>
@@ -99,7 +102,8 @@ export function Summary() {
                       </div>
                     </td>
                     <td className="py-2.5 px-4 text-right tabular-nums">{r.sku_count}</td>
-                    <td className="py-2.5 px-4 text-right tabular-nums text-emerald-700">{formatCurrency(r.revenue)}</td>
+                    <td className="py-2.5 px-4 text-right tabular-nums text-fg-muted">{formatCurrency(r.ordered_value)}</td>
+                    <td className="py-2.5 px-4 text-right tabular-nums text-emerald-700">{formatCurrency(r.seller_revenue)}</td>
                     <td className="py-2.5 px-4 text-right tabular-nums">{formatNumber(r.orders)}</td>
                     <td className="py-2.5 px-4 text-right tabular-nums text-fg-muted">{formatCurrency(r.aov)}</td>
                     <td className="py-2.5 px-4 text-right tabular-nums text-rose-700">−{formatCurrency(r.cogs)}</td>

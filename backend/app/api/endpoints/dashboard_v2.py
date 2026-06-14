@@ -22,6 +22,7 @@ from app.api.deps import get_current_user
 from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import Company, Order, OrderItem, OzonAccount, Product, Transaction, User
+from app.services.revenue_views import seller_revenue_for
 from app.services.tax import calc_tax
 
 router = APIRouter()
@@ -32,12 +33,21 @@ UTC = timezone.utc
 
 
 class KPIBlock(BaseModel):
-    # «Заказано» — все заказы периода (как в кабинете Ozon «Заказано на сумму»)
+    # Два показателя «выручки» рядом (Принципы Flowoi §2 «2 модели финансов»):
+    # «Заказано» — все заказы периода по цене продавца (зеркало кабинета Ozon
+    # «Заказано на сумму»). Операционный, маркетинговый слой.
     ordered_revenue: float
     ordered_count: int
     ordered_change_pct: float | None
-    # «Продажи / Доставлено» — только status=delivered
-    revenue: float                  # = delivered_revenue (для обратной совместимости)
+    # «Выручка продавца» = accruals_for_sale (что Ozon НАЧИСЛИЛ, incl. Баллы +
+    # Программы партнёров). База прибыли/налога = top-line P&L. Единый источник.
+    seller_revenue: float
+    seller_revenue_change_pct: float | None
+    # «Доставлено» по цене продавца (status=delivered, total_amount). Справочно.
+    delivered_revenue: float
+    # legacy alias `revenue` = seller_revenue (на нём считаются gross/net/tax,
+    # чтобы арифметика дашборда совпадала с P&L). Старый фронт читал «Продажи».
+    revenue: float
     revenue_change_pct: float | None
     delivered_count: int
     # Промежуточные статусы — разница между заказано и продажами
@@ -60,6 +70,8 @@ class KPIBlock(BaseModel):
     ozon_expenses: float
     expense_share_pct: float | None
     sparkline: list[float]
+    # source-флаг на каждое число (CLAUDE.md)
+    sources: dict[str, str] = {}
 
 
 class TimePoint(BaseModel):
@@ -293,12 +305,17 @@ async def get_dashboard_v2(
 
     # ===== KPI текущий период =====
     k = await _kpi_for_window(db, accs=accs, dt_from=dt_from, dt_to=dt_to)
-    revenue = k["delivered_revenue"]    # «продажи» (legacy revenue)
+    # Выручка продавца (accruals) — единый источник, та же цифра, что в P&L.
+    sr = await seller_revenue_for(db, account_ids=accs, dt_from=dt_from, dt_to=dt_to)
+    seller_revenue = sr.value
+    delivered_revenue = k["delivered_revenue"]   # «доставлено» по цене продавца, справочно
+    revenue = seller_revenue                      # база прибыли/налога = P&L
     orders = k["delivered_count"]
     cogs = k["cogs"]
     ozon_exp = k["ozon_expenses"]
     gross_profit = revenue - cogs - ozon_exp
-    aov = revenue / orders if orders else 0
+    # Средний чек = «Заказано» / число заказов.
+    aov = k["ordered_revenue"] / k["ordered_count"] if k["ordered_count"] else 0
     expense_share = (ozon_exp / revenue * 100) if revenue else None
 
     # ===== Сравнение =====
@@ -307,13 +324,15 @@ async def get_dashboard_v2(
         cmp_from = datetime.combine(cmp[0], datetime.min.time(), tzinfo=UTC)
         cmp_to = datetime.combine(cmp[1] + timedelta(days=1), datetime.min.time(), tzinfo=UTC)
         pk = await _kpi_for_window(db, accs=accs, dt_from=cmp_from, dt_to=cmp_to)
-        p_rev = pk["delivered_revenue"]
+        p_sr = await seller_revenue_for(db, account_ids=accs, dt_from=cmp_from, dt_to=cmp_to)
+        p_rev = p_sr.value                  # база прибыли = seller_revenue
         p_ord = pk["delivered_count"]
         p_cogs = pk["cogs"]
         p_exp = pk["ozon_expenses"]
         p_ordered = pk["ordered_revenue"]
+        p_ordered_cnt = pk["ordered_count"]
         p_gross = p_rev - p_cogs - p_exp
-        p_aov = p_rev / p_ord if p_ord else 0
+        p_aov = p_ordered / p_ordered_cnt if p_ordered_cnt else 0
     else:
         p_rev = p_ord = p_gross = p_aov = p_ordered = 0
 
@@ -603,6 +622,9 @@ async def get_dashboard_v2(
             ordered_revenue=round(k["ordered_revenue"], 2),
             ordered_count=k["ordered_count"],
             ordered_change_pct=_pct(k["ordered_revenue"], p_ordered) if cmp else None,
+            seller_revenue=round(seller_revenue, 2),
+            seller_revenue_change_pct=_pct(seller_revenue, p_rev) if cmp else None,
+            delivered_revenue=round(delivered_revenue, 2),
             revenue=round(revenue, 2),
             revenue_change_pct=_pct(revenue, p_rev) if cmp else None,
             delivered_count=k["delivered_count"],
@@ -623,6 +645,11 @@ async def get_dashboard_v2(
             ozon_expenses=round(ozon_exp, 2),
             expense_share_pct=round(expense_share, 1) if expense_share else None,
             sparkline=sparkline[-30:],
+            sources={
+                "seller_revenue": sr.source,
+                "ordered_revenue": "db_aggregate",
+                "delivered_revenue": "db_aggregate",
+            },
         ),
         series=series,
         expense_breakdown=expense_breakdown,

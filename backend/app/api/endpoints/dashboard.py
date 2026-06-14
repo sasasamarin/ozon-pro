@@ -28,6 +28,7 @@ from app.api.deps_cabinets import get_accessible_cabinet_ids
 from app.db.session import get_db
 from app.models import Order, OrderItem, OzonAccount, Product, Transaction, User
 from app.models.cost import CostConfidence, ProductCostHistory
+from app.services.revenue_views import ordered_value_for, seller_revenue_for
 
 router = APIRouter()
 
@@ -35,6 +36,16 @@ router = APIRouter()
 # === Pydantic schemas ===
 
 class KPIResponse(BaseModel):
+    # Два показателя «выручки» рядом (Принципы Flowoi §2 «2 модели финансов»):
+    # - seller_revenue: что Ozon реально НАЧИСЛИЛ продавцу (accruals_for_sale,
+    #   incl. Баллы + Программы партнёров). База прибыли и налога. = top-line P&L.
+    # - ordered_value: «Заказано на сумму» по цене продавца, ВСЕ заказы периода
+    #   (зеркало кабинета Ozon). НЕ равно seller_revenue.
+    seller_revenue: float
+    seller_revenue_change_pct: float | None
+    ordered_value: float
+    ordered_value_change_pct: float | None
+    # legacy alias для старого фронта = seller_revenue (top-line)
     revenue: float
     revenue_change_pct: float | None
     ozon_expenses: float
@@ -44,6 +55,8 @@ class KPIResponse(BaseModel):
     orders_count: int
     orders_change_pct: float | None
     avg_order_value: float
+    # source-флаг на каждое число (CLAUDE.md): 'db_aggregate' | 'estimated' | ...
+    sources: dict[str, str] = {}
 
 
 class ExpenseRow(BaseModel):
@@ -117,29 +130,24 @@ async def _account_ids(
     return [r[0] for r in (await db.execute(q)).all()]
 
 
-async def _revenue_and_orders(
+async def _orders_count(
     db: AsyncSession,
     *,
     account_ids: list[uuid.UUID],
     period_from: datetime,
     period_to: datetime,
-) -> tuple[float, int]:
+) -> int:
+    """Кол-во заказов периода по дате заказа — ВСЕ статусы (зеркало кабинета Ozon)."""
     if not account_ids:
-        return 0.0, 0
-    row = (
-        await db.execute(
-            select(
-                func.coalesce(func.sum(Order.total_amount), 0).label("revenue"),
-                func.count(Order.id).label("orders"),
-            ).where(
-                Order.ozon_account_id.in_(account_ids),
-                Order.order_created_at >= period_from,
-                Order.order_created_at < period_to,
-                Order.status == "delivered",
-            )
+        return 0
+    row = await db.execute(
+        select(func.count(Order.id)).where(
+            Order.ozon_account_id.in_(account_ids),
+            Order.order_created_at >= period_from,
+            Order.order_created_at < period_to,
         )
-    ).one()
-    return float(row.revenue or 0), int(row.orders or 0)
+    )
+    return int(row.scalar() or 0)
 
 
 async def _ozon_expenses_breakdown(
@@ -220,7 +228,9 @@ async def _daily_series(
     if not account_ids:
         return []
 
-    # Revenue по дням
+    # Revenue по дням = «Заказано» (цена продавца, ВСЕ статусы) — чтобы сумма
+    # тренда сходилась с KPI ordered_value. Это операционный тренд заказов,
+    # НЕ seller_revenue (accruals идут по operation_date, не по дате заказа).
     rev_rows = (
         await db.execute(
             select(
@@ -231,7 +241,6 @@ async def _daily_series(
                 Order.ozon_account_id.in_(account_ids),
                 Order.order_created_at >= period_from,
                 Order.order_created_at < period_to,
-                Order.status == "delivered",
             )
             .group_by("d")
             .order_by("d")
@@ -418,12 +427,21 @@ async def get_dashboard(
         accessible=accessible,
     )
 
-    revenue, orders_count = await _revenue_and_orders(
-        db, account_ids=accounts, period_from=period_from, period_to=period_to
-    )
-    prev_revenue, prev_orders = await _revenue_and_orders(
-        db, account_ids=accounts, period_from=prev_from, period_to=period_from
-    )
+    # Выручка продавца (accruals) — единый источник, та же цифра, что в P&L.
+    sr = await seller_revenue_for(db, account_ids=accounts, dt_from=period_from, dt_to=period_to)
+    prev_sr = await seller_revenue_for(db, account_ids=accounts, dt_from=prev_from, dt_to=period_from)
+    seller_revenue, prev_seller_revenue = sr.value, prev_sr.value
+
+    # «Заказано на сумму» (цена продавца, все статусы) — зеркало кабинета Ozon.
+    ov = await ordered_value_for(db, account_ids=accounts, dt_from=period_from, dt_to=period_to, status_filter="all")
+    prev_ov = await ordered_value_for(db, account_ids=accounts, dt_from=prev_from, dt_to=period_from, status_filter="all")
+    ordered_value, prev_ordered_value = ov.value, prev_ov.value
+
+    orders_count = await _orders_count(db, account_ids=accounts, period_from=period_from, period_to=period_to)
+    prev_orders = await _orders_count(db, account_ids=accounts, period_from=prev_from, period_to=period_from)
+
+    # top-line «выручка» для расчёта прибыли/налога = seller_revenue (как P&L).
+    revenue, prev_revenue = seller_revenue, prev_seller_revenue
 
     expense_dict = await _ozon_expenses_breakdown(
         db, account_ids=accounts, period_from=period_from, period_to=period_to
@@ -445,7 +463,8 @@ async def get_dashboard(
     gross_profit = revenue - cogs - ozon_expenses_total
     prev_gross_profit = prev_revenue - prev_cogs - prev_expenses_total
 
-    aov = revenue / orders_count if orders_count > 0 else 0
+    # Средний чек = «Заказано» / число заказов.
+    aov = ordered_value / orders_count if orders_count > 0 else 0
 
     # Breakdown — сортируем по убыванию суммы, отбрасываем нулевые
     breakdown = []
@@ -466,7 +485,7 @@ async def get_dashboard(
     )
     top = await _top_products(
         db, account_ids=accounts, period_from=period_from, period_to=period_to,
-        total_revenue=revenue,
+        total_revenue=ordered_value,
     )
     has_missing, missing_count = await _missing_costs_count(db, account_ids=accounts)
 
@@ -477,7 +496,11 @@ async def get_dashboard(
         has_missing_costs=has_missing,
         missing_costs_count=missing_count,
         kpi=KPIResponse(
-            revenue=round(revenue, 2),
+            seller_revenue=round(seller_revenue, 2),
+            seller_revenue_change_pct=_pct_change(seller_revenue, prev_seller_revenue),
+            ordered_value=round(ordered_value, 2),
+            ordered_value_change_pct=_pct_change(ordered_value, prev_ordered_value),
+            revenue=round(revenue, 2),  # legacy alias = seller_revenue
             revenue_change_pct=_pct_change(revenue, prev_revenue),
             ozon_expenses=round(ozon_expenses_total, 2),
             ozon_expenses_pct_of_revenue=round(
@@ -488,6 +511,10 @@ async def get_dashboard(
             orders_count=orders_count,
             orders_change_pct=_pct_change(orders_count, prev_orders),
             avg_order_value=round(aov, 2),
+            sources={
+                "seller_revenue": sr.source,
+                "ordered_value": ov.source,
+            },
         ),
         expense_breakdown=breakdown,
         daily_series=daily,
