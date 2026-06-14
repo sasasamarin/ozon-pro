@@ -391,13 +391,41 @@ async def sync_ozon_account(
     if not account:
         raise HTTPException(status_code=404, detail="Магазин не найден")
 
-    # TODO: запустить celery задачу sync_full(account_id)
-    # from app.workers.sync import sync_full_account
-    # task = sync_full_account.delay(str(account_id))
+    # Полная синхронизация кабинета через Celery. Две цепочки, чтобы соблюсти
+    # зависимости порядка (товары должны появиться раньше заказов — иначе
+    # OrderItem не сматчит product_id; кампании раньше статистики рекламы).
+    # Все таски идемпотентны (ON CONFLICT DO UPDATE), повтор безопасен.
+    from celery import chain
 
-    log.info("sync_requested", account_id=str(account_id))
+    from app.workers.tasks.sync_ads import sync_all_ad_campaigns, sync_all_ad_statistics
+    from app.workers.tasks.sync_analytics import sync_all_analytics
+    from app.workers.tasks.sync_finance import sync_all_transactions
+    from app.workers.tasks.sync_orders import sync_all_orders
+    from app.workers.tasks.sync_products import (
+        sync_all_prices, sync_all_products, sync_all_stocks,
+    )
+
+    acc = str(account_id)
+    core = chain(
+        sync_all_products.si(account_id=acc),
+        sync_all_prices.si(account_id=acc),
+        sync_all_stocks.si(account_id=acc),
+        sync_all_orders.si(account_id=acc),
+        sync_all_transactions.si(account_id=acc),
+        sync_all_analytics.si(account_id=acc),
+    )
+    ads = chain(
+        sync_all_ad_campaigns.si(account_id=acc),
+        sync_all_ad_statistics.si(account_id=acc),
+    )
+    core_res = core.apply_async()
+    ads_res = ads.apply_async()
+
+    log.info("sync_requested", account_id=acc,
+             core_task=core_res.id, ads_task=ads_res.id)
 
     return {
         "status": "queued",
-        "message": "Синхронизация запущена в фоне",
+        "message": "Полная синхронизация запущена в фоне",
+        "task_ids": {"core": core_res.id, "ads": ads_res.id},
     }
