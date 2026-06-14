@@ -35,7 +35,8 @@ from app.models import Company, Order, OrderItem, OzonAccount, Product, Transact
 from app.models.cost import CostConfidence, ProductCostHistory
 from app.models.loan import LoanPayment
 from app.models.marketplace import Return
-from app.services.tax import calc_tax
+from app.services.pnl_compute import compute_pnl
+from app.services.revenue_views import seller_revenue_for
 
 router = APIRouter()
 UTC = timezone.utc
@@ -145,25 +146,13 @@ async def _seller_revenue_for_window(
     """
     Главная выручка — accruals_for_sale из transactions, по operation_date.
 
-    Включает компенсацию «Баллов за скидки» и «Программы партнёров» —
-    это деньги, которые Ozon ДОПЛАЧИВАЕТ продавцу за участие в скидках.
-    На эту цифру Ozon начисляет комиссию, от неё считается маржа продавца.
-
-    Источник истины — Ozon /v3/finance/transaction/list, operation_type
-    OperationAgentDeliveredToCustomer.
+    Делегирует в единый источник `services.revenue_views.seller_revenue_for`
+    (Принципы Flowoi §2 «2 модели финансов»: один helper на всю кодовую базу,
+    чтобы dashboard/orders/categories не считали выручку каждый по-своему).
+    Логика идентична прежней — diff остаётся 0 на выверенных юнит-тестах.
     """
-    if not accs:
-        return 0.0
-    row = await db.execute(
-        select(func.coalesce(func.sum(Transaction.accruals_for_sale), 0))
-        .where(
-            Transaction.ozon_account_id.in_(accs),
-            Transaction.operation_date >= dt_from,
-            Transaction.operation_date < dt_to,
-            Transaction.operation_type == "OperationAgentDeliveredToCustomer",
-        )
-    )
-    return float(row.scalar() or 0)
+    res = await seller_revenue_for(db, account_ids=accs, dt_from=dt_from, dt_to=dt_to)
+    return res.value
 
 
 async def _cogs_for_window(
@@ -311,13 +300,8 @@ async def get_pnl(
     # Top-line = seller_revenue. Это что Ozon начислил продавцу (incl. компенсации СПП).
     revenue = seller_revenue
     returned_revenue = await _returned_revenue(db, accs=accs, dt_from=period_from, dt_to=period_to)
-    effective_revenue = revenue - returned_revenue
     cogs = await _cogs_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
     expenses = await _expenses_for_window(db, accs=accs, dt_from=period_from, dt_to=period_to)
-
-    gross_profit = effective_revenue - cogs
-    total_expenses = sum(expenses.values())
-    marginal_profit = gross_profit - total_expenses
 
     # Проценты по кредитам (Ветка 1 ТЗ flowoi_tz_loans.md) — финансовый расход.
     # Тело займа в P&L НЕ попадает.
@@ -325,8 +309,31 @@ async def get_pnl(
         db, company_id=current_user.company_id,
         dt_from=period_from, dt_to=period_to,
     )
-    loan_finance_cost = loan_interest + loan_fee
-    profit_before_tax = marginal_profit - loan_finance_cost
+
+    # Налоговый режим компании.
+    company = (await db.execute(
+        select(Company).where(Company.id == current_user.company_id)
+    )).scalar_one()
+    tax_regime = company.tax_regime or "usn_income"
+    tax_rate = float(company.tax_rate_pct or 6.0)
+    vat_rate = float(company.vat_rate_pct) if company.vat_rate_pct else None
+
+    # Вся арифметика P&L — в чистой функции (services/pnl_compute.py), один
+    # источник формулы для текущего периода и периода сравнения. Golden-тест:
+    # tests/services/test_pnl_compute.py.
+    res = compute_pnl(
+        seller_revenue=seller_revenue, buyer_revenue=buyer_revenue,
+        returned_revenue=returned_revenue, cogs=cogs, expenses=expenses,
+        loan_interest=loan_interest, loan_fee=loan_fee,
+        tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
+    )
+    effective_revenue = res.effective_revenue
+    gross_profit = res.gross_profit
+    total_expenses = res.total_expenses
+    marginal_profit = res.marginal_profit
+    loan_finance_cost = res.loan_finance_cost
+    profit_before_tax = res.profit_before_tax
+    tax_res = res.tax
 
     has_missing, missing_n = await _missing_costs(db, accs=accs)
 
@@ -411,23 +418,7 @@ async def get_pnl(
             is_subtotal=True,
         ))
 
-    # === Налог по компании-режиму ===
-    company = (await db.execute(
-        select(Company).where(Company.id == current_user.company_id)
-    )).scalar_one()
-    tax_regime = company.tax_regime or "usn_income"
-    tax_rate = float(company.tax_rate_pct or 6.0)
-    vat_rate = float(company.vat_rate_pct) if company.vat_rate_pct else None
-    # База налога — effective_revenue (после возвратов).
-    # УСН Доходы: возвраты по ФНС уменьшают налоговую базу.
-    # УСН Дох-Расх / ОСНО: налог от прибыли, где revenue уже без возвратов.
-    # На УСН Дох-Расх и ОСНО проценты по кредитам уменьшают налоговую базу
-    # (gross_profit = profit_before_tax). На УСН Доходы base = revenue, проценты
-    # на налог не влияют — calc_tax сам это учитывает по tax_regime.
-    tax_res = calc_tax(
-        revenue=effective_revenue, gross_profit=profit_before_tax,
-        tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
-    )
+    # === Налог по компании-режиму (уже посчитан в compute_pnl → res.tax) ===
     if tax_res.vat_amount > 0:
         rows.append(PnLRow(
             label=f"− НДС ({vat_rate}%)",
@@ -456,21 +447,20 @@ async def get_pnl(
         prev_to = period_from
         pr_rev = await _seller_revenue_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
         pr_returned = await _returned_revenue(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
-        pr_eff = pr_rev - pr_returned
         pr_cogs = await _cogs_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
         pr_exp = await _expenses_for_window(db, accs=accs, dt_from=prev_from, dt_to=prev_to)
         pr_int, pr_fee = await _loan_interest_for_window(
             db, company_id=current_user.company_id,
             dt_from=prev_from, dt_to=prev_to,
         )
-        prev_revenue = pr_rev
-        prev_marginal = pr_eff - pr_cogs - sum(pr_exp.values())
-        prev_profit_before_tax = prev_marginal - (pr_int + pr_fee)
-        prev_tax = calc_tax(
-            revenue=pr_eff, gross_profit=prev_profit_before_tax,
+        pr_res = compute_pnl(
+            seller_revenue=pr_rev, returned_revenue=pr_returned, cogs=pr_cogs,
+            expenses=pr_exp, loan_interest=pr_int, loan_fee=pr_fee,
             tax_regime=tax_regime, tax_rate_pct=tax_rate, vat_rate_pct=vat_rate,
         )
-        prev_net = prev_tax.net_profit
+        prev_revenue = pr_rev
+        prev_marginal = pr_res.marginal_profit
+        prev_net = pr_res.tax.net_profit
 
     net_margin = (tax_res.net_profit / revenue * 100) if revenue else None
     return PnLResponse(
