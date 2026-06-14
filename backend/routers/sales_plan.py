@@ -33,6 +33,8 @@ from app.schemas.sales_plan import (
     BridgeItem,
     BridgeResponse,
     ChartPoint,
+    DailyFactDay,
+    DailyFactResponse,
     FactRowOut,
     FactVsPlanRow,
     ForecastRequest,
@@ -589,6 +591,65 @@ async def plan_fact(
         days_passed=days_passed,
         rows=rows,
     )
+
+
+@router.get("/sales/{plan_id}/daily-fact", response_model=DailyFactResponse)
+async def plan_daily_fact(
+    plan_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DailyFactResponse:
+    """Факт vs план по дням — для игрового режима (серия зелёных дней)."""
+    plan = await _get_plan(plan_id, db)
+    plan_period_start: date = plan["period_start"]
+    plan_period_end: date = plan["period_end"]
+
+    today = datetime.now(UTC).date()
+    fact_start = plan_period_start if plan_period_start <= today else today.replace(day=1)
+    fact_end = min(plan_period_end, today)
+
+    # Дневной план: суммируем sales_plan_daily по дням
+    plan_rows = (await db.execute(text("""
+        SELECT spd.date, COALESCE(SUM(spd.plan_value), 0) AS plan_value
+        FROM sales_plan_daily spd
+        JOIN sales_plan_item spi ON spi.id = spd.plan_item_id
+        WHERE spi.plan_id = :plan_id
+          AND spd.date BETWEEN :from_dt AND :to_dt
+        GROUP BY spd.date
+        ORDER BY spd.date
+    """), {"plan_id": plan_id, "from_dt": fact_start, "to_dt": fact_end})).mappings().all()
+
+    # Дневной факт: транзакции сгруппированные по дням
+    fact_rows = (await db.execute(text("""
+        SELECT
+            DATE(time AT TIME ZONE 'Europe/Moscow') AS day,
+            COALESCE(SUM(accruals_for_sale), 0)     AS revenue
+        FROM transactions
+        WHERE time >= :from_dt
+          AND time < CAST(:to_dt AS timestamp) + INTERVAL '1 day'
+        GROUP BY 1
+        ORDER BY 1
+    """), {"from_dt": fact_start, "to_dt": fact_end})).mappings().all()
+
+    plan_map = {r["date"]: float(r["plan_value"]) for r in plan_rows}
+    fact_map = {r["day"]: float(r["revenue"]) for r in fact_rows}
+
+    all_dates = sorted(set(list(plan_map.keys()) + list(fact_map.keys())))
+    days: list[DailyFactDay] = []
+    for d in all_dates:
+        p = plan_map.get(d, 0.0)
+        f = fact_map.get(d, 0.0)
+        days.append(DailyFactDay(date=d.isoformat(), plan=p, fact=f, green=(f >= p and p > 0)))
+
+    # Серия: считаем с конца (самые свежие дни)
+    streak = 0
+    for day in reversed(days):
+        if day.green:
+            streak += 1
+        else:
+            break
+
+    return DailyFactResponse(days=days, streak=streak)
 
 
 @router.get("/sales/{plan_id}/bridge", response_model=BridgeResponse)

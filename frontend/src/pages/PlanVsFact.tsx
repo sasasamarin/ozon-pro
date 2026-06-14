@@ -20,7 +20,7 @@ import type { OzonAccountSummary } from '@/stores/cabinet'
 // ── Types ─────────────────────────────────────────────────────────────
 
 type Metric = 'orders' | 'revenue' | 'marginal_profit'
-type Tab = 'plan' | 'fact' | 'kpi'
+type Tab = 'plan' | 'fact' | 'kpi' | 'game'
 type Step = 1 | 2 | 3
 
 const METRIC_LABELS: Record<Metric, string> = {
@@ -99,6 +99,18 @@ interface BridgeResp {
   delta: number
   items: BridgeItem[]
   check_delta: number
+}
+
+interface DailyFactDay {
+  date: string
+  plan: number
+  fact: number
+  green: boolean
+}
+
+interface DailyFactResp {
+  days: DailyFactDay[]
+  streak: number
 }
 
 interface TeamMember {
@@ -632,6 +644,98 @@ function BridgeWaterfall({ bridge }: { bridge: BridgeResp }) {
   )
 }
 
+// ── Gauge (спидометр) ────────────────────────────────────────────────
+
+const GAUGE_MAX = 150 // % — правый край шкалы
+const CX = 150, CY = 150, R_OUTER = 125, R_INNER = 82
+
+function pctToAngle(pct: number): number {
+  // 0% → 180° (левый), GAUGE_MAX% → 0° (правый), по верхней дуге
+  return 180 - (Math.min(pct, GAUGE_MAX) / GAUGE_MAX) * 180
+}
+
+function polar(cx: number, cy: number, r: number, angleDeg: number) {
+  const rad = (angleDeg * Math.PI) / 180
+  return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) }
+}
+
+function arcPath(a1: number, a2: number): string {
+  // Сегмент «пончика» от угла a1 до a2 (a1 > a2)
+  const large = a1 - a2 > 180 ? 1 : 0
+  const o1 = polar(CX, CY, R_OUTER, a1)
+  const o2 = polar(CX, CY, R_OUTER, a2)
+  const i1 = polar(CX, CY, R_INNER, a1)
+  const i2 = polar(CX, CY, R_INNER, a2)
+  return [
+    `M ${o1.x.toFixed(2)} ${o1.y.toFixed(2)}`,
+    `A ${R_OUTER} ${R_OUTER} 0 ${large} 0 ${o2.x.toFixed(2)} ${o2.y.toFixed(2)}`,
+    `L ${i2.x.toFixed(2)} ${i2.y.toFixed(2)}`,
+    `A ${R_INNER} ${R_INNER} 0 ${large} 1 ${i1.x.toFixed(2)} ${i1.y.toFixed(2)}`,
+    'Z',
+  ].join(' ')
+}
+
+const GAUGE_ZONES = [
+  { from: 0,   to: 80,       color: '#f87171' }, // красная
+  { from: 80,  to: 100,      color: '#fbbf24' }, // жёлтая
+  { from: 100, to: 120,      color: '#34d399' }, // зелёная
+  { from: 120, to: GAUGE_MAX, color: '#60a5fa' }, // синяя
+]
+
+function GaugeChart({ pct }: { pct: number }) {
+  const status =
+    pct < 80  ? { label: 'Прокол',    color: '#f87171' } :
+    pct < 100 ? { label: 'Разгон',    color: '#fbbf24' } :
+    pct < 120 ? { label: 'В цель',    color: '#34d399' } :
+                { label: 'Газ в пол', color: '#60a5fa' }
+
+  const needleAngle = pctToAngle(pct)
+  const needleTip = polar(CX, CY, R_OUTER - 8, needleAngle)
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <svg viewBox="0 0 300 160" className="w-full max-w-[300px]">
+        {GAUGE_ZONES.map((z) => (
+          <path
+            key={z.from}
+            d={arcPath(pctToAngle(z.from), pctToAngle(z.to))}
+            fill={z.color}
+            fillOpacity={0.85}
+          />
+        ))}
+        {/* Zone labels */}
+        {[
+          { pct: 40,  label: '0%' },
+          { pct: 90,  label: '80%' },
+          { pct: 110, label: '100%' },
+          { pct: 135, label: '120%' },
+        ].map(({ pct: p, label }) => {
+          const pt = polar(CX, CY, R_OUTER + 12, pctToAngle(p))
+          return (
+            <text key={label} x={pt.x} y={pt.y} textAnchor="middle" fontSize="9"
+              fill="#9ca3af" dominantBaseline="middle">{label}</text>
+          )
+        })}
+        {/* Needle */}
+        <line
+          x1={CX} y1={CY}
+          x2={needleTip.x.toFixed(2)} y2={needleTip.y.toFixed(2)}
+          stroke="#1f2937" strokeWidth="3" strokeLinecap="round"
+        />
+        <circle cx={CX} cy={CY} r="6" fill="#1f2937" />
+      </svg>
+      <div className="text-center -mt-2">
+        <div className="text-4xl font-bold tabular-nums" style={{ color: status.color }}>
+          {pct.toFixed(1)}%
+        </div>
+        <div className="text-sm font-medium mt-1" style={{ color: status.color }}>
+          {status.label}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main ──────────────────────────────────────────────────────────────
 
 export function PlanVsFact() {
@@ -657,6 +761,9 @@ export function PlanVsFact() {
   // KPI modal
   const [kpiModalOpen, setKpiModalOpen] = useState(false)
 
+  // Game mode
+  const [sliderPace, setSliderPace] = useState<number | null>(null)
+
   const qc = useQueryClient()
 
   // Cabinets
@@ -666,11 +773,11 @@ export function PlanVsFact() {
     staleTime: 60_000,
   })
 
-  // Plan list (for Fact + KPI tabs)
+  // Plan list (for Fact + KPI + Game tabs)
   const { data: planList = [] } = useQuery<PlanListItem[]>({
     queryKey: ['plan-sales-list'],
     queryFn: async () => (await api.get('/plan/sales')).data,
-    enabled: tab === 'fact' || tab === 'kpi',
+    enabled: tab === 'fact' || tab === 'kpi' || tab === 'game',
   })
 
   const activePlanId = savedPlanId ?? planList[0]?.id ?? null
@@ -687,21 +794,21 @@ export function PlanVsFact() {
   const { data: kpiList = [], refetch: refetchKpi } = useQuery<KpiItem[]>({
     queryKey: ['plan-kpi', activePlanId],
     queryFn: async () => (await api.get(`/plan/sales/${activePlanId}/kpi`)).data,
-    enabled: tab === 'kpi' && !!activePlanId,
+    enabled: (tab === 'kpi' || tab === 'game') && !!activePlanId,
   })
 
   // Fact data — с планом (если план есть)
   const { data: planFact, isLoading: planFactLoading } = useQuery<FactResp>({
     queryKey: ['plan-fact', activePlanId],
     queryFn: async () => (await api.get(`/plan/sales/${activePlanId}/fact`)).data,
-    enabled: tab === 'fact' && !!activePlanId,
+    enabled: (tab === 'fact' || tab === 'game') && !!activePlanId,
   })
 
   // Fact data — без плана: MTD текущего месяца
   const { data: currentFact, isLoading: currentFactLoading } = useQuery<FactResp>({
     queryKey: ['current-fact'],
     queryFn: async () => (await api.get('/plan/sales/current-fact')).data,
-    enabled: tab === 'fact' && !activePlanId,
+    enabled: (tab === 'fact' || tab === 'game') && !activePlanId,
   })
 
   const fact = planFact ?? currentFact
@@ -712,6 +819,13 @@ export function PlanVsFact() {
     queryKey: ['plan-bridge', activePlanId],
     queryFn: async () => (await api.get(`/plan/sales/${activePlanId}/bridge`)).data,
     enabled: tab === 'fact' && !!activePlanId,
+  })
+
+  // Daily fact (game tab)
+  const { data: dailyFact } = useQuery<DailyFactResp>({
+    queryKey: ['plan-daily-fact', activePlanId],
+    queryFn: async () => (await api.get(`/plan/sales/${activePlanId}/daily-fact`)).data,
+    enabled: tab === 'game' && !!activePlanId,
   })
 
   // Forecast
@@ -867,8 +981,8 @@ export function PlanVsFact() {
       </div>
 
       {/* Tab switcher */}
-      <div className="flex gap-2">
-        {(['plan', 'fact', 'kpi'] as const).map((t) => (
+      <div className="flex gap-2 flex-wrap">
+        {(['plan', 'fact', 'kpi', 'game'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -879,7 +993,10 @@ export function PlanVsFact() {
                 : 'border-border-subtle text-fg-muted hover:bg-bg-subtle hover:text-fg',
             )}
           >
-            {t === 'plan' ? 'Постановка плана' : t === 'fact' ? 'Факт' : 'KPI команды'}
+            {t === 'plan' ? 'Постановка плана' :
+             t === 'fact' ? 'Факт' :
+             t === 'kpi'  ? 'KPI команды' :
+                            'Игровой режим'}
           </button>
         ))}
       </div>
@@ -1460,6 +1577,244 @@ export function PlanVsFact() {
           )}
         </>
       )}
+
+      {/* ═══ GAME TAB ═══ */}
+      {tab === 'game' && (() => {
+        if (!activePlanId) {
+          return (
+            <Card className="py-14 flex flex-col items-center gap-3 text-fg-muted">
+              <Target className="w-8 h-8 text-fg-subtle" />
+              <p className="text-sm">Сначала поставьте план</p>
+              <Button size="sm" variant="ghost" onClick={() => setTab('plan')}>
+                Перейти к постановке плана →
+              </Button>
+            </Card>
+          )
+        }
+
+        // Берём первую метрику с планом (или первую вообще)
+        const primaryRow = fact?.rows.find((r) => r.pct != null) ?? fact?.rows[0] ?? null
+        const gaugePct = primaryRow?.pct ?? 0
+        const factVal = primaryRow?.fact ?? 0
+        const planVal = primaryRow?.plan ?? 0
+        const daysPassed = fact?.days_passed ?? 0
+        const totalDays = fact?.total_days ?? 1
+        const remainingDays = Math.max(totalDays - daysPassed, 0)
+
+        // Текущий темп в день
+        const currentPace = daysPassed > 0 ? factVal / daysPassed : 0
+        const sliderMax = Math.max(Math.round(currentPace * 2), 1)
+        const pace = sliderPace ?? Math.round(currentPace)
+
+        // Прогноз по слайдеру
+        const projectedTotal = factVal + pace * remainingDays
+
+        // Нужный темп для выполнения плана
+        const neededPace = remainingDays > 0 && planVal > factVal
+          ? Math.ceil((planVal - factVal) / remainingDays)
+          : null
+
+        // Прогресс-бар: факт к плану
+        const progressPct = planVal > 0 ? Math.min((factVal / planVal) * 100, 100) : 0
+
+        // Рейтинг из KPI
+        const ratingData = [...kpiList]
+          .filter((k) => k.pct != null)
+          .sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0))
+
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+            {/* БЛОК 1 — Спидометр */}
+            <Card className="p-5 flex flex-col gap-4">
+              <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+                Выполнение к темпу
+              </p>
+              {primaryRow ? (
+                <GaugeChart pct={gaugePct} />
+              ) : (
+                <p className="text-sm text-fg-muted text-center py-8">Нет данных</p>
+              )}
+            </Card>
+
+            {/* БЛОК 2 — Темп-слайдер */}
+            <Card className="p-5 flex flex-col gap-4">
+              <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+                Симулятор темпа
+              </p>
+              {primaryRow ? (
+                <>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-fg-muted">
+                        {isMoney(primaryRow.metric) ? 'Выручка/день' : 'Шт/день'}
+                      </span>
+                      <span className="font-semibold tabular-nums text-fg">
+                        {isMoney(primaryRow.metric) ? formatCurrency(pace) : formatNumber(pace)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={sliderMax}
+                      step={isMoney(primaryRow.metric) ? 1000 : 1}
+                      value={pace}
+                      onChange={(e) => setSliderPace(Number(e.target.value))}
+                      className="w-full accent-fg"
+                    />
+                    <div className="flex justify-between text-[10px] text-fg-muted">
+                      <span>0</span>
+                      <span>{isMoney(primaryRow.metric) ? formatCurrency(currentPace) : formatNumber(currentPace)} текущий</span>
+                      <span>{isMoney(primaryRow.metric) ? formatCurrency(sliderMax) : formatNumber(sliderMax)}</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-bg-subtle rounded-md px-4 py-3 space-y-1.5 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-fg-muted">Прогноз на конец периода</span>
+                      <span className="font-semibold tabular-nums">
+                        {isMoney(primaryRow.metric) ? formatCurrency(projectedTotal) : formatNumber(Math.round(projectedTotal))}
+                      </span>
+                    </div>
+                    {planVal > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-fg-muted">% от плана</span>
+                        <span className={cn(
+                          'font-semibold tabular-nums',
+                          projectedTotal >= planVal ? 'text-emerald-700' : 'text-amber-600',
+                        )}>
+                          {((projectedTotal / planVal) * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    )}
+                    {neededPace != null && (
+                      <div className="flex justify-between border-t border-border-subtle pt-1.5 mt-1.5">
+                        <span className="text-fg-muted">
+                          Нужно {isMoney(primaryRow.metric) ? '₽/день' : 'шт/день'} для плана
+                        </span>
+                        <span className="font-semibold tabular-nums text-blue-600">
+                          {isMoney(primaryRow.metric) ? formatCurrency(neededPace) : formatNumber(neededPace)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-fg-muted text-center py-8">Нет данных</p>
+              )}
+            </Card>
+
+            {/* БЛОК 3 — Прогресс и серия */}
+            <Card className="p-5 flex flex-col gap-4">
+              <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+                Прогресс месяца
+              </p>
+              {primaryRow ? (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-fg-muted">
+                        Факт: {isMoney(primaryRow.metric) ? formatCurrency(factVal) : formatNumber(Math.round(factVal))}
+                      </span>
+                      <span className="text-fg-muted">
+                        План: {planVal > 0 ? (isMoney(primaryRow.metric) ? formatCurrency(planVal) : formatNumber(Math.round(planVal))) : '—'}
+                      </span>
+                    </div>
+                    <div className="w-full h-4 bg-bg-subtle rounded-full overflow-hidden">
+                      <div
+                        className={cn(
+                          'h-full rounded-full transition-all',
+                          progressPct >= 100 ? 'bg-emerald-500' :
+                          progressPct >= 80  ? 'bg-amber-400' : 'bg-rose-400',
+                        )}
+                        style={{ width: `${progressPct}%` }}
+                      />
+                    </div>
+                    <div className="text-xs text-fg-muted text-right">
+                      {progressPct.toFixed(1)}% выполнено
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-sm border-t border-border-subtle pt-3">
+                    <span className="text-fg-muted">
+                      День {daysPassed} из {totalDays}
+                    </span>
+                    <span className="text-fg-muted">
+                      Осталось {remainingDays} дн.
+                    </span>
+                  </div>
+
+                  {dailyFact && (
+                    <div className={cn(
+                      'flex items-center gap-3 rounded-md px-4 py-3',
+                      dailyFact.streak > 0 ? 'bg-emerald-50 border border-emerald-200' : 'bg-bg-subtle',
+                    )}>
+                      <span className="text-2xl">
+                        {dailyFact.streak > 0 ? '🔥' : '❄️'}
+                      </span>
+                      <div>
+                        <p className="text-sm font-medium text-fg">
+                          Серия: {dailyFact.streak} {dailyFact.streak === 1 ? 'день' : dailyFact.streak < 5 ? 'дня' : 'дней'} в зелёной зоне
+                        </p>
+                        <p className="text-xs text-fg-muted">
+                          Дней в зелёной: {dailyFact.days.filter((d) => d.green).length} из {dailyFact.days.length}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-fg-muted text-center py-8">Нет данных</p>
+              )}
+            </Card>
+
+            {/* БЛОК 4 — Рейтинг KPI */}
+            <Card className="p-5 flex flex-col gap-4">
+              <p className="text-[11px] font-medium text-fg-muted uppercase tracking-wider">
+                Рейтинг команды
+              </p>
+              {ratingData.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 py-8 text-fg-muted">
+                  <p className="text-sm">KPI не назначены</p>
+                  <Button size="sm" variant="ghost" onClick={() => setTab('kpi')}>
+                    Назначить KPI →
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {ratingData.map((k, i) => {
+                    const barColor =
+                      (k.pct ?? 0) >= 100 ? '#10b981' :
+                      (k.pct ?? 0) >= 80  ? '#f59e0b' : '#ef4444'
+                    const barPct = Math.min(k.pct ?? 0, 150)
+                    const name = k.manager_name ?? KPI_METRIC_LABEL[k.metric_code] ?? k.metric_code
+                    return (
+                      <div key={k.id} className="flex items-center gap-3">
+                        <span className="text-xs font-bold text-fg-muted w-5 text-right shrink-0">
+                          {i + 1}.
+                        </span>
+                        <span className="text-sm text-fg min-w-0 truncate w-28">{name}</span>
+                        <div className="flex-1 h-5 bg-bg-subtle rounded overflow-hidden relative">
+                          <div
+                            className="h-full rounded transition-all"
+                            style={{ width: `${(barPct / 150) * 100}%`, background: barColor }}
+                          />
+                          {k.pct != null && (
+                            <span className="absolute right-2 top-0 h-full flex items-center text-[10px] font-medium text-fg">
+                              {k.pct.toFixed(1)}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </Card>
+
+          </div>
+        )
+      })()}
     </div>
   )
 }

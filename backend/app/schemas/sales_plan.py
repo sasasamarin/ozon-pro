@@ -222,6 +222,20 @@ class FactVsPlanRow(BaseModel):
     rows: list[FactRowOut]
 
 
+# ── Дневной факт (для игрового режима) ───────────────────────────────────────
+
+class DailyFactDay(BaseModel):
+    date: str
+    plan: float
+    fact: float
+    green: bool  # fact >= plan
+
+
+class DailyFactResponse(BaseModel):
+    days: list[DailyFactDay]
+    streak: int  # текущая серия зелёных дней подряд (с конца)
+
+
 # ── Bridge waterfall ──────────────────────────────────────────────────────────
 
 class BridgeItem(BaseModel):
