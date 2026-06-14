@@ -22,7 +22,7 @@
 
 **3 сквозных принципа (project_flowoi_principles):**
 1. **Зеркало Ozon.** Что Ozon показывает в своём UI — мы повторяем точь-в-точь. Никаких «наших расчётов» которые расходятся с эталоном. Расхождение = баг.
-2. **2 модели финансов.** `seller_revenue` (= `accruals_for_sale` — что Ozon начислил продавцу, с компенсацией СПП) vs `buyer_revenue` (= `Order.total_amount` — что физически платил покупатель). Эти ДВЕ цифры разные и обе важны. P&L и маржа считаются от `seller_revenue`. customer_price (per posting) — отдельный витринный слой про спрос.
+2. **2 модели финансов.** `seller_revenue` (= `accruals_for_sale` — что Ozon начислил продавцу, с компенсацией СПП) vs `ordered_value` (= `Order.total_amount` = Σ `OrderItem.price × qty` — «Заказано» по **цене продавца**, до СПП). Эти ДВЕ цифры разные и обе важны. P&L и маржа считаются от `seller_revenue`. Что **физически заплатил покупатель** (после СПП) — это `customer_price` (per posting, из `/v2/posting/fbo/get`), отдельный витринный слой про спрос. ВАЖНО: `total_amount` — это цена ПРОДАВЦА, НЕ цена покупателя (подтверждено в `sync_orders._sum_amount`).
 3. **Описание у каждой метрики.** В UI рядом с числом — источник и формула (api/xlsx/estimated/manual/missing).
 
 **Ключевые сценарии уже отработаны:**
@@ -357,7 +357,7 @@ GET    /api/v1/supply-params
 
 Принципы продукта:
 - Зеркало Ozon: что показывает Ozon UI — мы повторяем точно. Расхождение = баг.
-- 2 модели финансов: seller_revenue (= accruals_for_sale) vs buyer_revenue (= Order.total_amount).
+- 2 модели финансов: seller_revenue (= accruals_for_sale) vs ordered_value (= Order.total_amount, цена продавца). Цена покупателя после СПП = customer_price.
 - Описание у каждой метрики: рядом с числом — формула и источник.
 
 Перед написанием парсера API:
