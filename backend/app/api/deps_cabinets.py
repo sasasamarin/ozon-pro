@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import OzonAccount, User
+from app.services.cabinet_access import intersect_cabinets
 from app.models.team import (
     CompanyMember,
     MemberAccountAccess,
@@ -96,10 +97,7 @@ async def filter_requested_cabinet_ids(
 ) -> list[uuid.UUID]:
     """Пересечь запрошенный список с доступным. None = все доступные."""
     visible = await get_visible_cabinet_ids(db, user)
-    if not requested:
-        return visible
-    visible_set = set(visible)
-    return [c for c in requested if c in visible_set]
+    return intersect_cabinets(requested, visible)
 
 
 async def verify_cabinet_access(
