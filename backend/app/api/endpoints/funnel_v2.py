@@ -34,7 +34,7 @@ class FunnelKPI(BaseModel):
     Терминология (соответствует Ozon admin → Аналитика → Воронка продаж):
       1. impressions       = Показы всего (search + pdp)
       2. impressions_search= Показы в поиске и каталоге
-      3. card_visits       = Посещения карточки товара (session_view_pdp)
+      3. card_visits       = Посещения карточки товара (hits_view_pdp)
       4. to_cart           = Добавления в корзину
       5. orders            = Заказано
       6. delivered         = Выкуплено
@@ -42,7 +42,7 @@ class FunnelKPI(BaseModel):
     """
     impressions: int
     impressions_search: int
-    card_visits: int           # = session_view_pdp; раньше было ошибочно «clicks»
+    card_visits: int           # = hits_view_pdp; раньше было ошибочно «clicks»
     to_cart: int
     orders: int
     delivered: int
@@ -231,9 +231,9 @@ async def _aggregate(
         )), 0).label("imp"),
         # Показы в поиске и каталоге (для конверсии «поиск→карточка»)
         func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp_search"),
-        # Посещения карточки = session_view_pdp (как в кабинете Ozon).
+        # Посещения карточки = hits_view_pdp (проверено: совпадает с Ozon 'Посещения карточки товара' с точностью 0.3%, session_view_pdp давал занижение на 40%).
         # Раньше считалось как "клики" + session_view_search, давало CTR 86%.
-        func.coalesce(func.sum(AnalyticsDaily.session_view_pdp), 0).label("card_visits"),
+        func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("card_visits"),
         func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
         func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
         func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
@@ -446,9 +446,9 @@ async def get_funnel_daily(
             )), 0).label("imp_total"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp_s"),
             func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("imp_p"),
-            # «Посещения карточки» = session_view_pdp (как в кабинете Ozon).
+            # «Посещения карточки» = hits_view_pdp (проверено: совпадает с Ozon 'Посещения карточки товара' с точностью 0.3%, session_view_pdp давал занижение на 40%).
             # Раньше было session_view_search+pdp — давало CTR 86%, юзер: «абсурд».
-            func.coalesce(func.sum(AnalyticsDaily.session_view_pdp), 0).label("clicks"),
+            func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("clicks"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search), 0).label("cart_s"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart_p"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
