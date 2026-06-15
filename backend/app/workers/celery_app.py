@@ -134,6 +134,11 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.sync_marketplace.sync_all_realization",
         "schedule": crontab(hour=6, minute=0),  # после ad-statistics
     },
+    "sync-realization-by-day": {
+        "task": "sync_realization_daily",
+        "schedule": crontab(hour=7, minute=0),  # раз в день, после sync-realization-daily (которая в 6:00)
+        "kwargs": {"days_back": 5},
+    },
     "sync-financing-daily": {
         # Перенос операций EarlyPaymentAccrual + FlexiblePaymentSchedule
         # из transactions → ozon_financing + movements. Бежим после sync_transactions.
