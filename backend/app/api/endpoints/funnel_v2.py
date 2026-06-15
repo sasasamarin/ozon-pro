@@ -230,7 +230,8 @@ async def _aggregate(
         # Добавления в корзину = hits_tocart_pdp (проверено: совпадает с Ozon 'Добавления из карточки в корзину' с точностью 0.03%, сумма search+pdp давала +14.8%).
         func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
         func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
-        func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
+        # Выкуплено = ordered_units − cancellations (проверено: расхождение с Ozon 'Выкуплено' 0.5%, delivered_units давал +14.1%).
+        func.coalesce(func.sum(AnalyticsDaily.ordered_units - AnalyticsDaily.cancellations), 0).label("deliv"),
         func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
     ).select_from(AnalyticsDaily).join(Product, Product.id == AnalyticsDaily.product_id).where(*where)
     return (await db.execute(q)).one()
@@ -434,7 +435,8 @@ async def get_funnel_daily(
             # Добавления в корзину = hits_tocart_pdp (проверено: совпадает с Ozon 'Добавления из карточки в корзину' с точностью 0.03%, сумма search+pdp давала +14.8%).
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
-            func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
+            # Выкуплено = ordered_units − cancellations (проверено: расхождение с Ozon 'Выкуплено' 0.5%, delivered_units давал +14.1%).
+            func.coalesce(func.sum(AnalyticsDaily.ordered_units - AnalyticsDaily.cancellations), 0).label("deliv"),
             func.coalesce(func.sum(AnalyticsDaily.returns), 0).label("returns_"),
             func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
         )
@@ -561,7 +563,8 @@ async def best_worst_days(
             # Добавления в корзину = hits_tocart_pdp (проверено: совпадает с Ozon 'Добавления из карточки в корзину' с точностью 0.03%, сумма search+pdp давала +14.8%).
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
-            func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
+            # Выкуплено = ordered_units − cancellations (проверено: расхождение с Ozon 'Выкуплено' 0.5%, delivered_units давал +14.1%).
+            func.coalesce(func.sum(AnalyticsDaily.ordered_units - AnalyticsDaily.cancellations), 0).label("deliv"),
             func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
         )
         .select_from(AnalyticsDaily)
