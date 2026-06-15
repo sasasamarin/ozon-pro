@@ -234,7 +234,8 @@ async def _aggregate(
         # Посещения карточки = hits_view_pdp (проверено: совпадает с Ozon 'Посещения карточки товара' с точностью 0.3%, session_view_pdp давал занижение на 40%).
         # Раньше считалось как "клики" + session_view_search, давало CTR 86%.
         func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("card_visits"),
-        func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
+        # Добавления в корзину = hits_tocart_pdp (проверено: совпадает с Ozon 'Добавления из карточки в корзину' с точностью 0.03%, сумма search+pdp давала +14.8%).
+        func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
         func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
         func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
         func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
@@ -449,8 +450,8 @@ async def get_funnel_daily(
             # «Посещения карточки» = hits_view_pdp (проверено: совпадает с Ozon 'Посещения карточки товара' с точностью 0.3%, session_view_pdp давал занижение на 40%).
             # Раньше было session_view_search+pdp — давало CTR 86%, юзер: «абсурд».
             func.coalesce(func.sum(AnalyticsDaily.hits_view_pdp), 0).label("clicks"),
-            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search), 0).label("cart_s"),
-            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart_p"),
+            # Добавления в корзину = hits_tocart_pdp (проверено: совпадает с Ozon 'Добавления из карточки в корзину' с точностью 0.03%, сумма search+pdp давала +14.8%).
+            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
             func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
             func.coalesce(func.sum(AnalyticsDaily.returns), 0).label("returns_"),
@@ -506,9 +507,7 @@ async def get_funnel_daily(
         imp_p = int(r.imp_p or 0)
         imp = int(r.imp_total or 0)  # «Показы всего» = hits_view (Ozon UI), не search+pdp
         clicks = int(r.clicks or 0)
-        cart_s = int(r.cart_s or 0)
-        cart_p = int(r.cart_p or 0)
-        cart = cart_s + cart_p
+        cart = int(r.cart or 0)
         orders = int(r.orders or 0)
         deliv = int(r.deliv or 0)
         avg_cust, avg_sell = price_map.get(r.d, (None, None))
@@ -519,8 +518,8 @@ async def get_funnel_daily(
             impressions_pdp=imp_p,
             clicks=clicks,
             to_cart=cart,
-            to_cart_search=cart_s,
-            to_cart_pdp=cart_p,
+            to_cart_search=0,
+            to_cart_pdp=cart,
             orders=orders,
             delivered=deliv,
             ad_spend=ad_spend_by_day.get(r.d),
@@ -584,7 +583,8 @@ async def best_worst_days(
                 AnalyticsDaily.hits_view,
                 AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
             )), 0).label("imp"),
-            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
+            # Добавления в корзину = hits_tocart_pdp (проверено: совпадает с Ozon 'Добавления из карточки в корзину' с точностью 0.03%, сумма search+pdp давала +14.8%).
+            func.coalesce(func.sum(AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
             func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),
             func.coalesce(func.sum(AnalyticsDaily.revenue), 0).label("revenue"),
