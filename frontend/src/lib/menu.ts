@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard,
   BarChart3,
+  Megaphone,
   Target,
   Filter,
   FlagTriangleRight,
@@ -101,6 +102,11 @@ export const NAV_GROUPS: NavGroup[] = [
             'Быстрые drill-downs: клик по магазину → детали',
           ],
         },
+      },
+      {
+        path: '/analytics/ads',
+        label: 'Реклама (ДРР)',
+        icon: Megaphone,
       },
       {
         path: '/analytics/reverse-funnel',

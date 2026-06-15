@@ -27,6 +27,7 @@ import { Returns } from '@/pages/Returns'
 import { StockoutsByRegion } from '@/pages/StockoutsByRegion'
 import { ProductDetail } from '@/pages/ProductDetail'
 import { Summary } from '@/pages/Summary'
+import { AdsCampaigns } from '@/pages/AdsCampaigns'
 import { Categories } from '@/pages/Categories'
 import { Calculator } from '@/pages/Calculator'
 import { Heatmap } from '@/pages/Heatmap'
@@ -113,6 +114,7 @@ export default function App() {
         <Route path="/returns" element={<Returns />} />
         <Route path="/analytics/stockouts-by-region" element={<StockoutsByRegion />} />
         <Route path="/analytics/summary" element={<Summary />} />
+        <Route path="/analytics/ads" element={<AdsCampaigns />} />
         <Route path="/analytics/heatmap" element={<Heatmap />} />
         <Route path="/products/categories" element={<Categories />} />
         <Route path="/products/calculator" element={<Calculator />} />
