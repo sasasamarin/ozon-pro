@@ -129,6 +129,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.sync_ads.sync_all_ad_statistics",
         "schedule": crontab(hour=5, minute=0),
     },
+    # Per-SKU «Оплата за клик» за вчера → ad_product_daily. Метод products/sku
+    # отдаёт только сегодня/вчера, копим ежедневно. 5:30 UTC = 8:30 МСК (вчера
+    # финализировано после 3:00 МСК).
+    "sync-ad-product-sku-daily": {
+        "task": "app.workers.tasks.sync_ads.sync_all_ad_product_sku",
+        "schedule": crontab(hour=5, minute=30),
+    },
 
     # === НОВЫЕ ТАСКИ (Phase 2 → A) ===
     "sync-warehouse-stocks-daily": {

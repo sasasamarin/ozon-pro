@@ -10,6 +10,7 @@ from app.models.ad import (  # noqa: F401
     AdCampaignProduct,
     AdCampaignState,
     AdCampaignType,
+    AdProductDaily,
     AdStatistics,
 )
 from app.models.company import Company, Role, RoleName, User  # noqa: F401
@@ -164,6 +165,7 @@ __all__ = [
     "AdCampaignProduct",
     "AdCampaignType",
     "AdCampaignState",
+    "AdProductDaily",
     "AdStatistics",
     # Phase 2 — себестоимость
     "Supplier",

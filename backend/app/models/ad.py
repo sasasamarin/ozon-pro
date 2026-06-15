@@ -185,3 +185,64 @@ class AdStatistics(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow, nullable=False
     )
+
+
+class AdProductDaily(Base):
+    """
+    Per-SKU статистика рекламы «Оплата за клик» по дням.
+
+    ОТДЕЛЬНАЯ от ad_statistics таблица намеренно: ad_statistics хранит
+    campaign-level агрегаты (product_id=NIL), и смешивание per-SKU строк туда
+    задвоило бы расход в безфильтровых суммах (funnel). Здесь — чистый per-SKU
+    срез из Performance API POST /api/client/statistics/products/sku.
+
+    Метод отдаёт только сегодня/вчера → копим ежедневно (sync за вчера по МСК).
+    product_id мапится через мост order_items.ozon_sku → product_id (может быть
+    NULL, если sku ещё не встречался в заказах).
+    """
+
+    __tablename__ = "ad_product_daily"
+    __table_args__ = (
+        Index("ix_ad_product_daily_account_date", "ozon_account_id", "date"),
+        Index("ix_ad_product_daily_product", "product_id"),
+    )
+
+    date: Mapped[date] = mapped_column(Date, primary_key=True, nullable=False)
+    ozon_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ozon_accounts.id", ondelete="CASCADE"),
+        primary_key=True, nullable=False,
+    )
+    ozon_campaign_id: Mapped[str] = mapped_column(
+        String(50), primary_key=True, nullable=False
+    )
+    sku: Mapped[str] = mapped_column(String(50), primary_key=True, nullable=False)
+
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("products.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    # Метрики per-SKU за день
+    price: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    views: Mapped[int] = mapped_column(BigInteger, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    to_cart: Mapped[int] = mapped_column(Integer, default=0)
+    avg_cpc: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    spend: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    orders: Mapped[int] = mapped_column(Integer, default=0)
+    sales: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    model_orders: Mapped[int] = mapped_column(Integer, default=0)
+    model_sales: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    ctr: Mapped[float | None] = mapped_column(Numeric(7, 4), nullable=True)
+    drr: Mapped[float | None] = mapped_column(Numeric(7, 4), nullable=True)
+
+    raw_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow,
+        nullable=False,
+    )

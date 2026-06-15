@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import log
-from app.models import AdCampaign, AdStatistics, OzonAccount
+from app.models import AdCampaign, AdProductDaily, AdStatistics, OzonAccount
 from app.services.ozon_client import OzonAPIError
 from app.services.ozon_perf_client import (
     OzonPerformanceClient,
@@ -464,3 +464,121 @@ def _to_int(value) -> int:
         return int(float(_to_float(value)))
     except (TypeError, ValueError):
         return 0
+
+
+# =====================================================================
+# Per-SKU реклама «Оплата за клик» → ad_product_daily (исторический срез)
+# =====================================================================
+
+
+@celery_app.task(name="app.workers.tasks.sync_ads.sync_all_ad_product_sku")
+def sync_all_ad_product_sku(account_id: str | None = None) -> dict:
+    """Per-SKU статистика «Оплата за клик» за ВЧЕРА → ad_product_daily.
+
+    Метод Ozon products/sku отдаёт только сегодня/вчера → копим ежедневно за
+    вчера (по МСК, данные уже финализированы). Пишем в отдельную таблицу, чтобы
+    не двоить расход в ad_statistics.
+    """
+    return run_celery_async(_sync_all_ad_product_sku_async, account_id)
+
+
+async def _sync_all_ad_product_sku_async(SessionLocal, account_id: str | None = None) -> dict:
+    async with SessionLocal() as db:
+        if account_id:
+            acc = (await db.execute(
+                select(OzonAccount).where(
+                    OzonAccount.id == uuid.UUID(account_id),
+                    OzonAccount.deleted_at.is_(None),
+                )
+            )).scalar_one_or_none()
+            accounts = [acc] if acc else []
+        else:
+            accounts = await get_active_accounts(db)
+
+    eligible = [a for a in accounts if a.perf_client_id_encrypted]
+    results = await asyncio.gather(
+        *[_sync_ad_product_sku_for_account(SessionLocal, a.id) for a in eligible],
+        return_exceptions=True,
+    )
+    success = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "success")
+    return {"total": len(eligible), "success": success, "failed": len(results) - success}
+
+
+async def _sync_ad_product_sku_for_account(
+    SessionLocal: async_sessionmaker[AsyncSession], account_id: uuid.UUID,
+) -> dict:
+    from sqlalchemy import func, text
+
+    # Вчера по МСК — данные за этот день финализированы (фиксация в 3:00 мск).
+    day = (datetime.now(UTC) + timedelta(hours=3)).date() - timedelta(days=1)
+
+    async with SessionLocal() as db:
+        account = (await db.execute(
+            select(OzonAccount).where(OzonAccount.id == account_id)
+        )).scalar_one_or_none()
+        if not account:
+            return {"status": "failed", "error": "account_not_found"}
+
+        # Мост рекламный sku -> product_id через order_items.ozon_sku.
+        bridge = (await db.execute(text("""
+            SELECT DISTINCT oi.ozon_sku, oi.product_id
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            WHERE o.ozon_account_id = :acc
+              AND oi.product_id IS NOT NULL AND oi.ozon_sku IS NOT NULL
+        """), {"acc": str(account_id)})).all()
+        sku_to_pid = {str(b.ozon_sku): b.product_id for b in bridge}
+
+        try:
+            async with track_sync_log(db, account.id, "sync_ad_product_sku") as stats:
+                async with OzonPerformanceClient(account, db) as client:
+                    campaigns = await client.get_campaigns()
+                    cpc_ids = [
+                        c.get("id") for c in campaigns
+                        if c.get("state") == "CAMPAIGN_STATE_RUNNING"
+                        and c.get("advObjectType") == "SKU"
+                    ]
+                    raw = await client.get_product_sku_stats(
+                        campaign_ids=cpc_ids,
+                        date_from=day.isoformat(), date_to=day.isoformat(),
+                    )
+
+                rows = []
+                for p in raw:
+                    sku = p.get("sku")
+                    if not sku:
+                        continue
+                    rows.append({
+                        "date": day,
+                        "ozon_account_id": account_id,
+                        "ozon_campaign_id": p.get("ozon_campaign_id") or "",
+                        "sku": str(sku),
+                        "product_id": sku_to_pid.get(str(sku)),
+                        "price": p["price"], "views": p["views"], "clicks": p["clicks"],
+                        "to_cart": p["to_cart"], "avg_cpc": p["avg_cpc"],
+                        "spend": p["expense"], "orders": p["orders"], "sales": p["sales"],
+                        "model_orders": p["model_orders"], "model_sales": p["model_sales"],
+                        "ctr": p["ctr"], "drr": p["drr"], "raw_data": p["raw_data"],
+                    })
+                    stats.processed += 1
+
+                if rows:
+                    stmt = pg_insert(AdProductDaily).values(rows)
+                    upd = {
+                        c: getattr(stmt.excluded, c) for c in (
+                            "product_id", "price", "views", "clicks", "to_cart",
+                            "avg_cpc", "spend", "orders", "sales", "model_orders",
+                            "model_sales", "ctr", "drr", "raw_data",
+                        )
+                    }
+                    upd["updated_at"] = func.now()
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["date", "ozon_account_id", "ozon_campaign_id", "sku"],
+                        set_=upd,
+                    )
+                    await db.execute(stmt)
+            await db.commit()
+            return {"status": "success", "rows": len(rows)}
+        except OzonAPIError as e:
+            await db.rollback()
+            return {"status": "failed", "error": str(e)}
