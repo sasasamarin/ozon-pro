@@ -649,8 +649,8 @@ export function Funnel() {
             )}
           </Card>
 
-          <FunnelInsights days={days} productIds={productIds}
-                          cabinetIds={selectedCabinetIds} />
+          <FunnelInsights days={days} dateFrom={dateFrom} dateTo={dateTo}
+                          productIds={productIds} cabinetIds={selectedCabinetIds} />
         </>
       )}
 
