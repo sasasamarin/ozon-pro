@@ -293,6 +293,25 @@ async def get_economics(
     """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
     rev_total_by_cab: dict[str, float] = {r.acc: float(r.rev or 0) for r in rev_cab_rows}
 
+    # ТОЧНЫЙ per-SKU ad_spend из ad_product_daily (Performance API products/sku).
+    # Покрывает только накопленные дни (метод Ozon отдаёт лишь сегодня/вчера).
+    exact_ad_rows = (await db.execute(text("""
+        SELECT product_id::text AS pid, SUM(spend)::float AS spend
+        FROM ad_product_daily
+        WHERE ozon_account_id = ANY(CAST(:accs AS uuid[]))
+          AND date >= :df AND date <= :dt AND product_id IS NOT NULL
+        GROUP BY product_id
+    """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
+    ad_exact_by_prod: dict[str, float] = {r.pid: float(r.spend or 0) for r in exact_ad_rows}
+    exact_cab_rows = (await db.execute(text("""
+        SELECT ozon_account_id::text AS acc, SUM(spend)::float AS spend
+        FROM ad_product_daily
+        WHERE ozon_account_id = ANY(CAST(:accs AS uuid[]))
+          AND date >= :df AND date <= :dt
+        GROUP BY ozon_account_id
+    """), {"accs": params["accs"], "df": date_from, "dt": date_to})).all()
+    ad_exact_total_by_cab: dict[str, float] = {r.acc: float(r.spend or 0) for r in exact_cab_rows}
+
     # ad_by_prod[product_id] = пропорциональное распределение
     ad_by_prod: dict[str, float] = {}  # будем считать ниже per-row
 
@@ -450,14 +469,25 @@ async def get_economics(
         log_calc = calc_logistics(qty=qty)
         log_total = log_calc.amount
         sources["logistics_total"] = "estimated"
-        # Реклама общая — пропорция от cabinet ad_spend × (revenue_product/revenue_cabinet)
-        # Пометка 'estimated' — это не точно per-SKU из API (Ozon Perf API такого не отдаёт),
-        # а распределение по доле выручки. XLSX перекроет точными числами если есть.
+        # Реклама = ТОЧНЫЙ per-SKU (ad_product_daily, Performance API) за покрытые
+        # дни + пропорциональное распределение ОСТАТКА (непокрытые дни/не-CPC
+        # кампании) по доле выручки. Остаток = cabinet ad_statistics − точное,
+        # чтобы не задвоить. XLSX перекроет точными числами если есть.
         cab_ad = ad_total_by_cab.get(r.account_id, 0.0)
+        cab_exact = ad_exact_total_by_cab.get(r.account_id, 0.0)
+        remainder = max(0.0, cab_ad - cab_exact)
         cab_rev = rev_total_by_cab.get(r.account_id, 0.0)
-        ad_total = (revenue / cab_rev * cab_ad) if cab_rev > 0 else 0.0
+        exact_prod = ad_exact_by_prod.get(r.product_id, 0.0)
+        prop_share = (revenue / cab_rev * remainder) if cab_rev > 0 else 0.0
+        ad_total = exact_prod + prop_share
         ad_per = ad_total / qty if qty else 0.0
-        sources["ad_spend_total"] = "estimated"
+        # 'api' если почти всё покрыто точным per-SKU; иначе 'estimated'; 'missing' если рекламы нет
+        if cab_ad <= 0:
+            sources["ad_spend_total"] = "missing"
+        elif remainder / cab_ad < 0.05:
+            sources["ad_spend_total"] = "api"
+        else:
+            sources["ad_spend_total"] = "estimated"
         # Поля только из XLSX — по умолчанию 0
         storage_total = 0.0
         last_mile_total = 0.0

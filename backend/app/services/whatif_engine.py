@@ -136,8 +136,8 @@ async def compute_betas(db: AsyncSession, *, product_id: uuid.UUID, days: int = 
     # Реклама
     rows = (await db.execute(text("""
         SELECT date, SUM(spend)::float spend,
-               SUM(impressions)::bigint imp, SUM(orders)::bigint ord
-        FROM ad_statistics WHERE product_id = :pid AND date >= :df
+               SUM(views)::bigint imp, SUM(orders)::bigint ord
+        FROM ad_product_daily WHERE product_id = :pid AND date >= :df
         GROUP BY date HAVING SUM(spend) > 0
     """), {"pid": str(product_id), "df": period_from})).all()
     ad_spend = [float(r.spend) for r in rows]

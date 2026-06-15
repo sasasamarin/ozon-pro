@@ -90,9 +90,9 @@ async def get_full_context(
 
     # ─── Реклама за период ───
     ad = (await db.execute(text("""
-        SELECT SUM(spend)::float spend, SUM(impressions)::bigint imp,
+        SELECT SUM(spend)::float spend, SUM(views)::bigint imp,
                SUM(clicks)::bigint clicks, SUM(orders)::bigint orders
-        FROM ad_statistics WHERE product_id = :pid AND date >= :df
+        FROM ad_product_daily WHERE product_id = :pid AND date >= :df
     """), {"pid": str(product_id), "df": date_from})).first()
     ad_spend = float(ad.spend or 0) if ad else 0.0
 
