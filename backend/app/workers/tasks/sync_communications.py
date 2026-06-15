@@ -320,7 +320,10 @@ async def _sync_chats_for_account(SessionLocal, account_id: uuid.UUID) -> dict:
                             stats.processed += 1
 
                         cursor = response.get("cursor") or response.get("result", {}).get("cursor") or ""
-                        if not cursor:
+                        # Ozon /v3/chat/list сигналит конец пагинации курсором
+                        # "finished" (а не пустым). Если слать его обратно — 400
+                        # "Cursor value is incorrect". Поэтому это тоже терминатор.
+                        if not cursor or cursor == "finished":
                             break
 
                 # History сообщений — TODO в Phase 2.5. Сейчас только метаданные чатов.
