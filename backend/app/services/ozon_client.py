@@ -642,7 +642,26 @@ class OzonSellerClient:
             "filter": eff_filter,
             "cursor": from_id or "",
         }
-        return await self._request("POST", "/v3/chat/list", json=payload)
+        # /v3/chat/list — флапающий endpoint Ozon: периодически отдаёт
+        # 400 "Cursor value is incorrect" на ВАЛИДНЫЙ курсор (баг на стороне
+        # Ozon, подтверждено живым перебором — тот же запрос то 200, то 400).
+        # Ошибка транзиентная → ретраим несколько раз с короткой паузой, чтобы
+        # один флап не валил весь синк чатов аккаунта.
+        last: OzonAPIError | None = None
+        for attempt in range(4):
+            try:
+                return await self._request("POST", "/v3/chat/list", json=payload)
+            except OzonAPIError as e:
+                is_cursor_flap = (
+                    e.status_code == 400
+                    and "Cursor value is incorrect" in str(e.response_data)
+                )
+                if not is_cursor_flap:
+                    raise
+                last = e
+                await asyncio.sleep(1.0 + attempt)  # 1s, 2s, 3s
+        assert last is not None
+        raise last
 
     async def get_chat_history(
         self,
