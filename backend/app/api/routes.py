@@ -13,6 +13,7 @@ from app.api.deps_rbac import require_module
 from app.api.endpoints import (
     account_balance,
     ad_campaign_stats,
+    ad_product_sku,
     auth,
     calculator,
     cashflow,
@@ -102,6 +103,10 @@ api_router.include_router(
 )
 api_router.include_router(
     ad_campaign_stats.router, prefix="/ads", tags=["ads"],
+    dependencies=_mod("dashboard"),
+)
+api_router.include_router(
+    ad_product_sku.router, prefix="/ads", tags=["ads"],
     dependencies=_mod("dashboard"),
 )
 api_router.include_router(
