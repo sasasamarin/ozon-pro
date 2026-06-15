@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from app.api.deps_rbac import require_module
 from app.api.endpoints import (
     account_balance,
-    ad_product_stats,
+    ad_campaign_stats,
     auth,
     calculator,
     cashflow,
@@ -101,7 +101,7 @@ api_router.include_router(
     dependencies=_mod("dashboard"),
 )
 api_router.include_router(
-    ad_product_stats.router, prefix="/ads", tags=["ads"],
+    ad_campaign_stats.router, prefix="/ads", tags=["ads"],
     dependencies=_mod("dashboard"),
 )
 api_router.include_router(

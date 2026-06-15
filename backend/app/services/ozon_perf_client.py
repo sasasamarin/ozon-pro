@@ -313,29 +313,34 @@ class OzonPerformanceClient:
 
         return {"rows": merged_rows, "reports": merged_reports}
 
-    async def get_product_stats(self) -> list[dict]:
+    async def get_campaign_stats(self) -> list[dict]:
         """
-        НОВЫЙ безлимитный метод «Статистика по товарам в Оплате за клик».
+        Безлимитный метод «Статистика по кампании Оплата за клик».
 
         Endpoint: GET /api/client/statistics/campaign/product/json
-        Подтверждено живым вызовом (2026-06-15): возвращает per-SKU снимок по
-        ВСЕМ PPC-товарам аккаунта за сегодня/вчера. campaignId и dateFrom/dateTo
-        ИГНОРИРУЮТСЯ (агрегат уровня аккаунта, не диапазон). Лимиты НЕ расходует.
+        Подтверждено живым вызовом (2026-06-15): несмотря на "product" в пути,
+        строки — это КАМПАНИИ (id = ozon_campaign_id, title = имя кампании,
+        objectType/status/placement — кампанийного уровня), НЕ товары. campaignId
+        и dateFrom/dateTo ИГНОРИРУЮТСЯ — это сводка уровня аккаунта по всем
+        кампаниям. Лимиты НЕ расходует.
 
-        Числа приходят в русском формате (запятая) — парсим в float.
-        Возвращает список словарей с нормализованными полями + raw.
+        Per-SKU статистики (показы/клики/ДРР по товару) этот метод НЕ даёт —
+        для неё нужен отдельный endpoint Ozon (путь не подтверждён).
+
+        Числа в русском формате (запятая) — парсим в float.
         """
         data = await self._request(
             "GET", "/api/client/statistics/campaign/product/json"
         )
         out: list[dict] = []
         for r in data.get("rows") or []:
-            sku = r.get("id")
+            cid = r.get("id")
             out.append({
-                "sku": str(sku) if sku else None,
+                "ozon_campaign_id": str(cid) if cid else None,
                 "title": r.get("title"),
                 "object_type": r.get("objectType"),
                 "status": r.get("status"),
+                "placement": r.get("placement"),
                 "views": int(_ru_float(r.get("views"))),
                 "clicks": int(_ru_float(r.get("clicks"))),
                 "ctr": _ru_float(r.get("ctr")),
