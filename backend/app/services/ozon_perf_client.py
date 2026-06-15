@@ -353,3 +353,50 @@ class OzonPerformanceClient:
                 "raw_data": r,
             })
         return out
+
+    async def get_product_sku_stats(
+        self, *, campaign_ids: list[str], date_from: str, date_to: str,
+    ) -> list[dict]:
+        """
+        Per-SKU статистика «Оплата за клик» — БЕЗ расхода лимитов.
+
+        Endpoint: POST /api/client/statistics/products/sku
+        Body: {"campaign_ids":[...], "date_from":"YYYY-MM-DD", "date_to":"YYYY-MM-DD"}
+        (snake_case! camelCase поля игнорируются). Подтверждено живым вызовом
+        2026-06-15. Ответ — строки per (campaignId, date, sku): есть дневной срез
+        и реальный SKU → можно класть в ad_statistics с product_id и датой.
+
+        Лимит диапазона — 62 дня. Кампаний на выгрузку — режем по 10.
+        Числа строками с ТОЧКОЙ ("345.99"); ctr/drr — числа.
+        """
+        if not campaign_ids:
+            return []
+        out: list[dict] = []
+        for i in range(0, len(campaign_ids), 10):
+            chunk = [str(c) for c in campaign_ids[i:i + 10]]
+            data = await self._request(
+                "POST", "/api/client/statistics/products/sku",
+                json={"campaign_ids": chunk, "date_from": date_from, "date_to": date_to},
+            )
+            for r in data.get("rows") or []:
+                cid = r.get("campaignId")
+                sku = r.get("sku")
+                out.append({
+                    "ozon_campaign_id": str(cid) if cid else None,
+                    "date": r.get("date"),
+                    "sku": str(sku) if sku else None,
+                    "price": _ru_float(r.get("price")),
+                    "views": int(_ru_float(r.get("views"))),
+                    "clicks": int(_ru_float(r.get("clicks"))),
+                    "ctr": _ru_float(r.get("ctr")),
+                    "to_cart": int(_ru_float(r.get("toCart"))),
+                    "avg_cpc": _ru_float(r.get("avgCpc")),
+                    "expense": _ru_float(r.get("expense")),
+                    "orders": int(_ru_float(r.get("orders"))),
+                    "sales": _ru_float(r.get("sales")),
+                    "model_orders": int(_ru_float(r.get("modelOrders"))),
+                    "model_sales": _ru_float(r.get("modelSales")),
+                    "drr": _ru_float(r.get("drr")),
+                    "raw_data": r,
+                })
+        return out
