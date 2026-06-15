@@ -39,6 +39,20 @@ from app.services.ozon_client import (
 _TOKEN_REFRESH_MARGIN = timedelta(seconds=60)
 
 
+def _ru_float(v: object) -> float:
+    """Performance API отдаёт числа в русском формате: "30 000,00" / "0,0".
+    Парсим в float (пробелы/неразрывные пробелы убираем, запятая → точка)."""
+    if v is None:
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).replace(" ", "").replace(" ", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
 class OzonPerfNotConfigured(OzonAPIError):
     """Performance API ключи не заполнены — кабинет работает только по Seller API."""
 
@@ -298,3 +312,39 @@ class OzonPerformanceClient:
             merged_reports.extend(data.get("reports") or [])
 
         return {"rows": merged_rows, "reports": merged_reports}
+
+    async def get_product_stats(self) -> list[dict]:
+        """
+        НОВЫЙ безлимитный метод «Статистика по товарам в Оплате за клик».
+
+        Endpoint: GET /api/client/statistics/campaign/product/json
+        Подтверждено живым вызовом (2026-06-15): возвращает per-SKU снимок по
+        ВСЕМ PPC-товарам аккаунта за сегодня/вчера. campaignId и dateFrom/dateTo
+        ИГНОРИРУЮТСЯ (агрегат уровня аккаунта, не диапазон). Лимиты НЕ расходует.
+
+        Числа приходят в русском формате (запятая) — парсим в float.
+        Возвращает список словарей с нормализованными полями + raw.
+        """
+        data = await self._request(
+            "GET", "/api/client/statistics/campaign/product/json"
+        )
+        out: list[dict] = []
+        for r in data.get("rows") or []:
+            sku = r.get("id")
+            out.append({
+                "sku": str(sku) if sku else None,
+                "title": r.get("title"),
+                "object_type": r.get("objectType"),
+                "status": r.get("status"),
+                "views": int(_ru_float(r.get("views"))),
+                "clicks": int(_ru_float(r.get("clicks"))),
+                "ctr": _ru_float(r.get("ctr")),
+                "click_price": _ru_float(r.get("clickPrice")),
+                "money_spent": _ru_float(r.get("moneySpent")),
+                "orders": int(_ru_float(r.get("orders"))),
+                "orders_money": _ru_float(r.get("ordersMoney")),
+                "drr": _ru_float(r.get("drr")),
+                "to_cart": int(_ru_float(r.get("toCart"))),
+                "raw_data": r,
+            })
+        return out
