@@ -71,6 +71,17 @@ def _log_regression(xs: list[float], ys: list[float]) -> BetaPoint:
                      confidence=conf, note=note)
 
 
+def _reliable_beta(bp: BetaPoint) -> float | None:
+    """Бета для авто-применения ТОЛЬКО если регрессия надёжна (high/medium).
+
+    Принцип Севера: лучше «без эффекта на спрос», чем уверенная неверная цифра
+    из шумной регрессии (low/no_data). Ручную гипотезу юзера это не ограничивает.
+    """
+    if bp.beta is not None and bp.confidence in ("high", "medium"):
+        return bp.beta
+    return None
+
+
 # ────────────────────────────────────────────────────────────────────
 #  Compute betas for product
 # ────────────────────────────────────────────────────────────────────
@@ -264,15 +275,23 @@ def simulate_scenario(
     if scenario.impressions_pct != 0:
         explain.append(f"трафик ×{1+scenario.impressions_pct/100:.2f}")
 
-    # 3a. Цена продавца → спрос
+    # 3a. Цена продавца → спрос. Приоритет: гипотеза юзера → иначе вычисленная
+    # бета, НО только если регрессия надёжна (high/medium); иначе без эффекта.
     new_price = seller_price * (1 + scenario.seller_price_pct / 100)
-    β_price = scenario.override_beta_price  # None если юзер не задал гипотезу
+    auto_price = False
+    β_price = scenario.override_beta_price
+    if β_price is None:
+        β_price = _reliable_beta(betas.seller_price_to_orders)
+        auto_price = β_price is not None
     demand_mult_price = 1.0
     if β_price is not None and scenario.seller_price_pct != 0:
         demand_mult_price = (seller_price / new_price) ** β_price if new_price > 0 else 1
-        explain.append(f"цена ×{1+scenario.seller_price_pct/100:.2f} → спрос ×{demand_mult_price:.2f} (твоя гипотеза β={β_price:.2f})")
+        bp = betas.seller_price_to_orders
+        src = (f"β={β_price:.2f} из твоих данных ({bp.confidence}, R²={bp.r2})"
+               if auto_price else f"твоя гипотеза β={β_price:.2f}")
+        explain.append(f"цена ×{1+scenario.seller_price_pct/100:.2f} → спрос ×{demand_mult_price:.2f} ({src})")
     elif scenario.seller_price_pct != 0:
-        explain.append(f"цена ×{1+scenario.seller_price_pct/100:.2f} — без эффекта на спрос (β цены на твоих данных не определима)")
+        explain.append(f"цена ×{1+scenario.seller_price_pct/100:.2f} — без эффекта на спрос (β цены на твоих данных ненадёжна)")
 
     # 3b. СПП → customer_price → спрос (отдельный рычаг от цены продавца)
     # baseline СПП из истории; new СПП — гипотеза юзера (если задана)
@@ -284,8 +303,7 @@ def simulate_scenario(
         new_customer = new_price * (1 - scenario.spp_pct / 100)
         β_customer = (scenario.override_beta_customer_price
                       if scenario.override_beta_customer_price is not None
-                      else (betas.customer_price_to_orders.beta
-                            if betas.customer_price_to_orders.beta else None))
+                      else _reliable_beta(betas.customer_price_to_orders))
         if β_customer is not None and abs(scenario.spp_pct - current_spp_pct) > 0.1:
             demand_mult_customer = (base_customer / new_customer) ** β_customer if new_customer > 0 else 1
             explain.append(

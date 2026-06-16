@@ -10,8 +10,10 @@ Forecasting и unit-economics движок Flowoi.
 - abc.py           — 3-осевой ABC: выручка / валовая / чистая прибыль
 - pricing.py       — обратный расчёт цены от требуемой рентабельности %
 - unit_economics.py — ROMI (от ВАЛОВОЙ маржи) + ROI (отдача на капитал)
-- whatif.py        — симулятор «что изменится в прибыли» при смене цены/ставки
 - procurement.py   — рекомендация закупок (когда + сколько) — использует buyout + velocity
+
+WhatIf-симулятор живёт в services/whatif_engine.py (data-driven эластичности
+через log-log регрессию + confidence), используется /whatif и reverse-funnel.
 
 ПРИНЦИП КОЭФФИЦИЕНТОВ:
 Все коэффициенты — заглушки в ForecastDefaults. Реальные тюним после накопления
