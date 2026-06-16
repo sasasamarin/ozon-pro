@@ -76,7 +76,7 @@ export function ReverseFunnel() {
   const { data: products } = useQuery<ProductOption[]>({
     queryKey: ['products-list-simple'],
     queryFn: async () => {
-      const r = await api.get('/products/?limit=200')
+      const r = await api.get('/products/?limit=200&is_archived=false')
       const list = Array.isArray(r.data) ? r.data : (r.data.items ?? [])
       return list.map((p: { id: string; name: string; offer_id: string }) => ({
         id: p.id, name: p.name, offer_id: p.offer_id,
