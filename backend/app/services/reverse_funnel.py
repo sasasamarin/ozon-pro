@@ -16,7 +16,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from app.services.whatif_engine import BetasResult, ScenarioInput, ScenarioOutput, simulate_scenario
+from app.services.whatif_engine import (
+    BetasResult,
+    ScenarioInput,
+    ScenarioOutput,
+    _reliable_beta,
+    simulate_scenario,
+)
 
 
 # Допустимые границы рычага.
@@ -48,12 +54,11 @@ def _build_scenario(lever: str, value_pct: float, betas: BetasResult) -> Scenari
         inp.ad_spend_pct = value_pct
     elif lever == "seller_price":
         inp.seller_price_pct = value_pct
-        # Для цены β обязательна (без неё simulate не двинет спрос).
-        # Берём из betas, fallback −1.0 (умеренная отрицательная эластичность).
-        if betas.seller_price_to_orders.beta:
-            inp.override_beta_price = betas.seller_price_to_orders.beta
-        else:
-            inp.override_beta_price = -1.0
+        # Для цены β обязательна (без неё simulate не двинет спрос). Берём
+        # НАДЁЖНУЮ β (high/medium); если регрессия шумная/нет данных — разумный
+        # дефолт −1.0 (умеренная отрицательная эластичность), а не шумная β.
+        rb = _reliable_beta(betas.seller_price_to_orders)
+        inp.override_beta_price = rb if rb is not None else -1.0
     return inp
 
 

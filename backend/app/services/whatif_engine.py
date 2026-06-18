@@ -285,7 +285,9 @@ def simulate_scenario(
         auto_price = β_price is not None
     demand_mult_price = 1.0
     if β_price is not None and scenario.seller_price_pct != 0:
-        demand_mult_price = (seller_price / new_price) ** β_price if new_price > 0 else 1
+        # Эластичность: Q_new/Q_old = (P_new/P_old)^β, β = elasticity (<0 у
+        # нормального товара). Снижение цены (P_new<P_old) → спрос РАСТЁТ.
+        demand_mult_price = (new_price / seller_price) ** β_price if seller_price > 0 else 1
         bp = betas.seller_price_to_orders
         src = (f"β={β_price:.2f} из твоих данных ({bp.confidence}, R²={bp.r2})"
                if auto_price else f"твоя гипотеза β={β_price:.2f}")
@@ -305,7 +307,9 @@ def simulate_scenario(
                       if scenario.override_beta_customer_price is not None
                       else _reliable_beta(betas.customer_price_to_orders))
         if β_customer is not None and abs(scenario.spp_pct - current_spp_pct) > 0.1:
-            demand_mult_customer = (base_customer / new_customer) ** β_customer if new_customer > 0 else 1
+            # Та же конвенция: (цена_новая/цена_старая)^β, β<0. Больше СПП →
+            # customer_price ниже → спрос растёт.
+            demand_mult_customer = (new_customer / base_customer) ** β_customer if base_customer > 0 else 1
             explain.append(
                 f"СПП {current_spp_pct:.1f}% → {scenario.spp_pct:.1f}% "
                 f"(цена покупателю {base_customer:.0f} → {new_customer:.0f} ₽) → "
