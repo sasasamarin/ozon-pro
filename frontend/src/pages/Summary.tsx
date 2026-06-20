@@ -39,8 +39,8 @@ export function Summary() {
     },
   })
 
-  const totalRevenue = (data?.rows || []).reduce((s, r) => s + r.revenue, 0)
-  const totalProfit = (data?.rows || []).reduce((s, r) => s + r.marginal_profit, 0)
+  const totalRevenue = (data?.rows || []).reduce((s, r) => s + (r.revenue ?? 0), 0)
+  const totalProfit = (data?.rows || []).reduce((s, r) => s + (r.marginal_profit ?? 0), 0)
 
   return (
     <div className="flex flex-col gap-6">
@@ -99,14 +99,14 @@ export function Summary() {
                       </div>
                     </td>
                     <td className="py-2.5 px-4 text-right tabular-nums">{r.sku_count}</td>
-                    <td className="py-2.5 px-4 text-right tabular-nums text-emerald-700">{formatCurrency(r.revenue)}</td>
-                    <td className="py-2.5 px-4 text-right tabular-nums">{formatNumber(r.orders)}</td>
-                    <td className="py-2.5 px-4 text-right tabular-nums text-fg-muted">{formatCurrency(r.aov)}</td>
-                    <td className="py-2.5 px-4 text-right tabular-nums text-rose-700">−{formatCurrency(r.cogs)}</td>
-                    <td className="py-2.5 px-4 text-right tabular-nums text-rose-700">−{formatCurrency(r.ozon_expenses)}</td>
+                    <td className="py-2.5 px-4 text-right tabular-nums text-emerald-700">{formatCurrency(r.revenue ?? 0)}</td>
+                    <td className="py-2.5 px-4 text-right tabular-nums">{formatNumber(r.orders ?? 0)}</td>
+                    <td className="py-2.5 px-4 text-right tabular-nums text-fg-muted">{formatCurrency(r.aov ?? 0)}</td>
+                    <td className="py-2.5 px-4 text-right tabular-nums text-rose-700">−{formatCurrency(r.cogs ?? 0)}</td>
+                    <td className="py-2.5 px-4 text-right tabular-nums text-rose-700">−{formatCurrency(r.ozon_expenses ?? 0)}</td>
                     <td className={cn('py-2.5 px-4 text-right tabular-nums font-semibold',
-                      r.marginal_profit >= 0 ? 'text-emerald-700' : 'text-rose-700')}>
-                      {formatCurrency(r.marginal_profit)}
+                      (r.marginal_profit ?? 0) >= 0 ? 'text-emerald-700' : 'text-rose-700')}>
+                      {formatCurrency(r.marginal_profit ?? 0)}
                     </td>
                     <td className={cn('py-2.5 px-4 text-right tabular-nums font-mono',
                       (r.margin_pct ?? 0) >= 0 ? 'text-fg' : 'text-rose-700')}>
