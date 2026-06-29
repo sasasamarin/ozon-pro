@@ -139,10 +139,7 @@ async def _funnel_for_window(
         await db.execute(
             select(
                 func.coalesce(
-                    func.sum(func.coalesce(
-                        AnalyticsDaily.hits_view,
-                        AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
-                    )), 0
+                    func.sum(AnalyticsDaily.hits_view_search), 0
                 ).label("impressions"),
                 func.coalesce(
                     func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0
@@ -263,10 +260,7 @@ async def funnel_top_products(
     if not accs:
         return []
 
-    imp_expr = func.sum(func.coalesce(
-        AnalyticsDaily.hits_view,
-        AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
-    ))
+    imp_expr = func.sum(AnalyticsDaily.hits_view_search)
     cart_expr = func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp)
     orders_expr = func.sum(AnalyticsDaily.ordered_units)
     deliv_expr = func.sum(AnalyticsDaily.delivered_units)
@@ -365,10 +359,7 @@ async def funnel_single_product(
 
     row = (await db.execute(
         select(
-            func.coalesce(func.sum(func.coalesce(
-                AnalyticsDaily.hits_view,
-                AnalyticsDaily.hits_view_search + AnalyticsDaily.hits_view_pdp,
-            )), 0).label("imp"),
+            func.coalesce(func.sum(AnalyticsDaily.hits_view_search), 0).label("imp"),
             func.coalesce(func.sum(AnalyticsDaily.hits_tocart_search + AnalyticsDaily.hits_tocart_pdp), 0).label("cart"),
             func.coalesce(func.sum(AnalyticsDaily.ordered_units), 0).label("orders"),
             func.coalesce(func.sum(AnalyticsDaily.delivered_units), 0).label("deliv"),

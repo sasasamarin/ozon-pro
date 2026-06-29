@@ -138,7 +138,7 @@ async def get_metrics_matrix(
             func.date_trunc(trunc, AnalyticsDaily.date).label("d"),
             func.sum(AnalyticsDaily.hits_view_search).label("imp_s"),
             func.sum(AnalyticsDaily.hits_view_pdp).label("imp_p"),
-            func.sum(AnalyticsDaily.session_view_pdp).label("card_visits"),
+            func.sum(AnalyticsDaily.hits_view_pdp).label("card_visits"),
             func.sum(AnalyticsDaily.hits_tocart_search).label("cart_s"),
             func.sum(AnalyticsDaily.hits_tocart_pdp).label("cart_p"),
             func.sum(AnalyticsDaily.ordered_units).label("orders"),

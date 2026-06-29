@@ -137,7 +137,7 @@ async def competitor_signal(
         ad AS (
             SELECT date,
                    AVG(COALESCE(position_category, 0))::float AS pos_cat,
-                   SUM(COALESCE(hits_view_search,0) + COALESCE(hits_view_pdp,0)) imp,
+                   SUM(COALESCE(hits_view_search,0)) imp,
                    SUM(COALESCE(revenue,0)) rev
             FROM analytics_daily
             WHERE product_id = :pid AND date BETWEEN :df AND :dt

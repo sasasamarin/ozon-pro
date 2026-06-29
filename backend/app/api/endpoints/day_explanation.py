@@ -44,7 +44,7 @@ class DayMetrics(BaseModel):
     """Сырые метрики дня."""
     impressions: int                 # hits_view (Ozon UI), fallback search+pdp
     impressions_search: int          # hits_view_search
-    card_visits: int                 # session_view_pdp
+    card_visits: int                 # hits_view_pdp
     orders: int                      # ordered_units
     revenue: float                   # revenue (если AnalyticsDaily есть), иначе sum oi.price × qty
     delivered: int                   # delivered_units
@@ -72,7 +72,7 @@ class DayMetrics(BaseModel):
     stockout: bool                   # был ли стокаут в этот день (free_to_sell == 0)
 
     # Конверсии
-    cr_search_to_card_pct: float | None    # session_view_pdp / session_view_search × 100
+    cr_search_to_card_pct: float | None    # hits_view_pdp / hits_view_search × 100
     cr_card_to_order_pct: float | None     # ordered_units / card_visits × 100
 
 
@@ -171,8 +171,8 @@ async def explain_day(
             )).label("hits_total"),
             func.sum(AnalyticsDaily.hits_view_search).label("hits_search"),
             func.sum(AnalyticsDaily.hits_view_pdp).label("hits_pdp"),
-            func.sum(AnalyticsDaily.session_view_pdp).label("sess_pdp"),
-            func.sum(AnalyticsDaily.session_view_search).label("sess_search"),
+            func.sum(AnalyticsDaily.hits_view_pdp).label("sess_pdp"),
+            func.sum(AnalyticsDaily.hits_view_search).label("sess_search"),
             func.sum(AnalyticsDaily.ordered_units).label("orders_n"),
             func.sum(AnalyticsDaily.revenue).label("rev"),
             func.sum(AnalyticsDaily.delivered_units).label("delivered"),
