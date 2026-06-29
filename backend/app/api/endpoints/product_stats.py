@@ -192,12 +192,11 @@ async def _fetch_daily_metrics(
     # ordered_units=0) — поэтому берём из order_items (sync ежечасный, в реалтайме).
     ad_rows = (await db.execute(text("""
         SELECT date,
-               COALESCE(hits_view, 0) AS impressions,
+               COALESCE(hits_view_search, 0) AS impressions,
                COALESCE(hits_view_search,0) + COALESCE(hits_view_pdp,0) AS impressions_legacy,
                COALESCE(hits_view_search,0) AS imp_search,
                COALESCE(hits_view_pdp,0) AS imp_pdp,
-               COALESCE(session_view,
-                        COALESCE(session_view_search,0) + COALESCE(session_view_pdp,0)) AS clicks,
+               COALESCE(hits_view_pdp, 0) AS clicks,
                COALESCE(hits_tocart_search,0)+COALESCE(hits_tocart_pdp,0) AS cart_count,
                COALESCE(position_category,0)::float AS position_search
         FROM analytics_daily WHERE product_id = :pid AND date >= :df AND date <= :dt

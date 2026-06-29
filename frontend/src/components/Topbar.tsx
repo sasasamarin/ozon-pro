@@ -46,6 +46,7 @@ export function Topbar({ onOpenSidebar }: TopbarProps) {
   // На страницах где есть внутренний выбор кабинета/товара — топбар-фильтры не нужны
   const hideGlobalFilters = location.pathname.startsWith('/sales-plan')
                           || location.pathname.startsWith('/analytics/plan-fact')
+                          || location.pathname.startsWith('/products/stats')
 
   const { selectedCabinetIds, toggleCabinetId, selectAll } = useCabinetStore()
   const [cabinetMenuOpen, setCabinetMenuOpen] = useState(false)
