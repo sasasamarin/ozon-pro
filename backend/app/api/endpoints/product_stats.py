@@ -192,7 +192,7 @@ async def _fetch_daily_metrics(
     # ordered_units=0) — поэтому берём из order_items (sync ежечасный, в реалтайме).
     ad_rows = (await db.execute(text("""
         SELECT date,
-               COALESCE(hits_view_search, 0) AS impressions,
+               COALESCE(hits_view, 0) AS impressions,
                COALESCE(hits_view_search,0) + COALESCE(hits_view_pdp,0) AS impressions_legacy,
                COALESCE(hits_view_search,0) AS imp_search,
                COALESCE(hits_view_pdp,0) AS imp_pdp,
